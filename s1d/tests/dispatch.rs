@@ -72,3 +72,48 @@ fn health_before_the_first_tick_is_not_healthy_but_answers() {
     assert_eq!(r["healthy"], false);
     assert!(r["reason"].as_str().unwrap().contains("not completed"));
 }
+
+/// Every call `robotd` would answer is answered here too — with the same shape, or a refusal that
+/// names the reason. "Method not found" is for routes that are not the robot's at all; eleven
+/// robot routes fell through to it in the first cut, which the cold reader caught.
+#[test]
+fn every_robot_route_is_served_or_refused_with_a_reason() {
+    let (s, i) = (State::new(100), Intents::new());
+    for c in proto::test_support::every_call() {
+        if !matches!(c.destination(), Some((proto::Service::Robot, _))) {
+            continue;
+        }
+        let method = c.method();
+        let r = serde_json::to_value(call(&s, &i, c)).unwrap();
+        assert_ne!(
+            r["error"]["code"],
+            proto::code::METHOD_NOT_FOUND,
+            "{method} is the robot's and fell through to METHOD_NOT_FOUND"
+        );
+    }
+}
+
+/// `toggle` flips what the last call left, whichever way that call spelled it. The pad's HOME
+/// button only ever toggles, and `robotctl flashlight off` only ever sets — so a toggle that
+/// inverted its own private count would switch the LEDs "off" when they were already off.
+#[test]
+fn flashlight_toggle_inverts_what_on_and_off_left() {
+    let (s, i) = (State::new(100), Intents::new());
+    let fl = |on, toggle| {
+        proto::Call::RobotFlashlight(proto::FlashlightParams {
+            on,
+            toggle,
+            color: proto::FlashlightColor::White,
+        })
+    };
+    call(&s, &i, fl(true, false));
+    i.take_led();
+    call(&s, &i, fl(false, true));
+    let led = i.take_led().expect("a LED request");
+    assert_eq!(led.effect, 0, "on, then toggle, must switch the LEDs off");
+    call(&s, &i, fl(false, false));
+    i.take_led();
+    call(&s, &i, fl(false, true));
+    let led = i.take_led().expect("a LED request");
+    assert_ne!(led.effect, 0, "off, then toggle, must switch the LEDs on");
+}

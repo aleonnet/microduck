@@ -85,11 +85,6 @@ impl State {
         }
     }
 
-    /// Flip the remembered flashlight state and return the new one.
-    pub fn flashlight_toggle(&self) -> bool {
-        !self.flashlight_on.fetch_xor(true, Ordering::Relaxed)
-    }
-
     pub fn now_us(&self) -> u64 {
         self.started.elapsed().as_micros() as u64
     }

@@ -4277,9 +4277,12 @@ dependencies = [
 name = "s1d"
 version = "0.17.8"
 dependencies = [
+ "anyhow",
  "arc-swap",
  "clap",
+ "duck-detect",
  "duck-ipc-proto",
+ "image",
  "robotd-params",
  "s1-duml",
  "serde",

@@ -25,11 +25,18 @@ serde_json.workspace = true
 # `default-features = false` drops `libudev`, for the reason `duck-control/Cargo.toml` gives: the
 # port is opened by path, never enumerated, and libudev-sys has no sysroot in a cross-build.
 serialport = { version = "4.8", default-features = false }
+# `s1-infer` (stage 12): the detector's ONNX path on this CPU. `ort` dlopens the library the bench
+# built (`scripts/s1/build-onnxruntime.sh`), so nothing links at build time.
+duck-detect = { path = "../duck-detect" }
+anyhow = "1"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "time", "io-util", "signal", "sync"] }
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 
 [dev-dependencies]
+# `test-support` for `every_call()`: the dispatch test walks every robot route the contract has.
+duck-ipc-proto = { path = "../duck-ipc-proto", features = ["test-support"] }
 # Only to prove `deploy/s1/robotd.toml` loads with the validation `netpadd` applies to it.
 robotd-params = { path = "../robotd-params" }

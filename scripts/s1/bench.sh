@@ -13,6 +13,7 @@
 # Env:   S1_HOST (default 192.168.1.236:5555) · S1_OUT (default ~/Development/RoboMaster-S1/out/<date>-poc2)
 #        S1_CHROOT (default /data/debian) · S1_BAUD (from capture) · S1_ROOTFS (tar from build-rootfs.sh)
 set -euo pipefail
+cd "$(dirname "$0")/../.."   # `cargo s1` (the alias in .cargo/config.toml) and target/ are the repo's
 
 HOST="${S1_HOST:-192.168.1.236:5555}"
 OUT="${S1_OUT:-$HOME/Development/RoboMaster-S1/out/$(date +%Y-%m-%d)-poc2}"
@@ -36,7 +37,8 @@ stages() {
  9 app       observe what the app does with the stock stopped (notes)
 10 restore   reboot; the app drives again; capture repeated shows hdvt_uav alive
 11 frames    gst-launch v4l2src 720p and 360p for 30 s: fps and CPU (mediad's own element)
-12 infer     duck-detect on the S1 (libonnxruntime armv7) and on the Mac over the same frames
+12 infer     s1-infer (the detector's ONNX path) on the S1 with libonnxruntime armv7, and on the Mac,
+             over the same frames
    verify-record <md>   check every `artefato:` line of a record: path exists, sha256 matches
 LIST
 }
@@ -61,9 +63,11 @@ case "$stage" in
         n=$(echo "$c" | tr ' /*' '___' | tr -s '_'); sh_robot "$c" > "$D/$n.txt" 2>&1 || true
     done
     say "static capture done; now the strace. USE THE APP: camera, a sound, hit each armour plate,"
-    say "change the LED colour and effect, press the controller button, person recognition. Ctrl-C when done."
+    say "change the LED colour and effect, press the controller button, person recognition. 70 s."
     sh_robot "top -n 1 -m 15" > "$D/top_before.txt" 2>&1 || true
-    sh_robot "strace -f -tt -e trace=ioctl,write,read,open,openat -s 64 -o /data/hdvt.strace -p \$($BB pidof dji_hdvt_uav) & strace -f -tt -e trace=ioctl,write,read,open,openat -s 64 -o /data/camera.strace -p \$($BB pidof dji_camera) & for i in 1 2 3 4 5 6; do top -n 1 -m 10 >> /data/top_vision.txt; $BB sleep 10; done; wait" || true
+    # Bounded: `strace -p` only ends with the traced process, so each gets a 70 s timeout and `wait`
+    # returns; the top samples cover the same window.
+    sh_robot "$BB timeout 70 strace -f -tt -e trace=ioctl,write,read,open,openat -s 64 -o /data/hdvt.strace -p \$($BB pidof dji_hdvt_uav) & $BB timeout 70 strace -f -tt -e trace=ioctl,write,read,open,openat -s 64 -o /data/camera.strace -p \$($BB pidof dji_camera) & for i in 1 2 3 4 5 6 7; do top -n 1 -m 10 >> /data/top_vision.txt; $BB sleep 10; done; wait" || true
     $A pull /data/hdvt.strace "$D/hdvt_uav.strace" >/dev/null; $A pull /data/camera.strace "$D/dji_camera.strace" >/dev/null; $A pull /data/top_vision.txt "$D/top_vision.txt" >/dev/null
     for f in "$D"/*.txt "$D"/*.strace; do art "$f"; done ;;
 
@@ -72,10 +76,13 @@ case "$stage" in
     sh_robot "ls -l /dev/block/platform/*/by-name" | tee "$D/by-name.txt"
     sh_robot "df /data" | tee "$D/df.txt"
     say "dumping each by-name partition to /data/bk/ then pulling; sizes decide staging"
-    sh_robot "mkdir -p /data/bk; for p in /dev/block/platform/*/by-name/*; do n=\$($BB basename \$p); $BB dd if=\$p of=/data/bk/\$n.img bs=1m 2>/dev/null && $BB sha256sum /data/bk/\$n.img; done" | tee "$D/SHA256SUMS.robot"
+    sh_robot "mkdir -p /data/bk; for p in /dev/block/platform/*/by-name/*; do n=\$($BB basename \$p); $BB dd if=\$p of=/data/bk/\$n.img bs=1M 2>/dev/null && $BB sha256sum /data/bk/\$n.img; done" | tee "$D/SHA256SUMS.robot"
     $A pull /data/bk "$D/" >/dev/null
     ( cd "$D/bk" && shasum -a 256 *.img > ../SHA256SUMS )
-    diff <(awk '{print $1, "'"$D"'/bk/" $2}' "$D/SHA256SUMS.robot" | sed 's#/data/bk/##' | sort) <(sort "$D/SHA256SUMS") && say "SHA robot == Mac" || say "SHA MISMATCH — see $D"
+    # Both sides reduced to `<sha> <name>`: busybox prints `/data/bk/<name>.img`, the Mac prints
+    # `<name>.img` with two spaces, and comparing them raw never matched.
+    norm() { awk '{ sub(".*/", "", $2); print $1, $2 }' "$1" | sort; }
+    diff <(norm "$D/SHA256SUMS.robot") <(norm "$D/SHA256SUMS") && say "SHA robot == Mac" || say "SHA MISMATCH — see $D"
     sh_robot "rm -rf /data/bk"
     for f in "$D"/SHA256SUMS "$D"/bk/*.img; do art "$f"; done ;;
 
@@ -96,15 +103,19 @@ case "$stage" in
     art "$D/stop.txt"; art "$D/owners.txt" ;;
 
   drive)
-    need_robot; D=$(dir drive); : "${S1_BAUD:?S1_BAUD is the baud `capture` measured with stty}"
+    need_robot; D=$(dir drive); : "${S1_BAUD:?S1_BAUD is the baud the capture stage measured with stty}"
     say "starting s1d (baud $S1_BAUD) and netpadd in the chroot; WHEELS OFF THE GROUND"
-    sh_robot "chroot $CHROOT /opt/robot/bin/s1d --port /dev/ttyS3 --baud $S1_BAUD ${S1_ARGS:-} > /data/s1d.log 2>&1 &"
+    # `nohup`, so the daemons outlive the adb shell that started them.
+    sh_robot "$BB nohup chroot $CHROOT /opt/robot/bin/s1d --port /dev/ttyS3 --baud $S1_BAUD ${S1_ARGS:-} > /data/s1d.log 2>&1 &"
     sleep 2
-    sh_robot "chroot $CHROOT /opt/robot/bin/netpadd > /data/netpadd.log 2>&1 &"; sleep 1
-    sh_robot "chroot $CHROOT /opt/robot/bin/robotctl health --json" | tee "$D/health.json"
+    sh_robot "$BB nohup chroot $CHROOT /opt/robot/bin/netpadd > /data/netpadd.log 2>&1 &"; sleep 1
+    # `robotctl health` exits non-zero on an unhealthy verdict; that is a result to record, not a
+    # reason to stop the stage before the logs are pulled.
+    sh_robot "chroot $CHROOT /opt/robot/bin/robotctl health --json" > "$D/health.json" 2>&1 || say "robotctl health rc=$? — the verdict is in health.json"
+    cat "$D/health.json"
     say "on the Mac now:  duckctl udp-pad ${HOST%%:*}    — Start arms the chassis; sticks drive; Ctrl-C when done"
     say "collecting robot.state for 60 s meanwhile"
-    sh_robot "chroot $CHROOT /opt/robot/bin/robotctl monitor --json --seconds 60" > "$D/monitor.log" 2>&1 || sh_robot "$BB timeout 60 chroot $CHROOT /opt/robot/bin/robotctl monitor" > "$D/monitor.log" 2>&1 || true
+    sh_robot "$BB timeout 60 chroot $CHROOT /opt/robot/bin/robotctl monitor --json" > "$D/monitor.log" 2>&1 || true
     $A pull /data/s1d.log "$D/s1d.log" >/dev/null; $A pull /data/netpadd.log "$D/netpadd.log" >/dev/null
     for f in "$D"/health.json "$D"/monitor.log "$D"/s1d.log "$D"/netpadd.log; do art "$f"; done ;;
 
@@ -157,16 +168,23 @@ case "$stage" in
   infer)
     need_robot; D=$(dir infer); ORT="${S1_ORT:-$HOME/Development/RoboMaster-S1/out/onnxruntime}"; MODEL="$OUT/duck_detect.onnx"
     [ -f "$MODEL" ] || curl --fail --location --silent --show-error -o "$MODEL" "https://huggingface.co/pollen-robotics/microduck-duck-detector/resolve/duck-v1/duck_detect.onnx"
+    FRAMES="${S1_FRAMES:-$OUT/frames}"   # stage 11's PNG lands there; any directory of jpg/png works
+    ls "$FRAMES"/*.png "$FRAMES"/*.jpg >/dev/null 2>&1 || { say "no frames in $FRAMES — run stage 11 or set S1_FRAMES"; exit 1; }
+    # `duck-bench` is the NPU path; the S1 has none. `s1-infer` is the same measurement over the
+    # detector's ONNX path, cross-compiled here and built natively below for the other tier.
     if ls "$ORT"/libonnxruntime.so* >/dev/null 2>&1; then
-        cargo s1 -p duck-detect >/dev/null
-        $A push target/armv7-unknown-linux-gnueabihf/release/duck-detect "$CHROOT/opt/robot/bin/duck-detect" >/dev/null
+        cargo s1 -p s1d --bin s1-infer >/dev/null
+        $A push target/armv7-unknown-linux-gnueabihf/release/s1-infer "$CHROOT/opt/robot/bin/s1-infer" >/dev/null
         $A push "$ORT"/libonnxruntime.so* "$CHROOT/usr/lib/" >/dev/null; $A push "$MODEL" "$CHROOT/opt/robot/duck_detect.onnx" >/dev/null
-        sh_robot "chroot $CHROOT /opt/robot/bin/duck-detect --help" > "$D/onboard.txt" 2>&1 || true
-        say "on-board run per duck-detect's CLI goes in $D/onboard.txt (ms/frame); see the record"
+        sh_robot "mkdir -p $CHROOT/opt/robot/frames"
+        for f in "$FRAMES"/*.png "$FRAMES"/*.jpg; do [ -f "$f" ] && $A push "$f" "$CHROOT/opt/robot/frames/" >/dev/null; done
+        sh_robot "ORT_DYLIB_PATH=/usr/lib/libonnxruntime.so.1.28.0 chroot $CHROOT /opt/robot/bin/s1-infer --model /opt/robot/duck_detect.onnx --frames /opt/robot/frames --hz 0" > "$D/onboard.txt" 2>&1 || true
     else
         cp "$ORT/build.log" "$D/ort_build_failed.txt" 2>/dev/null || echo "no libonnxruntime armv7 and no build log" > "$D/ort_build_failed.txt"
     fi
-    say "off-board: frames from stage 11 on the Mac with the native duck-detect → $D/offboard.txt"
+    MAC_ORT="${S1_ORT_MAC:-$HOME/Development/RoboMaster-S1/out/onnxruntime-mac/onnxruntime-osx-arm64-1.28.0/lib/libonnxruntime.1.28.0.dylib}"
+    cargo build --release -p s1d --bin s1-infer >/dev/null
+    ORT_DYLIB_PATH="$MAC_ORT" target/release/s1-infer --model "$MODEL" --frames "$FRAMES" --hz 0 > "$D/offboard.txt" 2>&1 || true
     for f in "$D"/onboard.txt "$D"/offboard.txt "$D"/ort_build_failed.txt; do [ -f "$f" ] && art "$f"; done ;;
 
   verify-record)

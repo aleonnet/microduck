@@ -235,3 +235,21 @@ fn chassis_speed_is_three_floats() {
     assert_eq!(&f.data[0..4], &0.5f32.to_le_bytes());
     assert_eq!(&f.data[8..12], &90.0f32.to_le_bytes());
 }
+
+/// A header whose declared length is below the overhead, with a valid header CRC: the public
+/// decoder must say so rather than index past the start of the slice.
+#[test]
+fn a_header_declaring_less_than_the_overhead_is_an_error_not_a_panic() {
+    // Six bytes, both CRCs valid: the header CRC over the first three, the frame CRC over the
+    // first four — a frame that cannot hold its own eleven-byte header.
+    // Padded to thirteen, so the length check at the door is passed and the declared size is
+    // what the decoder has to refuse (it used to slice `11..4` here).
+    let mut head = [0u8; 13];
+    head[..3].copy_from_slice(&[0x55, 6, 0x04]);
+    head[3] = crc8(CRC8_SEED, &head[0..3]);
+    let body = crc16(CRC16_SEED, &head[0..4]);
+    head[4] = (body & 0xff) as u8;
+    head[5] = (body >> 8) as u8;
+    let err = Frame::decode(&head).expect_err("a 6-byte frame cannot hold its header");
+    assert!(err.to_string().contains("declares"), "{err}");
+}

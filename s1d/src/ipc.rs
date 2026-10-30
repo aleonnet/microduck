@@ -263,9 +263,14 @@ pub fn dispatch(
         proto::Call::RobotEnable(p) => {
             let on = if p.toggle { !intents.enabled() } else { p.on };
             intents.set_enabled(on);
+            // `robotd`'s shape for a toggle: accepted, with the state the robot ended in as the
+            // reason, which is the only trustworthy account a toggling client can get.
             proto::Response::ok(
                 Some(id),
-                &proto::IntentResult::already(if on { "armed" } else { "disarmed" }),
+                &proto::IntentResult {
+                    accepted: true,
+                    reason: Some(if on { "armed" } else { "disarmed" }.to_owned()),
+                },
             )
         }
         proto::Call::RobotInit => {
@@ -335,14 +340,16 @@ pub fn dispatch(
             },
         ),
         proto::Call::RobotFlashlight(p) => {
-            // `toggle` wins over `on`, as the contract says. The body remembers nothing about the
-            // LEDs between calls (phase 2 gives them an owner); toggle therefore alternates on a
-            // counter here rather than on the body's state.
+            // `toggle` wins over `on`, as the contract says, and it inverts what the *last call*
+            // left — whether that call toggled or set. The pad's HOME button only toggles and
+            // `robotctl flashlight off` only sets, so a toggle keeping its own count would switch
+            // "off" LEDs that were already off.
             let on = if p.toggle {
-                state.flashlight_toggle()
+                !state.flashlight_on.load(Ordering::Relaxed)
             } else {
                 p.on
             };
+            state.flashlight_on.store(on, Ordering::Relaxed);
             let (r, g, b) = flashlight_rgb(p.color);
             intents.request_led(if on {
                 SystemLed::solid(r, g, b)
@@ -372,6 +379,45 @@ pub fn dispatch(
             refused(id, "gaze on the gimbal arrives in phase 2; send robot.head")
         }
         proto::Call::RobotSetMode(_) => refused(id, "this body is always on wheels"),
+        // The skill table and the pad bindings: truthfully empty — this body has no one-shot
+        // skills until phase 2 — in the shape the clients decode.
+        proto::Call::RobotSkills => proto::Response::ok(
+            Some(id),
+            &proto::SkillsResult {
+                skills: Vec::new(),
+                built_in: Vec::new(),
+            },
+        ),
+        proto::Call::PadBindings => proto::Response::ok(
+            Some(id),
+            &proto::PadBindingsResult {
+                bindings: Vec::new(),
+            },
+        ),
+        proto::Call::RobotTheremin(_) => refused(
+            id,
+            "no depth sensor on this body: there is no theremin to play",
+        ),
+        proto::Call::RobotChorale(_) | proto::Call::ChoraleSubscribe => {
+            refused(id, "no voice on this body yet, so no chorale (phase 2)")
+        }
+        proto::Call::RobotModel => refused(
+            id,
+            "no kinematic model for this body yet (phase 5 brings the URDF)",
+        ),
+        proto::Call::RobotVetbook
+        | proto::Call::RobotVetbookNote(_)
+        | proto::Call::RobotVetbookTally(_) => {
+            refused(id, "this body keeps no vet book yet (phase 2)")
+        }
+        proto::Call::RobotLoadPolicy(_)
+        | proto::Call::RobotReloadPolicies
+        | proto::Call::RobotSetSkill(_)
+        | proto::Call::RobotRemoveSkill(_)
+        | proto::Call::PadBind(_) => refused(
+            id,
+            "this body runs no policy network and has no skills yet (phase 2)",
+        ),
         proto::Call::RobotRebootMotors(_) => refused(
             id,
             "the S1's motors are behind its motion controller; power-cycle the robot",

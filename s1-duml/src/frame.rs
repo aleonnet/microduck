@@ -45,6 +45,8 @@ pub enum DecodeError {
     BodyCrc { computed: u16, found: u16 },
     #[error("data of {0} bytes does not fit a frame")]
     TooLong(usize),
+    #[error("header declares {declared} bytes, a frame is at least {OVERHEAD}")]
+    BadLength { declared: usize },
 }
 
 impl Frame {
@@ -100,7 +102,7 @@ impl Frame {
         Ok(buf)
     }
 
-    /// The declared length of a frame whose first three bytes are `head`, or `None` if `head` does
+    /// The declared length of a frame whose first four bytes are `head`, or `None` if `head` does
     /// not start a frame (wrong SOF or header CRC). Enough to know how many bytes to wait for.
     pub fn declared_len(head: &[u8]) -> Option<usize> {
         if head.len() < 4 || head[0] != SOF {
@@ -131,6 +133,11 @@ impl Frame {
             });
         }
         let size = usize::from(bytes[1]) | (usize::from(bytes[2] & 0x3) << 8);
+        // A valid header CRC over a length that cannot hold the header itself: the `Decoder`
+        // skips these, and the public decoder must refuse them rather than index backwards.
+        if size < OVERHEAD {
+            return Err(DecodeError::BadLength { declared: size });
+        }
         if bytes.len() < size {
             return Err(DecodeError::TooShort {
                 have: bytes.len(),

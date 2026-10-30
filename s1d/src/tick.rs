@@ -96,6 +96,26 @@ pub const SUBJECTS: [u64; 7] = [
     dds::uid::SA_STATUS,
 ];
 
+/// Whether to (re)ask the motion controller for telemetry now.
+///
+/// At once when never asked; then only when the last ask is `retry` old **and** no push has
+/// arrived for `retry` — a controller power-cycled under us has forgotten the subscription, and
+/// this is how it gets it back without a re-arm, while a controller that is pushing is left alone.
+pub fn dds_due(
+    last_sub: Option<Instant>,
+    last_push: Option<Instant>,
+    retry: Duration,
+    now: Instant,
+) -> bool {
+    match last_sub {
+        None => true,
+        Some(asked) => {
+            now.duration_since(asked) >= retry
+                && last_push.is_none_or(|pushed| now.duration_since(pushed) >= retry)
+        }
+    }
+}
+
 /// Twist in the robot's frame (x forward, y left, yaw counter-clockwise) to wheel rpm, in the
 /// order the wire wants: front-right, front-left, back-left, back-right.
 ///
@@ -230,6 +250,7 @@ pub fn run(body: &mut dyn S1Body, state: Arc<State>, intents: Arc<Intents>, cfg:
     let mut telemetry = Telemetry::default();
     let mut last_gimbal: Option<((i16, i16), Instant)> = None;
     let mut last_sub: Option<Instant> = None;
+    let mut last_push: Option<Instant> = None;
     let mut window_start = Instant::now();
     let mut window_ticks: u64 = 0;
     let mut next = Instant::now();
@@ -308,12 +329,7 @@ pub fn run(body: &mut dyn S1Body, state: Arc<State>, intents: Arc<Intents>, cfg:
                 last_gimbal = Some((target, Instant::now()));
             }
 
-            // Ask for telemetry until it arrives, then every DDS_RETRY in case the controller forgot.
-            let ask = match last_sub {
-                None => true,
-                Some(at) => telemetry.pushes == 0 && at.elapsed() >= DDS_RETRY,
-            };
-            if ask {
+            if dds_due(last_sub, last_push, DDS_RETRY, Instant::now()) {
                 let s = w.seq(cmd::id::DDS_ADD_SUB);
                 w.send(dds::add_sub(
                     s,
@@ -342,6 +358,7 @@ pub fn run(body: &mut dyn S1Body, state: Arc<State>, intents: Arc<Intents>, cfg:
                         if push.msg_id == DDS_MSG_ID {
                             decode_push(push.data, &mut telemetry);
                             telemetry.pushes += 1;
+                            last_push = Some(Instant::now());
                             changed = true;
                         }
                     } else if let Some(hit) = ArmorHit::parse(&frame) {
@@ -443,6 +460,23 @@ mod tests {
         assert!(fast.iter().all(|&w| w == 1000));
         // 0.5 m/s on a 0.05 m wheel is 10 rad/s = 95.5 rpm.
         assert_eq!(fwd[0], 95);
+    }
+
+    /// Asked at once; not again while pushes arrive; again once the controller has been silent
+    /// for the retry, which is what a controller power-cycled under us looks like.
+    #[test]
+    fn telemetry_is_reasked_only_after_silence() {
+        let t0 = Instant::now();
+        let at = |s: u64| t0 + Duration::from_secs(s);
+        let retry = Duration::from_secs(5);
+        assert!(dds_due(None, None, retry, t0));
+        assert!(!dds_due(Some(t0), None, retry, at(4)), "too soon");
+        assert!(dds_due(Some(t0), None, retry, at(5)), "never answered");
+        assert!(!dds_due(Some(t0), Some(at(3)), retry, at(6)), "pushing");
+        assert!(
+            dds_due(Some(t0), Some(at(3)), retry, at(8)),
+            "silent for the retry"
+        );
     }
 
     #[test]

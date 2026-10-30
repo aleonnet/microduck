@@ -3,7 +3,7 @@
 //! Tables and seeds come from DJI's own SDK (`algo.py`: `crc8_calc(data, crc=0x77)`,
 //! `crc16_calc(data, crc=0x3692)`), copied here from the lab encoder that was checked byte for byte
 //! against a frame captured on the robot's own UART (`tests/fixtures/heartbeat_real.bin`: header CRC
-//! `0x75`, trailing CRC `0xa351`). They are lookup tables, not a polynomial: the robot's firmware
+//! `0x75`, trailing CRC `0x51a3`, on the wire `a3 51`). They are lookup tables, not a polynomial: the robot's firmware
 //! agrees with the table, and whether a polynomial would reproduce it is beside the point.
 
 /// Seed of the header CRC8 — byte 3 of every frame, over bytes 0..3.
