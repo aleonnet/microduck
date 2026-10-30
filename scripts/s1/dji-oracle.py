@@ -49,6 +49,9 @@ for name, code in (("suspend", 0x2ab5), ("resume", 0x7ef2)):
 m = msg(D.gimbal_id, D.gimbal_id, C.DUSS_MB_CMDSET_GIMBAL); m.append('cmd','uint8',C.DUSS_MB_CMD_GIMBAL_PUSH_POSITION); m.append('other','uint8',0xff); m.cmd_id = C.DUSS_MB_CMD_GIMBAL_DEGREE_INFO_SUBSCRIPTION; m.cmd_type = C.REQ_PKG_TYPE | C.NEED_ACK_TYPE; emit("gimbal_sub_position_on", m)
 # gun (fire goes to hdvt 0x09; led to gun 0x17)
 m = msg(D.gun_id, D.gun_id); m.append('cmd','uint8',((D.single_fire_mode << 4) & 0xf0) + 1); m.cmd_id = C.DUSS_MB_CMD_RM_SHOOT_CMD; m.receiver = D.hdvt_uav_id; emit("gun_fire_single_1_to_hdvt", m)
+# `GunCtrl.set_led(mode)` → `Gun.set_led(mode, 7)`: control 7 with the effect code of rm_define (on 0, off 1, breath 2, flash 3, marquee 4)
+for mode in range(5):
+    m = msg(D.gun_id, D.gun_id); m.append('ctrl_mode','uint8',((7 << 4) & 0xf0) + mode); m.append('r','uint8',255); m.append('g','uint8',255); m.append('b','uint8',255); m.append('times','uint8',1); m.append('t1','uint16',100); m.append('t2','uint16',100); m.cmd_id = C.DUSS_MB_CMD_RM_GUN_LED_SET; emit(f"gun_led_ctrl7_mode{mode}", m)
 m = msg(D.gun_id, D.gun_id); m.append('ctrl_mode','uint8',((1 << 4) & 0xf0) + 0); m.append('r','uint8',255); m.append('g','uint8',255); m.append('b','uint8',255); m.append('times','uint8',1); m.append('t1','uint16',100); m.append('t2','uint16',100); m.cmd_id = C.DUSS_MB_CMD_RM_GUN_LED_SET; emit("gun_led_ctrl1_mode0", m)
 # armour sensitivity (to hdvt 0x09)
 m = msg(D.armor_id, D.armor_id); k = 1.0

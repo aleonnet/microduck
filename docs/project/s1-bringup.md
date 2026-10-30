@@ -168,8 +168,8 @@ Mac in the robot run; `bench.sh drive` and `events` run `robotctl health`, `quac
 |---|---|---|
 | `robotctl health --json` | the loop healthy | the answer |
 | the pad (UDP → `netpadd` → `robot.*`) | Start arms (five work-mode-1 frames, then the heartbeat); left stick forward (all four wheels, `[fr, −fl, −bl, br]` equal); right stick turns (sides opposed); left stick strafes; sticks centred (wheels zero); D-pad right + right stick (a gimbal frame with yaw and pitch both non-zero, read back from the frame); stick centred (the last gimbal frame is `(0, 0)`); Home twice (LEDs white solid, then off); RT and LT (one `aplay chirp.wav`, and **one** `wheee.wav` for a 300 ms hold — the hold is a level); Start disarms (no heartbeat for 300 ms) | the wire, and `aplay`'s stand-in |
-| `s1ctl` and the socket | version; `robot.enable`; F16 wheels (`[100, −100, −100, 100]`, zero after `robot.stop`); **the deadman** (one `robot.move` and silence: 20–70 moving wheel frames, then zero, no stop sent); F1 follow gimbal_lead (gimbal work mode 0, stick overlay 1, the twist as `0x3f/0x22` with no wheel speeds), chassis_lead (work mode 2), F7 velocity frame gimbal (overlay 2), F4 FPV (work mode 1), free; F2 recenter; F3 speed 30/−15 then stop; F5 sleep, wake; F6 goto 1 −0.5 −90 then `--stop`; F15 chassis work mode 2 then 1 as raw frames; F10 lights solid red, breath blue, flash green, marquee white, off (effects `[1, 2, 3, 4, 0]` on the wire); F9 blaster LED; `robotctl flashlight on --color red`, off; F11 armour 1.0; F12 PWM 500 ‰ / 1 kHz; F17 blaster infrared, gel refused naming the key; volume 50 (`amixer -q -c 0 sset Speaker 50%`); `robot.sound greet` and `robotctl quack` (`aplay greet.wav`, `chirp.wav`); a raw frame | the wire: the oracle hex of each command (`dji_oracle.rs`); where a builder is used instead, that builder is itself held to the oracle or to a real fixture |
-| telemetry | the subscription on the wire (add-node byte-identical to the stock's `dds_add_node_stock_real.bin`, node reset, nine subjects under msg `0x5d` with flags 3); a push of ours fed to the body → `s1ctl telemetry` reads battery 77 %, gimbal `[90, −15]`, picked up, x 1.5 m, wheel 123 rpm, the controller's answer `0x00` logged as accepted, and the push **acked with the stock's exact frame, the push's sequence included** (`dds_push_ack_stock_real.bin`; `fake_body.rs` holds the same for the stock's push and ours); `robotctl monitor --json` → `robot.state` head yaw 1.5708 rad, odometry x 1.5, picked up | `s1ctl`, `robotctl`, the wire |
+| `s1ctl` and the socket | version; `robot.enable`; F16 wheels (`[100, −100, −100, 100]`, zero after `robot.stop`); **the deadman** (one `robot.move` and silence: 20–70 moving wheel frames, then zero, no stop sent); F1 follow gimbal_lead (gimbal work mode 0, stick overlay 1, the twist as `0x3f/0x22` with no wheel speeds), chassis_lead (work mode 2), F7 velocity frame gimbal (overlay 2), F4 FPV (work mode 1), free; F2 recenter; F3 speed 30/−15 then stop; F5 sleep, wake; F6 goto 1 −0.5 −90 then `--stop`; F15 chassis work mode 2 then 1 as raw frames; F10 lights solid red, breath blue, flash green, marquee white, off (effects `[1, 2, 3, 4, 0]` on the wire); F9 blaster LED; `robotctl flashlight on --color red`, off; F11 armour 1.0; F12 PWM 500 ‰ / 1 kHz; F17 blaster infrared (three shots: the fire frame, then per shot the stock's own muzzle flash — `0x3f/0x55`, control 7, effect 3, green, 40 ms, captured in `capture/hdvt_fire.strace` and held as `gun_led_fire_stock_real.bin` — and the stock's `ir_gun_shoot.wav` through `aplay`, on the launcher's 330 ms cadence), gel refused naming the key; volume 50 (`amixer -q -c 0 sset Speaker 50%`); `robot.sound greet` and `robotctl quack` (`aplay greet.wav`, `chirp.wav`); a raw frame | the wire: the oracle hex of each command (`dji_oracle.rs`); where a builder is used instead, that builder is itself held to the oracle or to a real fixture |
+| telemetry | the subscription on the wire (add-node for the script node `0xC9` in the stock's layout — `dds_add_node_stock_real.bin` is node 9 — never a node reset, nine subjects under msg `0x5d` with flags 3); a push of ours fed to the body → `s1ctl telemetry` reads battery 77 %, gimbal `[90, −15]`, picked up, x 1.5 m, wheel 123 rpm, the controller's answer `0x00` logged as accepted, and the push **acked with the stock's exact frame, the push's sequence included** (`dds_push_ack_stock_real.bin`; `fake_body.rs` holds the same for the stock's push and ours); `robotctl monitor --json` → `robot.state` head yaw 1.5708 rad, odometry x 1.5, picked up | `s1ctl`, `robotctl`, the wire |
 | events | an armour hit on plate 3, an infrared hit and a button press (an `input_event` through a FIFO) → three `s1.event` notifications printed by `s1ctl events` | `s1ctl` |
 | the end | `robot.enable off` (no heartbeat after); every byte on the wire decodes as whole frames (4112 frames, 0 dropped) | the wire |
 
@@ -215,10 +215,16 @@ restore` removes that forward. `bench.sh drive` passes `--volume-control` only w
 `S1_VOLUME_CONTROL` names the speaker's control (stage 8's dump), so the volume item is refused
 by name until then, not reported as passed.
 
-One choice the pre-test cannot settle: `s1.blaster` addresses the blaster host (`0x17`), while
-DJI's library sends the fire command to the stock controller (`0x09`), which is stopped under us.
-The frame's bytes are the library's; the receiver is the bench's to confirm, and the robot session's
-F17 item is where it is decided.
+One choice the pre-test could not settle, settled on the robot (2026-10-30, night): `s1.blaster`
+addresses the blaster host (`0x17`) directly, while DJI's library sends the fire command to the stock
+controller (`0x09`), which is stopped under us. The launcher fires either way (six infrared-hit
+events per three shots, reflected by a white wall, `items/F17_infrared_fire3.log`); what the stock
+controller adds beside the fire — the muzzle flash and the shot sound — is the controller's own
+doing (`gunShootAction`, `ir_gun_shoot` in its strings), captured on the UART with the stock alive
+and the app firing (`capture/hdvt_fire.strace`: 42 fire frames `0x3f/0x51` from `0x09` to `0x17`,
+no ack; 30 muzzle flashes `0x3f/0x55` control 7, effect 3, green, once, 40 ms; nothing from the
+launcher back on the UART but its version string), and reproduced by `s1d` per shot. The owner saw
+the green flash and heard the shot with our daemon (`F17_refute.txt` is the refutation).
 
 Refutation, executable (`scripts/s1/e2e-refute.sh`, its output among the artefacts): one byte of
 F2's expected hex planted →
@@ -349,19 +355,89 @@ Telemetry, three defects found and two fixed on the bench, one open:
    `Ack::{None, Now, WhenDone}`, `dds::add_node`, both requests `WhenDone`; the two stock frames
    are fixtures reproduced byte for byte. The controller now **answers** both requests.
 3. Open: the answers are refusals — add-node returns `02 03` (the SDK accepts only `0x00` and
-   `0x50`), subscribe returns `21 03 00 5d 00…`. Next: `0x48/0x02` node reset before registering,
-   as the SDK's `ProtoSubNodeReset` allows; measured on the next power-up.
+   `0x50`), subscribe returns `21 03 00 5d 00…`. A `0x48/0x02` node reset was tried (night): the
+   controller then answered `0x0f` to everything, and the stock's own `dji_hdvt_uav`, restarted
+   under strace, got no answer and no push either — **a reset leaves the bus dead until a power
+   cycle**, so `s1d` never sends one (`fake_body.rs`, F18 item). Under the script runtime's node
+   `0xC9` on a fresh boot (reboot, 2026-10-30 15:54) the answers are the same `02 03` / `21 03`
+   as under node 9. Next lead: how DJI's runtime subscribes (`rm_module.py`, msg ids and the
+   `0x48` requests it sends through the stock controller).
 
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/exec/exec.txt sha256=3d38161894241b029aa2db218b42271da30344015b1e236c1e0f6cf1364d96a0
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/stop/stop.txt sha256=93993a72aca42aaa5d68f7f5908a965278cb4465616b8ad9b55f1e7cef566425
-- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/stop/owners.txt sha256=dfa3ab767dc85cd9b759818b95b1d7df1a7ec15dd211b83eb3ca97481c099705
-- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/drive/health.json sha256=d729d1d41ceb614d05f9d2c7ad0a5a8a4c7a8065de0335e53123935a52e031d9
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/stop/owners.txt sha256=eb5253c4d6409da86194c9087887b9dffda5da2cec73f3461e68762b032e2904
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/drive/health.json sha256=d3817efd88f12c66e52e1c8c20983a4e669aa284cf93009533616be7edb9dfe5
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/drive/move.log sha256=3d3ef2f5bb7664844e21a33e67e6c1b789ef03bbceb0caf06aa49d65e16f1f6a
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/drive/drive.py sha256=543331d05db8d47ae0e3fdbf9235bcfe9d8a1e1f2a6634ec9fdbef36886a52da
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/drive/hdvt_boot.strace sha256=41ca4f9d1f03599dc419096895f1df7a2248240b82a49114c44bb6eb62b34ddb
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/drive/monitor_before_fix.log sha256=324ad59be5e3e6f11ef6036dd585230b2a5d077e77b0fcf5c53d475bcf263432
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/drive/s1d_trace_after_ack_fix.log sha256=390cfee9e4fa22963ed40ec86e75f0b533a13c37cb6bbab98c280c65543c86fa
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/backup/mirror-check-20261030T122913Z.txt sha256=b84188f7ca61a2eaaf4db2e1776d8a261d3c9caa69eabb411e032b9fd31e1797
+
+## Robot session, 2026-10-30 (night) — stages 5 and 6 on the duck's mechanism, the owner watching
+
+Every item below was run by `s1-e2e robot` or by `s1ctl`/`robotctl` over the socket (`adb forward
+tcp:9000`), the pad over UDP to the robot's `netpadd`, and judged by the owner in the chat before
+the next one ("A cada teste que fizer me diga aqui para te dizer se VI a execução de fato").
+Wheels off the ground throughout; the launcher aimed at a white wall.
+
+**Seen by the owner:** chirp by `robotctl quack`; the pad end to end (Start arms, forward, turn,
+strafe, release, gimbal by D-pad right, Home white on/off, RT chirp with LT wheee held without a
+stutter, Start disarms); `s1ctl version`; F16 wheels 100 rpm; the deadman (one move, stops alone);
+F10 five body-LED effects; F9 the launcher's trail light; F11 armour hits on every plate and the
+controller button as `s1.event`s (23 hits, plates 1–4, and two button presses, codes 264 and 265,
+in one 60 s window); F17 three infrared shots with the muzzle flash and the shot sound. The gimbal
+moved left/down for "right/up" on the first try: DJI's signs are yaw positive = right, pitch
+positive = up (`rm_ctrl.py rotate_with_degree`), the duck's the opposite; `tick::gimbal_ddeg` and
+`head_from_gimbal` now convert, and the owner saw "direita e cima".
+
+**Accepted, not observable in the air:** follow modes F1/F4/F7 (the body must be on the floor to
+turn after the gimbal), F6 goto, F11 armour sensitivity, F12 PWM, F15 chassis work mode. They stay
+🟡 until a floor session; F1 is the owner's priority ("é um movimento de destaque quando tivermos a
+inteligência").
+
+**Telemetry (F18), still refused.** A `0x48/0x02` node reset was tried once: afterwards the
+controller answered `0x0f` to everything, and the stock `dji_hdvt_uav`, restarted under strace, got
+no answer and no push either — a reset leaves the bus dead until a power cycle. `s1d` never sends
+one now, and registers DJI's script node `0xC9` instead of the stock's 9; on a fresh boot (reboot,
+15:54) the answers are the same `02 03` to add-node and `21 03` to subscribe as under node 9. Next
+lead: the runtime's own subscription path in `rm_module.py` (node `0xC9`, msg id 0, through the
+stock controller), and the stock's live DDS traffic in `capture/hdvt_fire.strace`.
+
+**The muzzle flash, and two errors of method.** `s1.blaster` fires (six infrared-hit events per
+three shots, reflected by the wall, 330 ms apart) but showed no light and no sound: DJI's runtime
+sends the fire command to the stock controller, which adds both itself. The sound is the stock's
+`ir_gun_shoot.wav` through the speaker (now `aplay` of the same file, once per shot). The light I
+first sent by hypothesis — the trail-light command in solid green, then a body-LED frame with
+component bit 6 — and neither lit: three frames went to the robot without a captured or
+library-built source, which is the trial-and-error the owner forbids. The capture that settled it
+(reboot to the stock, strace of `dji_hdvt_uav` and `dji_sys` while the owner fired in the app)
+shows the flash as `0x3f/0x55` with control 7, effect 3, green, once, 40 ms
+(`gun_led_fire_stock_real.bin`); with that frame the owner saw the green and heard the shot. The
+same capture was the moment to collect every app behaviour still unseen (follow modes, FPV, gimbal
+sleep, goto, power-off) and I asked only for shots: the next capture follows a written script. The
+"no SD card" the app showed after the reboot is unexplained; the card is mounted and holds the
+backups (`df`: 29.8 GB, 3.6 GB used).
+
+**Stage 10 (restore) measured, artefact pending:** after `reboot` the stock came back by itself
+(`pidof dji_hdvt_uav dji_sys` → 233 243 at 15:43, the app connected and fired); `restore/after.txt`
+was not written because the daemons were stopped again for our own session, so the stage stays 🟡
+until a run that ends with the stock alive.
+
+**Bench defect found:** a reboot drops the chroot's `/dev`, `/proc`, `/sys` and `/mnt/system`
+mounts of stage 3, and `s1d` dies at start ("failed to generate random data": no `/dev/urandom`).
+The daemons were started by hand after re-mounting; the stage that starts them must re-run the
+guarded mount line (to fix, with the self-test).
+
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/drive/e2e.log sha256=0b3cf9f587c0920444d46848305df24533d7c81ebb6e3f068c73c64a7e1585f5
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/items/e2e.log sha256=11233b0a47286b123693d64642bce72db3606c0a1037dfb026100bca8f5cf954
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/drive/hdvt_fresh_after_our_reset.strace sha256=7ebc4458b6a1b066c95bb1c1b36e7ef5c78ba778276c9ad9fabd1e490a3eb3b8
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/events/e2e_window3.txt sha256=180758239c26b88aaf623606b3d346048e27238ab181b9f7bd97ca540517b95e
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/events/s1d_window3.log sha256=36a3703ccc5f9240c86eca5dc818403d41d0b347d8f0dd88b1a058671fa8a379
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/items/F17_infrared_fire3.log sha256=6c895b62fe0ca03d973b3ba900514167d3dd0d00bc30e6850262e0d3c2b85f94
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/items/F17_refute.txt sha256=997eae479b0a34dd82230d33fa1896d45ab8e322a3bbfc3caffdd6388fca99d5
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/capture/hdvt_fire.strace sha256=fb5224197975a4dc05b21305cd7c1d5beb328f20178ab0a5c9b2151465c1e3ba
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/capture/sys_fire.strace sha256=36ba6d9f66a2574b3339a983496411b848b2ec454e589c2e0d2f2654bc0a7fda
 
 ## Inventory sweep against the official SDK, 2026-10-30
 
@@ -386,7 +462,7 @@ Physical commands the inventory lacked — proposed for phase 1, awaiting the ow
 | F6 | move a distance and stop, loop closed by the controller | `chassis.move` `0x3f/0x25`; progress push `0x3f/0x2a` | action_id, ctrl\|freq, modes, x y z i16, vel_xy, omega_max i16 | absent; the base of choreography and patrol |
 | F7 | velocity frame: body or gimbal heading | `chassis.stick_overlay` `0x3f/0x28` | 1 byte: 0 off, 1 body, 2 gimbal | absent |
 | F8 | built-in sounds: attack, shoot, scanning, recognised, countdown, musical notes 1C…3B | **no bus command**: the library sends `0x3f/0x1a` to the stock controller, which plays `/system/audio/sound/*.wav` (100 files, 48 kHz stereo) on its own PCM | — | `robot.sound` plays the same files through `aplay` (`s1d --sounds`); the notes are an instrument for the carnival |
-| F9 | blaster LED (trail light) | `blaster.set_led` `0x3f/0x55` | mode<<4\|effect, rgb, times, t1 t2 u16 | absent (listed, never built) |
+| F9 | blaster LED (trail light; the muzzle flash is this command with control 7, effect 3) | `blaster.set_led` `0x3f/0x55` | ctrl<<4\|effect (ctrl 7, effect as `rm_define`: on 0, off 1, breath 2, flash 3, marquee 4), rgb, times, t1 t2 u16 | absent (listed, never built) |
 | F10 | remaining system-LED effects: flash, pulse, scrolling, per-component masks | `0x3f/0x32` (SDK says `0x33`) | comp_mask, led_mask, effect, rgb, loop, t1 t2 | only solid/breath/off proven |
 | F11 | hit sensitivity per plate | `armor.set_hit_sensitivity` `0x3f/0x07` | armor_mask + 9× u16 | absent |
 | F12 | chassis PWM ports (accessories) | `chassis.set_pwm_value/freq` `0x3f/0x3c`, `0x2b` | mask + 6× u16 | absent; whether the S1 exposes the ports is for the manual |

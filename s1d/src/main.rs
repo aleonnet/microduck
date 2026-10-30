@@ -58,6 +58,10 @@ struct Args {
     /// Telemetry rate asked of the motion controller, Hz: 1, 5, 10, 20 or 50.
     #[arg(long, default_value_t = 20)]
     dds_hz: u16,
+    /// The DDS node to register and subscribe under (default: the id DJI's own script runtime
+    /// uses, 0xC9; the stock controller's is 9).
+    #[arg(long, default_value_t = s1d::tick::DDS_NODE_SCRIPT, value_parser = parse_node_id)]
+    dds_node: u8,
     /// Directory of `<tag>.wav` files for `robot.sound`; none means the route is refused.
     #[arg(long)]
     sounds: Option<PathBuf>,
@@ -70,6 +74,15 @@ struct Args {
     /// The owner's key for gel beads: without it `s1.blaster` fires infrared only.
     #[arg(long)]
     blaster_gel: bool,
+}
+
+/// A DDS node id as the bench writes it: decimal, or hex with a `0x` prefix (`0xC9`).
+fn parse_node_id(s: &str) -> Result<u8, String> {
+    let parsed = match s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        Some(hex) => u8::from_str_radix(hex, 16),
+        None => s.parse::<u8>(),
+    };
+    parsed.map_err(|e| format!("{s:?} is not a node id (0..=255, decimal or 0x..): {e}"))
 }
 
 #[tokio::main]
@@ -107,6 +120,7 @@ async fn main() -> ExitCode {
             TwistMode::Wheels
         },
         dds_hz: args.dds_hz,
+        dds_node: args.dds_node,
         ..Config::default()
     };
 

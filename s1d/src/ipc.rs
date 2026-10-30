@@ -355,14 +355,18 @@ pub fn dispatch_s1(
         }
         S1Call::Lights(p) => {
             if p.blaster {
-                let (ctrl, mode) = match p.effect {
-                    api::LightEffect::Off => (0, 0),
-                    api::LightEffect::Solid => (1, 0),
-                    api::LightEffect::Breath => (1, 1),
-                    api::LightEffect::Flash => (1, 2),
-                    api::LightEffect::Marquee => (1, 3),
+                // DJI's library drives the launcher's LED with control 7 and the effect code of
+                // `rm_define` (`GunCtrl.set_led(mode)` → `Gun.set_led(mode, 7)`; on 0, off 1,
+                // breath 2, flash 3, marquee 4), and the stock's own muzzle flash on the UART is
+                // control 7, effect 3 (`gun_led_fire_stock_real.bin`).
+                let mode = match p.effect {
+                    api::LightEffect::Solid => 0,
+                    api::LightEffect::Off => 1,
+                    api::LightEffect::Breath => 2,
+                    api::LightEffect::Flash => 3,
+                    api::LightEffect::Marquee => 4,
                 };
-                intents.request_frame(cmd::gun_led(0, ctrl, mode, p.r, p.g, p.b, 1, p.t1, p.t2));
+                intents.request_frame(cmd::gun_led(0, 7, mode, p.r, p.g, p.b, 1, p.t1, p.t2));
             } else {
                 intents.request_led(cmd::SystemLed {
                     effect: p.effect as u8,
@@ -441,6 +445,9 @@ pub fn dispatch_s1(
                 return refused(id, "times is 1..=8".to_owned());
             }
             intents.request_frame(cmd::gun_fire(0, cmd::host::GUN, !p.gel, p.times));
+            // The launcher fires `times` on its own cadence; the loop dresses each shot with the
+            // muzzle light and the shot sound, as the stock does beside its fire command.
+            intents.request_volley(p.times);
             accepted(id)
         }
     }

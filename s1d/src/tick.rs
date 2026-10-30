@@ -57,6 +57,8 @@ pub struct Config {
     pub half_sum_lw_m: f64,
     /// Telemetry rate asked of the motion controller, one of `dds::FREQUENCIES`.
     pub dds_hz: u16,
+    /// The DDS node this daemon registers and subscribes under. `DDS_NODE_SCRIPT` by default.
+    pub dds_node: u8,
 }
 
 impl Default for Config {
@@ -69,9 +71,14 @@ impl Default for Config {
             wheel_radius_m: 0.05,
             half_sum_lw_m: 0.2,
             dds_hz: 20,
+            dds_node: DDS_NODE_SCRIPT,
         }
     }
 }
+
+/// The node id DJI's on-board Python runtime registers for its own subscriptions
+/// (`rm_module.py`: `(9 & 0x1f) | ((6 << 5) & 0xe0)`), beside the stock controller's node 9.
+pub const DDS_NODE_SCRIPT: u8 = 0xC9;
 
 /// The SDK's documented wheel range, rpm.
 pub const WHEEL_RPM_MAX: f64 = 1000.0;
@@ -108,6 +115,14 @@ const DDS_RETRY: Duration = Duration::from_secs(5);
 /// The gimbal command is an action; it is re-sent at this rate while the target is unchanged, and
 /// at once when it changes. The PoC sent it at 20 Hz.
 const GIMBAL_HOLD_PERIOD: Duration = Duration::from_millis(100);
+/// The launcher's own cadence for a fire command of `n` shots: measured 2026-10-30 on the robot,
+/// `blaster --times 3` against a white wall gave three pairs of infrared-hit events 330 ms apart
+/// (`out/2026-10-30-poc2/items/F17_infrared_fire3.log`). The muzzle light and the shot sound
+/// follow that cadence, one per shot, as the stock app shows them.
+pub const SHOT_PERIOD: Duration = Duration::from_millis(330);
+/// The sound bank's name for the shot: the stock's own `ir_gun_shoot.wav` (0.45 s), which the
+/// stock plays through the speaker on every shot (`s1-push.sh` links it under this name).
+pub const SHOT_SOUND: &str = "shoot";
 /// Subjects we subscribe to, in the order they come back concatenated — DJI's own order, minus
 /// the servo subject an S1 has no servos for.
 pub const SUBJECTS: [u64; 9] = [
@@ -166,14 +181,31 @@ pub fn mecanum_rpm(twist: [f64; 3], radius_m: f64, half_sum_lw_m: f64) -> [i16; 
 
 /// Head joints (`[neck_pitch, head_pitch, head_yaw, head_roll]`, radians) to gimbal tenths of a
 /// degree, clamped to the manual's travel. Neck and roll are ignored: the gimbal has two axes.
+///
+/// **Both signs flip.** The duck's frame is `y` left, `z` up: positive yaw turns left
+/// (`MoveParams::vyaw`'s own words) and positive pitch noses down. DJI's gimbal is the other way
+/// — its library sends `gimbal_right` as a positive yaw and `gimbal_up` as a positive pitch
+/// (`rm_ctrl.py`, `rotate_with_degree`), and the bench saw it: the pad's "look right and up"
+/// arrived as yaw −143°, pitch −20° and the gimbal looked **left and down** (2026-10-30).
 pub fn gimbal_ddeg(head: [f64; 4]) -> (i16, i16) {
-    let yaw = (head[2].to_degrees() * 10.0)
+    let yaw = (-head[2].to_degrees() * 10.0)
         .round()
         .clamp(-f64::from(YAW_DDEG_MAX), f64::from(YAW_DDEG_MAX)) as i16;
-    let pitch = (head[1].to_degrees() * 10.0)
+    let pitch = (-head[1].to_degrees() * 10.0)
         .round()
         .clamp(f64::from(PITCH_DDEG_MIN), f64::from(PITCH_DDEG_MAX)) as i16;
     (yaw, pitch)
+}
+
+/// The inverse of [`gimbal_ddeg`]: the gimbal's own angle (DJI's signs, tenths) back to the
+/// duck's `head` radians, for `robot.state`.
+pub fn head_from_gimbal(yaw_ddeg: i16, pitch_ddeg: i16) -> [f64; 4] {
+    [
+        0.0,
+        (-f64::from(pitch_ddeg) / 10.0).to_radians(),
+        (-f64::from(yaw_ddeg) / 10.0).to_radians(),
+        0.0,
+    ]
 }
 
 /// Decode a push into telemetry when it is ours — `DDS_MSG_ID` and exactly `DDS_PUSH_LEN` bytes,
@@ -262,6 +294,8 @@ pub fn run(body: &mut dyn S1Body, state: Arc<State>, intents: Arc<Intents>, cfg:
     let mut last_gimbal: Option<((i16, i16), Instant)> = None;
     let mut last_sub: Option<Instant> = None;
     let mut last_push: Option<Instant> = None;
+    // The launcher's shots still to be lit and sounded.
+    let mut shots: std::collections::VecDeque<Instant> = std::collections::VecDeque::new();
     let mut window_start = Instant::now();
     let mut window_ticks: u64 = 0;
     let mut next = Instant::now();
@@ -366,19 +400,20 @@ pub fn run(body: &mut dyn S1Body, state: Arc<State>, intents: Arc<Intents>, cfg:
         }
 
         // Telemetry is asked for armed or not: battery and pick-up matter before anything moves,
-        // and a subscription moves nothing.
+        // and a subscription moves nothing. **Never a node reset**: measured 2026-10-30 (night),
+        // after one `0x48/0x02` on node 9 the controller answered every request of ours `0x0f`
+        // and the stock's own re-registration (`dji_hdvt_uav` restarted under strace) got no
+        // answer and no push at all — the reset leaves the controller's bus dead until a power
+        // cycle. The node is registered as DJI's on-board library registers its own (`node_id`
+        // `(9 & 0x1f) | (6 << 5)` = `0xC9`, `rm_module.py`), a second subscriber beside the stock's
+        // node 9, then subscribed. `--dds-node` picks another id for the bench.
         if dds_due(last_sub, last_push, DDS_RETRY, Instant::now()) {
-            // Forget what node 9 subscribed (the stock firmware's two subscriptions outlive it on
-            // the controller — 2026-10-30, registering over them was refused with 0x02/0x21), then
-            // register the node as the stock does on start-up, then subscribe.
-            let s = w.seq(cmd::id::DDS_RESET_NODE);
-            w.send(dds::reset_node(s, cmd::host::BASE));
             let s = w.seq(cmd::id::DDS_ADD_NODE);
-            w.send(dds::add_node(s, cmd::host::BASE));
+            w.send(dds::add_node(s, cfg.dds_node));
             let s = w.seq(cmd::id::DDS_ADD_SUB);
             w.send(dds::add_sub(
                 s,
-                cmd::host::BASE,
+                cfg.dds_node,
                 DDS_MSG_ID,
                 &SUBJECTS,
                 cfg.dds_hz,
@@ -396,6 +431,29 @@ pub fn run(body: &mut dyn S1Body, state: Arc<State>, intents: Arc<Intents>, cfg:
         for mut frame in intents.take_frames() {
             frame.seq = w.seq((frame.cmd_set, frame.cmd_id));
             w.send(frame);
+        }
+
+        // A volley just asked of the launcher: one muzzle flash and one shot sound per shot, on
+        // the launcher's cadence, the first in the same tick as the fire frame above. The stock
+        // paces its flashes itself too: the launcher reports nothing per shot on the UART
+        // (`capture/hdvt_fire.strace`).
+        if let Some(n) = intents.take_volley() {
+            let now = Instant::now();
+            shots.clear();
+            shots.extend((0..u32::from(n)).map(|k| now + SHOT_PERIOD * k));
+        }
+        while shots.front().is_some_and(|at| *at <= Instant::now()) {
+            shots.pop_front();
+            // The stock's own muzzle flash, byte for byte (`cmd::gun_fire_flash`): green, 40 ms,
+            // once — it ends by itself, no "off" is sent.
+            let s = w.seq(cmd::id::GUN_LED);
+            w.send(cmd::gun_fire_flash(s));
+            if let Ok(mut slot) = state.sound.lock()
+                && let Some(sound) = slot.as_mut()
+                && let Err(why) = sound.play_named(SHOT_SOUND)
+            {
+                tracing::debug!(why, "shot sound not played");
+            }
         }
 
         // Whatever the body pushed: telemetry, hits, acks.
@@ -609,20 +667,26 @@ mod tests {
         assert_eq!(dds_retcode_meaning(0x02, None), "empty answer");
     }
 
+    /// The duck looks left with a positive yaw and down with a positive pitch; DJI's gimbal takes
+    /// right and up as positive — so the duck's "left 15°, down 10°" is DJI's (−150, −100), and the
+    /// clamps hold at the manual's travel. `head_from_gimbal` is the exact inverse.
     #[test]
-    fn gimbal_is_clamped_to_the_manual() {
+    fn gimbal_is_clamped_to_the_manual_with_djis_signs() {
         assert_eq!(gimbal_ddeg([0.0, 0.0, 0.0, 0.0]), (0, 0));
         assert_eq!(
             gimbal_ddeg([0.0, 10f64.to_radians(), 15f64.to_radians(), 0.0]),
-            (150, 100)
-        );
-        assert_eq!(
-            gimbal_ddeg([0.0, -1.0, 7.0, 0.0]),
-            (YAW_DDEG_MAX, PITCH_DDEG_MIN)
+            (-150, -100)
         );
         assert_eq!(
             gimbal_ddeg([0.0, 1.0, -7.0, 0.0]),
+            (YAW_DDEG_MAX, PITCH_DDEG_MIN)
+        );
+        assert_eq!(
+            gimbal_ddeg([0.0, -1.0, 7.0, 0.0]),
             (-YAW_DDEG_MAX, PITCH_DDEG_MAX)
         );
+        let back = head_from_gimbal(-150, -100);
+        assert!((back[2] - 15f64.to_radians()).abs() < 1e-9);
+        assert!((back[1] - 10f64.to_radians()).abs() < 1e-9);
     }
 }

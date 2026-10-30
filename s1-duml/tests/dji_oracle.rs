@@ -134,6 +134,21 @@ fn gun_led_matches_the_library() {
         hex(&cmd::gun_led(0, 1, 0, 255, 255, 255, 1, 100, 100)),
         "551604fcc9170000403f5510ffffff0164006400767c"
     );
+    // `GunCtrl.set_led(mode)` is control 7 with rm_define's effect code: on, off, breath, flash,
+    // marquee — what `s1.lights --blaster` sends.
+    for (mode, want) in [
+        (0, "551604fcc9170000403f5570ffffff01640064002c6d"),
+        (1, "551604fcc9170000403f5571ffffff0164006400d120"),
+        (2, "551604fcc9170000403f5572ffffff0164006400d6f6"),
+        (3, "551604fcc9170000403f5573ffffff01640064002bbb"),
+        (4, "551604fcc9170000403f5574ffffff0164006400c952"),
+    ] {
+        assert_eq!(
+            hex(&cmd::gun_led(0, 7, mode, 255, 255, 255, 1, 100, 100)),
+            want,
+            "mode {mode}"
+        );
+    }
 }
 
 #[test]

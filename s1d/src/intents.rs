@@ -87,6 +87,10 @@ pub struct Intents {
     follow: AtomicU8,
     /// Per-wheel rpm asked directly (`s1.wheels`); when fresher than the twist it is what goes out.
     wheels: ArcSwap<Stamped<Option<[i16; 4]>>>,
+    /// Shots the launcher was just told to fire (`s1.blaster`), for the loop to dress each one
+    /// with the muzzle light and the shot sound in step with the launcher's own cadence. Taken
+    /// once; zero is none.
+    volley: AtomicU8,
 }
 
 /// What the loop reads at the top of a tick.
@@ -130,6 +134,19 @@ impl Intents {
                 value: None,
                 at_us: 0,
             }),
+            volley: AtomicU8::new(0),
+        }
+    }
+
+    /// `shots` just asked of the launcher: the loop lights and sounds each one.
+    pub fn request_volley(&self, shots: u8) {
+        self.volley.store(shots, Ordering::Relaxed);
+    }
+
+    pub fn take_volley(&self) -> Option<u8> {
+        match self.volley.swap(0, Ordering::Relaxed) {
+            0 => None,
+            n => Some(n),
         }
     }
 

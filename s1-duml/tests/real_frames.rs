@@ -307,3 +307,32 @@ fn a_header_declaring_less_than_the_overhead_is_an_error_not_a_panic() {
     let err = Frame::decode(&head).expect_err("a 6-byte frame cannot hold its header");
     assert!(err.to_string().contains("declares"), "{err}");
 }
+
+/// The stock's muzzle flash, captured on the UART with the app firing (2026-10-30, 15:45:56.117,
+/// `capture/hdvt_fire.strace`, 30 identical ones): the launcher-LED command with control 7,
+/// effect 3 (flash), green, once, 40 ms on. `cmd::gun_fire_flash` carries that payload; the
+/// sender and the ack request are the library's (0xC9, ack when done), not the stock
+/// controller's (0x09, none), as every builder here.
+#[test]
+fn the_muzzle_flash_reproduces_the_stocks_payload() {
+    let real: &[u8] = include_bytes!("fixtures/gun_led_fire_stock_real.bin");
+    let decoded = Frame::decode(real).expect("a real frame decodes");
+    assert_eq!((decoded.cmd_set, decoded.cmd_id), cmd::id::GUN_LED);
+    assert_eq!(
+        (decoded.sender, decoded.receiver),
+        (cmd::host::BASE, cmd::host::GUN)
+    );
+    assert_eq!(
+        decoded.data,
+        [0x73, 0x00, 0xff, 0x00, 0x01, 0x28, 0x00, 0x00, 0x00]
+    );
+    let ours = cmd::gun_fire_flash(0x027a);
+    assert_eq!(
+        (ours.receiver, ours.cmd_set, ours.cmd_id),
+        (cmd::host::GUN, 0x3f, 0x55)
+    );
+    assert_eq!(
+        ours.data, decoded.data,
+        "green, flash, 40 ms, once — the stock's bytes"
+    );
+}

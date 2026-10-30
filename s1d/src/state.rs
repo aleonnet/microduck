@@ -220,8 +220,9 @@ impl State {
 
     /// The `robot.state` frame for this tick. Joints and targets are empty: this body has no
     /// joint vector in the duck's sense, and every client reads them with `get`. The gimbal travels
-    /// in `head` as `[0, pitch, yaw, 0]`, the order `HeadParams` uses — the angle the motion
-    /// controller reports when telemetry flows, the last commanded one until then.
+    /// in `head` as `[0, pitch, yaw, 0]`, the order `HeadParams` uses and the duck's signs (left
+    /// and down positive; the gimbal's own are the opposite, `tick::gimbal_ddeg`) — the angle the
+    /// motion controller reports when telemetry flows, the last commanded one until then.
     pub fn frame(&self, requested: [f64; 3], limited_by: Vec<String>) -> proto::RobotState {
         let t = self.telemetry.load();
         let (yaw_ddeg, pitch_ddeg) = match t.gimbal_pos {
@@ -257,12 +258,7 @@ impl State {
                 applied: **self.applied_twist.load(),
                 limited_by,
             },
-            head: [
-                0.0,
-                (f64::from(pitch_ddeg) / 10.0).to_radians(),
-                (f64::from(yaw_ddeg) / 10.0).to_radians(),
-                0.0,
-            ],
+            head: crate::tick::head_from_gimbal(yaw_ddeg, pitch_ddeg),
             policy: if armed {
                 "roller".to_owned()
             } else {

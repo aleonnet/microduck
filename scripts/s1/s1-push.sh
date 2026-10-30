@@ -48,9 +48,9 @@ $A shell "chmod 755 $CHROOT/opt/robot/bin/*"
 # `busybox ln`: the Android shell's own `ln` is a toolbox applet that is not on the adb shell's
 # path, and the loop silently created nothing (measured 2026-10-30: an empty bank on the robot).
 BB=/system/xbin/busybox
-$A shell "mkdir -p $CHROOT/opt/robot/sounds && cd $CHROOT/opt/robot/sounds && for pair in chirp:media_sound_demo_recognize_success greet:power_on alarm:media_sound_demo_attacked inquire:media_sound_demo_scanning peck:sleeping coo:media_sound_demo_gimbal_rotate wheee:engine_start; do $BB ln -sf /mnt/system/audio/sound/\${pair#*:}.wav \${pair%%:*}.wav; done; $BB ls -l"
+$A shell "mkdir -p $CHROOT/opt/robot/sounds && cd $CHROOT/opt/robot/sounds && for pair in chirp:media_sound_demo_recognize_success greet:power_on alarm:media_sound_demo_attacked inquire:media_sound_demo_scanning peck:sleeping coo:media_sound_demo_gimbal_rotate wheee:engine_start shoot:ir_gun_shoot; do $BB ln -sf /mnt/system/audio/sound/\${pair#*:}.wav \${pair%%:*}.wav; done; $BB ls -l"
 n=$($A shell "$BB ls $CHROOT/opt/robot/sounds | $BB wc -l" | tr -d '\r ')
-[ "$n" = "7" ] || { echo "the sound bank has $n entries, expected 7" >&2; exit 1; }
+[ "$n" = "8" ] || { echo "the sound bank has $n entries, expected 8" >&2; exit 1; }
 # The chroot keeps Android's PATH unless told otherwise; `aplay`/`amixer` are found only with Debian's.
 ENV="$BB chroot $CHROOT /usr/bin/env PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 echo "[s1-push] installed into $HOST:$CHROOT/opt/robot/bin (sound bank: $n files)"

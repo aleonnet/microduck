@@ -543,6 +543,16 @@ pub fn gun_led(
 /// scales them (`k = 1.0` is the library's default; the peak thresholds are `160 k`, `180 k`,
 /// `200 k`). The library addresses it to the stock controller (`0x09`), which the bench has yet to
 /// see forward it — hence `receiver` is the caller's.
+/// The launcher's muzzle flash, as the stock controller sends it once per shot: `0x3f/0x55` with
+/// control 7, effect 3 (flash), green, once, 40 ms on, 0 off. Captured on the UART with the stock
+/// alive and the app firing (`capture/hdvt_fire.strace`, 2026-10-30 15:45:56.117, 30 of them);
+/// `tests/fixtures/gun_led_fire_stock_real.bin` is one, and `real_frames.rs` holds this builder
+/// to its payload. Nothing comes back from the launcher on the UART (its only frame in that
+/// capture is its version string), so the stock paces the flashes itself, and so does `s1d`.
+pub fn gun_fire_flash(seq: u16) -> Frame {
+    gun_led(seq, 7, 3, 0, 255, 0, 1, 40, 0)
+}
+
 pub fn armor_sensitivity(seq: u16, receiver: u8, k: f32) -> Frame {
     let scaled = |v: f32| ((v * k) as u16).to_le_bytes();
     let mut data = vec![0x3f];

@@ -212,7 +212,7 @@ fn pwm_lights_armor_and_blaster_queue_what_the_library_sends() {
     );
     assert_eq!(
         queued(&i),
-        vec!["551604fcc9170000403f5510ffffff0164006400767c"]
+        vec!["551604fcc9170000403f5570ffffff01640064002c6d"]
     );
     // Body lights go through the LED slot, as `robot.flashlight` does, in the captured layout.
     run(
@@ -258,19 +258,27 @@ fn pwm_lights_armor_and_blaster_queue_what_the_library_sends() {
             .unwrap()
             .contains("--blaster-gel")
     );
+    assert_eq!(
+        i.take_volley(),
+        None,
+        "a refused fire lights and sounds nothing"
+    );
     run(
         &s,
         &i,
         &S1Call::Blaster(api::BlasterParams {
-            times: 1,
+            times: 3,
             gel: false,
         }),
     );
     let f = i.take_frames().remove(0);
     assert_eq!(
         (f.receiver, f.cmd_id, f.data.clone()),
-        (0x17, 0x51, vec![0x11])
+        (0x17, 0x51, vec![0x13])
     );
+    // The loop dresses each of the three shots with the muzzle light and the shot sound.
+    assert_eq!(i.take_volley(), Some(3));
+    assert_eq!(i.take_volley(), None, "taken once");
 }
 
 #[test]

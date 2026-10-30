@@ -524,7 +524,10 @@ mod fake {
         }
         let bank = dir.join("sounds");
         std::fs::create_dir_all(&bank).map_err(|e| e.to_string())?;
-        for tag in ["alarm", "greet", "inquire", "peck", "chirp", "coo", "wheee"] {
+        // The duck's seven tags, and the S1's own shot (`tick::SHOT_SOUND`).
+        for tag in [
+            "alarm", "greet", "inquire", "peck", "chirp", "coo", "wheee", "shoot",
+        ] {
             write_wav(&bank.join(format!("{tag}.wav"))).map_err(|e| e.to_string())?;
         }
         let button_fifo = dir.join("button.fifo");
@@ -1339,7 +1342,7 @@ mod fake {
                 );
                 if ok { Ok(String::new()) } else { Err(out) }
             },
-            |f: &[Frame]| find_hex(f, "551604fcc9170000403f5510ffffff0164006400767c")
+            |f: &[Frame]| find_hex(f, "551604fcc9170000403f5570ffffff01640064002c6d")
         );
         item!(
             "flashlight red, off (duck route)",
@@ -1403,11 +1406,21 @@ mod fake {
         );
         item!(
             "F17 blaster (infrared), --gel refused",
-            "the infrared emitter fires once; gel is refused without the key",
+            "three infrared shots: the fire frame, then per shot the stock's own muzzle flash (green, 40 ms) and the shot sound on the launcher's cadence; gel is refused without the key",
             {
-                let (ok, out) = s1ctl(&d, &["blaster"]);
+                let from = tools_len(&d);
+                let (ok, out) = s1ctl(&d, &["blaster", "--times", "3"]);
                 if !ok {
                     return Err(out);
+                }
+                // The launcher's cadence: the third shot 660 ms after the first, its flash out
+                // 150 ms later (`tick::SHOT_PERIOD`, `tick::MUZZLE_FLASH`).
+                std::thread::sleep(Duration::from_millis(900));
+                let shots = tools_since(&d, from).matches("shoot.wav").count();
+                if shots != 3 {
+                    return Err(format!(
+                        "aplay ran shoot.wav {shots} times, not once per shot"
+                    ));
                 }
                 let (ok, out) = s1ctl(&d, &["blaster", "--gel"]);
                 if ok {
@@ -1416,17 +1429,27 @@ mod fake {
                 if !out.contains("--blaster-gel") {
                     return Err(out);
                 }
-                Ok("gel refused naming the key".to_owned())
+                Ok("aplay ran shoot.wav once per shot; gel refused naming the key".to_owned())
             },
             |f: &[Frame]| {
-                let hit = f.iter().any(|x| {
-                    x.receiver == host::GUN
-                        && (x.cmd_set, x.cmd_id) == id::GUN_FIRE
-                        && x.data == [0x11]
-                });
+                // Everything addressed to the launcher, in order: the fire command (three
+                // infrared), then green on and off once per shot, each flash out before the next.
+                let launcher: Vec<String> = f
+                    .iter()
+                    .filter(|x| x.receiver == host::GUN)
+                    .map(|x| match (x.cmd_set, x.cmd_id) {
+                        k if k == id::GUN_FIRE => format!("fire {:02x}", x.data[0]),
+                        k if k == id::GUN_LED && x.data == cmd::gun_fire_flash(0).data => {
+                            "flash".to_owned()
+                        }
+                        _ => format!("{:02x}/{:02x} {:02x?}", x.cmd_set, x.cmd_id, x.data),
+                    })
+                    .collect();
+                // The stock's own muzzle flash (`gun_led_fire_stock_real.bin`), once per shot.
+                let want = ["fire 13", "flash", "flash", "flash"];
                 (
-                    hit,
-                    "fire frame to the blaster host, single infrared".to_owned(),
+                    launcher == want,
+                    format!("launcher frames: {}", launcher.join(", ")),
                 )
             }
         );
@@ -1494,29 +1517,39 @@ mod fake {
         // --- telemetry, events, the button ----------------------------------------------
         item!(
             "F18 telemetry subscription on the wire",
-            "s1d registers node 9 with the stock's exact bytes and subscribes nine subjects under msg 0x5d",
+            "s1d registers node 0xC9 (DJI's own script node) in the stock's layout, never resets a node, and subscribes nine subjects under msg 0x5d",
             { Ok(String::new()) },
             |_: &[Frame]| {
                 let all = wire.all();
-                const ADD_NODE_REAL: &[u8] =
-                    include_bytes!("../../../s1-duml/tests/fixtures/dds_add_node_stock_real.bin");
-                let node = all.iter().any(|x| x.encode().unwrap() == ADD_NODE_REAL);
+                // The stock's add-node frame with the script node in place of node 9: the same
+                // builder the stock fixture holds byte for byte (`real_frames.rs`).
+                let node = all.iter().any(|x| {
+                    (x.cmd_set, x.cmd_id) == id::DDS_ADD_NODE
+                        && x.encode().unwrap()
+                            == s1_duml::dds::add_node(x.seq, s1d::tick::DDS_NODE_SCRIPT)
+                                .encode()
+                                .unwrap()
+                });
                 let sub = all
                     .iter()
                     .find(|x| (x.cmd_set, x.cmd_id) == id::DDS_ADD_SUB);
+                // `ProtoAddSubMsg`: node, msg id, flags, sub mode, then the subject count.
                 let sub_ok = sub.is_some_and(|x| {
-                    x.data[0] == host::BASE
+                    x.data[0] == s1d::tick::DDS_NODE_SCRIPT
                         && x.data[1] == DDS_MSG_ID
                         && x.data[2] == 0x03
                         && x.data[4] == 9
                 });
+                // Measured 2026-10-30 (night): one node reset leaves the controller's bus dead
+                // until a power cycle. The wire must never carry one.
                 let reset = all
                     .iter()
                     .any(|x| (x.cmd_set, x.cmd_id) == id::DDS_RESET_NODE);
                 (
-                    node && sub_ok && reset,
+                    node && sub_ok && !reset,
                     format!(
-                        "add-node byte-identical to the stock's {node}; reset {reset}; subscribe node 9 msg 0x5d flags 3 nine subjects {sub_ok}"
+                        "add-node 0xC9 in the stock's layout {node}; no reset {}; subscribe node 0xC9 msg 0x5d flags 3 nine subjects {sub_ok}",
+                        !reset
                     ),
                 )
             }
@@ -1555,7 +1588,7 @@ mod fake {
         );
         item!(
             "robot.state (subscribe)",
-            "robot.state head = the gimbal's reported angle, odometry x 1.5, picked_up (robotctl monitor --json)",
+            "robot.state head = the gimbal's reported angle in the duck's signs (yaw −90° for DJI's +90°), odometry x 1.5, picked_up (robotctl monitor --json)",
             {
                 let err_path = d.dir.join("monitor.err");
                 let mut child = Command::new(d.bin.join("robotctl"))
@@ -1609,10 +1642,12 @@ mod fake {
                             .trim()
                     )
                 })?;
+                // The push said yaw +90° in DJI's signs (right); the duck's head says −90° (left
+                // positive), the inverse of what `robot.head` sends out.
                 let yaw = v["head"][2].as_f64().unwrap_or(0.0);
                 let x = v["odom"]["position"][0].as_f64().unwrap_or(0.0);
                 let picked = v["safety"]["picked_up"] == json!(true);
-                if (yaw - 90f64.to_radians()).abs() < 1e-3 && (x - 1.5).abs() < 1e-6 && picked {
+                if (yaw + 90f64.to_radians()).abs() < 1e-3 && (x - 1.5).abs() < 1e-6 && picked {
                     Ok(format!(
                         "robotctl monitor: head yaw {yaw:.4} rad, odom x {x}, picked_up"
                     ))
@@ -2186,13 +2221,13 @@ mod robot {
         );
         item!(
             "F17 blaster (infrared), --gel refused",
-            "the infrared emitter fires once (no gel: tank out); gel refused",
+            "three infrared shots (no gel: tank out): the launcher's LED flashes green three times with the shot sound in step, 330 ms apart; gel refused",
             {
-                s1ctl(&["blaster"])?;
+                s1ctl(&["blaster", "--times", "3"])?;
                 if s1ctl(&["blaster", "--gel"]).is_ok() {
                     return Err("gel accepted without the key".to_owned());
                 }
-                Ok("infrared accepted, gel refused".to_owned())
+                Ok("three infrared shots accepted, gel refused".to_owned())
             }
         );
         item!(

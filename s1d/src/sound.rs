@@ -50,7 +50,33 @@ impl Sound {
             .ok()
             .and_then(|v| v.as_str().map(str::to_owned))
             .unwrap_or_else(|| format!("{tag:?}").to_lowercase());
+        self.file_named(&name)
+    }
+
+    /// The file a name plays: `<bank>/<name>.wav`. The S1's own sounds — the launcher's shot —
+    /// have no tag in the duck's contract and are named here instead.
+    pub fn file_named(&self, name: &str) -> PathBuf {
         self.bank.join(format!("{name}.wav"))
+    }
+
+    /// One shot of the S1's own sound `name`, under the same rule as a one-shot tag: dropped
+    /// while the wheee rides, otherwise it cuts whatever plays and starts.
+    pub fn play_named(&mut self, name: &str) -> Result<PathBuf, String> {
+        let wav = self.file_named(name);
+        if self.riding() {
+            tracing::debug!(name, "sound skipped: the wheee ride has the speaker");
+            return Ok(wav);
+        }
+        self.start(wav, None)
+    }
+
+    /// Whether the wheee is on the speaker right now.
+    fn riding(&mut self) -> bool {
+        self.playing == Some(proto::SoundTag::Wheee)
+            && self
+                .child
+                .as_mut()
+                .is_some_and(|c| matches!(c.try_wait(), Ok(None)))
     }
 
     /// Start the sound; the previous one, if still playing, is cut. `Err` names what is missing.
@@ -70,11 +96,7 @@ impl Sound {
         hold: Option<bool>,
     ) -> Result<PathBuf, String> {
         let wav = self.file_for(tag);
-        let riding = self.playing == Some(proto::SoundTag::Wheee)
-            && self
-                .child
-                .as_mut()
-                .is_some_and(|c| matches!(c.try_wait(), Ok(None)));
+        let riding = self.riding();
         if tag == proto::SoundTag::Wheee {
             match hold {
                 Some(false) => {
@@ -90,6 +112,11 @@ impl Sound {
             tracing::debug!(?tag, "sound skipped: the wheee ride has the speaker");
             return Ok(wav);
         }
+        self.start(wav, Some(tag))
+    }
+
+    /// Cut whatever plays and start `wav`; `playing` is what the ride rule remembers it as.
+    fn start(&mut self, wav: PathBuf, playing: Option<proto::SoundTag>) -> Result<PathBuf, String> {
         if !wav.is_file() {
             return Err(format!("no {} in the sound bank", wav.display()));
         }
@@ -104,7 +131,7 @@ impl Sound {
         {
             Ok(child) => {
                 self.child = Some(child);
-                self.playing = Some(tag);
+                self.playing = playing;
                 self.played += 1;
                 Ok(wav)
             }
@@ -137,6 +164,10 @@ mod tests {
         assert_eq!(s.file_for(proto::SoundTag::Chirp), bank.join("chirp.wav"));
         let err = s.play(proto::SoundTag::Chirp).unwrap_err();
         assert!(err.contains("chirp.wav"), "{err}");
+        // The S1's own sounds are named, not tagged: the same bank, the same refusal.
+        assert_eq!(s.file_named("shoot"), bank.join("shoot.wav"));
+        let err = s.play_named("shoot").unwrap_err();
+        assert!(err.contains("shoot.wav"), "{err}");
         assert_eq!(s.played(), 0);
     }
 

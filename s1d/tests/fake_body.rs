@@ -116,8 +116,8 @@ fn disarmed_sends_nothing_but_zeroes_on_exit() {
         dds.iter()
             .map(|f| (f.cmd_set, f.cmd_id))
             .collect::<Vec<_>>(),
-        vec![id::DDS_RESET_NODE, id::DDS_ADD_NODE, id::DDS_ADD_SUB],
-        "node reset, registered, then one subscription, while disarmed"
+        vec![id::DDS_ADD_NODE, id::DDS_ADD_SUB],
+        "registered, then one subscription, while disarmed — never a node reset (measured 2026-10-30: one reset leaves the controller's bus dead until a power cycle)"
     );
     assert!(
         rest.iter()
@@ -291,4 +291,80 @@ fn an_armour_hit_on_the_wire_becomes_an_event() {
         }) => assert_eq!((plate, hit_kind), (3, 1)),
         other => panic!("expected an armour hit event, got {other:?}"),
     }
+}
+
+/// `s1.blaster` with three shots: the fire frame goes out first, then every shot gets the
+/// stock's own muzzle flash (`gun_led_fire_stock_real.bin`) and the shot sound, on the
+/// launcher's cadence (330 ms, measured on the robot). The cadence is read off this clock, from
+/// when each start of the player's stand-in appears.
+#[test]
+fn a_volley_lights_the_muzzle_and_sounds_each_shot_on_the_launchers_cadence() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::time::Instant;
+    let dir = std::env::temp_dir().join(format!("s1d-volley-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("shoot.wav"), b"RIFF").unwrap();
+    let log = dir.join("starts.log");
+    let player = dir.join("aplay");
+    std::fs::write(
+        &player,
+        format!("#!/bin/sh\necho \"$4\" >> \"{}\"\n", log.display()),
+    )
+    .unwrap();
+    std::fs::set_permissions(&player, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = dir.join("wire.bin");
+    let mut body = FakeFile::create(&path).unwrap();
+    let state = Arc::new(State::new(100));
+    *state.sound.lock().unwrap() =
+        Some(s1d::sound::Sound::new(dir.clone(), "hw:0,0".to_owned()).with_player(player));
+    let intents = Arc::new(Intents::new());
+    intents.request_frame(s1_duml::cmd::gun_fire(0, host::GUN, true, 3));
+    intents.request_volley(3);
+    let (s, i) = (Arc::clone(&state), Arc::clone(&intents));
+    let t0 = Instant::now();
+    let handle = std::thread::spawn(move || run(&mut body, s, i, Config::default()));
+    let mut seen: Vec<Duration> = Vec::new();
+    let deadline = t0 + Duration::from_secs(3);
+    while seen.len() < 3 && Instant::now() < deadline {
+        let n = std::fs::read_to_string(&log)
+            .map(|s| s.lines().count())
+            .unwrap_or(0);
+        while seen.len() < n {
+            seen.push(t0.elapsed());
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    // The last flash goes out 150 ms after the last shot.
+    std::thread::sleep(Duration::from_millis(300));
+    state.shutdown.store(true, Ordering::Relaxed);
+    handle.join().unwrap();
+    let bytes = std::fs::read(&path).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    let frames = Decoder::new().push(&bytes);
+
+    assert_eq!(seen.len(), 3, "three shot sounds: {seen:?}");
+    // The cadence, from below: the third shot is scheduled 660 ms after the first, and the
+    // first no earlier than the loop's start, which is after `t0`. The stand-in's own start-up
+    // jitter forbids an upper bound per gap (measured under the suite: 185 ms for one 330 ms
+    // gap, the first start late, the second on time).
+    assert!(
+        seen[2] >= Duration::from_millis(660),
+        "the third shot comes no earlier than two cadences after the first: {seen:?}"
+    );
+    let launcher: Vec<String> = frames
+        .iter()
+        .filter(|f| f.receiver == host::GUN)
+        .map(|f| match (f.cmd_set, f.cmd_id) {
+            x if x == id::GUN_FIRE => format!("fire {:02x}", f.data[0]),
+            x if x == id::GUN_LED && f.data == s1_duml::cmd::gun_fire_flash(0).data => {
+                "flash".to_owned()
+            }
+            _ => format!("{:02x}/{:02x} {:02x?}", f.cmd_set, f.cmd_id, f.data),
+        })
+        .collect();
+    assert_eq!(
+        launcher,
+        ["fire 13", "flash", "flash", "flash"],
+        "the fire frame, then the stock's muzzle flash once per shot"
+    );
 }
