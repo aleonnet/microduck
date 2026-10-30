@@ -111,6 +111,25 @@ pub fn del_sub(seq: u16, node_id: u8, msg_id: u8) -> Frame {
     .with_ack(Ack::WhenDone)
 }
 
+/// The acknowledgement the stock firmware writes back for **every** `0x48/0x08` push it receives
+/// (1849 of them in 70 s of `hdvt_uav.strace`, 2026-10-30; `tests/fixtures/dds_push_ack_stock_real.bin`
+/// is one): an ack frame with the push's own sequence number, attribute `0xa0` (`is_ack`, "ack
+/// now") and a single data byte `0x01`. Sent for ours and the stock's alike, because the controller
+/// has never been seen pushing to a subscriber that does not answer.
+pub fn push_ack(seq: u16) -> Frame {
+    let mut f = Frame::request(
+        host::BASE,
+        host::MOTION_CONTROLLER,
+        seq,
+        id::DDS_PUSH.0,
+        id::DDS_PUSH.1,
+        vec![0x01],
+    )
+    .with_ack(Ack::Now);
+    f.is_ack = true;
+    f
+}
+
 /// Bytes of time stamp in front of the subjects when the subscription asked for one.
 pub const PUSH_TIMESTAMP_LEN: usize = 8;
 

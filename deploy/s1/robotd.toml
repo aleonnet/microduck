@@ -11,3 +11,16 @@ max_hz = 30
 # Below `[safety] deadman_ms` (500 by default), or a stalled client's last stick would keep the
 # deadman fed — the validator refuses otherwise.
 stale_ms = 300
+
+# What full stick means on this chassis, in m/s and rad/s. `[pad_roller]` is the section `netpadd`
+# applies when the robot answers `roller` to `robot.mode`, and its defaults are the prototype
+# roller's shaping — forward/back only, "no strafe", heading capped at 0.3 rad/s. A mecanum base
+# strafes, so the sideways limits are opened here; the numbers are bench values (gentle), not the
+# S1's maxima (3.5 m/s, 600 °/s by its manual).
+[pad_roller]
+vx_min = -0.5
+vx_max = 0.6
+vy_min = -0.5
+vy_max = 0.5
+vyaw_min = -1.0
+vyaw_max = 1.0

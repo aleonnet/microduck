@@ -9,17 +9,24 @@
 # that every artefact a record cites exists with the sha256 it claims.
 #
 # Usage: scripts/s1/bench.sh <stage> [args]      stages: help | capture | backup | exec | stop | drive |
-#        items | events | camera | audio | app | restore | frames | infer | verify-record <record.md>
+#        items | events | camera | audio | app | restore | frames | infer | e2e | verify-record <record.md>
 # Env:   S1_HOST (default 192.168.1.236:5555) · S1_OUT (default ~/Development/RoboMaster-S1/out/<date>-poc2)
 #        S1_CHROOT (default /data/debian) · S1_BAUD (from capture) · S1_ROOTFS (tar from build-rootfs.sh)
+#        S1_UDP (the robot's netpadd, default <host without port>:4210)
 set -euo pipefail
 cd "$(dirname "$0")/../.."   # `cargo s1` (the alias in .cargo/config.toml) and target/ are the repo's
 
 HOST="${S1_HOST:-192.168.1.236:5555}"
+UDP="${S1_UDP:-${HOST%%:*}:4210}"
 OUT="${S1_OUT:-$HOME/Development/RoboMaster-S1/out/$(date +%Y-%m-%d)-poc2}"
 CHROOT="${S1_CHROOT:-/data/debian}"
 BB=/system/xbin/busybox
 A="adb -s $HOST"
+# The chroot's own PATH: the daemons spawn `aplay` and `amixer` by name, and a chroot entered from
+# the Android shell inherits Android's PATH (`/sbin:/system/bin:/system/xbin`, measured
+# 2026-10-30 in /proc/<pid>/environ — `robot.sound` answered "aplay: No such file or directory").
+DEBIAN_PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+CHROOT_ENV="$BB chroot $CHROOT /usr/bin/env PATH=$DEBIAN_PATH"
 stage="${1:-help}"; shift || true
 
 stages() {
@@ -30,10 +37,12 @@ stages() {
  2 backup    dd every partition → staging → pull → sha256 on the Mac (SHA256SUMS)
  3 exec      can our binaries run? busybox copied to /data; chroot into the rootfs; uname, ldd
  4 stop      stop dji_hdvt_uav + dji_monitor; list who still holds ttyS3
- 5 drive     s1d + netpadd + robotctl health in the chroot; the Mac drives the socket (bench-drive.py)
-   items     every other body command (follow modes, recentre, gimbal by rate, sleep, distance, PWM,
-             blaster LED, LED effects…) with DJI's own frames (bench-items.py); `items F1 F5` for some
- 6 events    LEDs via robotctl flashlight and every effect of the real 0x3f/0x32; armour hits, IR, button in the log
+ 5 drive     s1d + netpadd + robotctl health in the chroot; then `s1-e2e robot`: every item of the
+             body, in the order the fake run proved — the pad over UDP to the robot's netpadd
+             (wheels, turn, strafe, gimbal, lights, sounds, arm/disarm), the S1 list on the socket
+             (follow, gimbal, goto, lights, blaster, armour, PWM, volume), telemetry, events
+   items     `s1-e2e robot` alone, daemons already up; `items F2 F10` for some
+ 6 events    LEDs via robotctl flashlight in the chroot; the events window of s1-e2e; event0 in hex
  7 camera    stop dji_camera; v4l2-ctl formats; one frame to a file; PNG on the Mac
  8 audio     amixer route; arecord 60 s stream; aplay while driving, top alongside
  9 app       observe what the app does with the stock stopped (notes)
@@ -41,6 +50,8 @@ stages() {
 11 frames    gst-launch v4l2src 720p and 360p for 30 s: fps and CPU (mediad's own element)
 12 infer     s1-infer (the detector's ONNX path) on the S1 with libonnxruntime armv7, and on the Mac,
              over the same frames
+   e2e       no robot: `s1-e2e fake` — the same items against s1d --fake, netpadd, robotctl and
+             s1ctl on this Mac, judged on the wire bytes (the pre-test of stages 5 and 6)
    verify-record <md>   check every `artefato:` line of a record: path exists, sha256 matches
 LIST
 }
@@ -50,6 +61,13 @@ dir() { mkdir -p "$OUT/$1"; echo "$OUT/$1"; }
 cmdlog() { echo "\$ $*" >> "$OUT/$stage/cmd.txt"; }
 sh_robot() { cmdlog "adb shell $*"; $A shell "$@"; }
 need_robot() { $A get-state >/dev/null 2>&1 || { echo "no adb at $HOST; enable root adb from the app's Lab first (pierluigizagaria/robomaster-s1-hacks)" >&2; exit 1; }; }
+# s1-e2e against the robot: built here (natively, like s1-infer's Mac tier), the socket through the
+# adb forward, the pad over UDP. Extra arguments narrow the items (`F2 F10 pad`).
+e2e_robot() { local log="$1"; shift
+    cargo build -p s1d --bin s1-e2e >/dev/null
+    if [ "$#" -gt 0 ]; then target/debug/s1-e2e robot --tcp 127.0.0.1:9000 --udp "$UDP" --log "$log" --only "$@"
+    else target/debug/s1-e2e robot --tcp 127.0.0.1:9000 --udp "$UDP" --log "$log"; fi
+}
 art() { # art <file>: print the record line for an artefact
     local f="$1"; [ -f "$f" ] || { say "MISSING artefact $f"; return 1; }
     echo "artefato: $f sha256=$(shasum -a 256 "$f" | cut -d' ' -f1)" | tee -a "$OUT/artefatos.txt"
@@ -132,41 +150,49 @@ case "$stage" in
     # `setsid` + `nohup` + stdin from /dev/null: measured on 2026-10-30, `nohup … &` alone left an
     # empty log — the daemon died with the adb shell that started it. `setsid` alone still lost the
     # race with the pty closing (netpadd, same day); the `sleep 1` inside the shell is what settles it.
-    sh_robot "($BB setsid $BB nohup $BB chroot $CHROOT /opt/robot/bin/s1d --port /dev/ttyS3 --baud $S1_BAUD --sounds /opt/robot/sounds ${S1_ARGS:-} </dev/null >/data/s1d.log 2>&1 &); $BB sleep 1"
+    sh_robot "($BB setsid $BB nohup $CHROOT_ENV /opt/robot/bin/s1d --port /dev/ttyS3 --baud $S1_BAUD --sounds /opt/robot/sounds ${S1_ARGS:-} </dev/null >/data/s1d.log 2>&1 &); $BB sleep 1"
     sleep 2
-    sh_robot "($BB setsid $BB nohup $BB chroot $CHROOT /opt/robot/bin/netpadd </dev/null >/data/netpadd.log 2>&1 &); $BB sleep 1"; sleep 1
+    sh_robot "($BB setsid $BB nohup $CHROOT_ENV /opt/robot/bin/netpadd </dev/null >/data/netpadd.log 2>&1 &); $BB sleep 1"; sleep 1
     # `robotctl health` exits non-zero on an unhealthy verdict; that is a result to record, not a
     # reason to stop the stage before the logs are pulled.
     sh_robot "$BB chroot $CHROOT /opt/robot/bin/robotctl health --json" > "$D/health.json" 2>&1 || say "robotctl health rc=$? — the verdict is in health.json"
     cat "$D/health.json"
-    # No gamepad on this bench: the Mac drives the socket through an adb forward (measured
-    # 2026-10-30: `localfilesystem:` forwards to the chroot's unix socket).
+    # The Mac plays the pad and the shells: the pad as `duckctl udp-pad` sends it, straight to the
+    # robot's netpadd over Wi-Fi; the socket through an adb forward (measured 2026-10-30:
+    # `localfilesystem:` forwards to the chroot's unix socket).
     $A forward tcp:9000 localfilesystem:$CHROOT/run/robotd.sock >/dev/null
-    say "WHEELS OFF THE GROUND: arming and driving now (forward, turn, strafe, gimbal), 15 s"
-    python3 scripts/s1/bench-drive.py "$D/move.log" | tee "$D/move_console.txt"
+    say "WHEELS OFF THE GROUND: every item now, in the fake run's order; answer each prompt"
+    e2e_robot "$D/e2e.log" "$@" | tee "$D/e2e_console.txt" || say "s1-e2e rc=$? — the verdict per item is in e2e_console.txt"
     say "collecting robot.state for 10 s"
-    sh_robot "$BB timeout -t 10 $BB chroot $CHROOT /opt/robot/bin/robotctl monitor --json" > "$D/monitor.log" 2>&1 || true
+    sh_robot "$BB timeout -t 10 $CHROOT_ENV /opt/robot/bin/robotctl monitor --json" > "$D/monitor.log" 2>&1 || true
     $A pull /data/s1d.log "$D/s1d.log" >/dev/null; $A pull /data/netpadd.log "$D/netpadd.log" >/dev/null
-    for f in "$D"/health.json "$D"/move.log "$D"/monitor.log "$D"/s1d.log "$D"/netpadd.log; do art "$f"; done ;;
+    for f in "$D"/health.json "$D"/e2e.log "$D"/e2e_console.txt "$D"/monitor.log "$D"/s1d.log "$D"/netpadd.log; do art "$f"; done ;;
 
   items)
     need_robot; D=$(dir items)
     $A forward tcp:9000 localfilesystem:$CHROOT/run/robotd.sock >/dev/null
-    say "the body's items, one by one, each with DJI's own frame; WHEELS OFF THE GROUND; answer each prompt"
-    python3 scripts/s1/bench-items.py "$D/items.log" "$@"
+    say "the body's items through the daemons already up; WHEELS OFF THE GROUND; answer each prompt"
+    e2e_robot "$D/e2e.log" "$@" | tee "$D/e2e_console.txt" || say "s1-e2e rc=$? — the verdict per item is in e2e_console.txt"
     $A pull /data/s1d.log "$D/s1d.log" >/dev/null
-    for f in "$D"/items.log "$D"/s1d.log; do art "$f"; done ;;
+    for f in "$D"/e2e.log "$D"/e2e_console.txt "$D"/s1d.log; do art "$f"; done ;;
+
+  e2e)
+    D=$(dir e2e)
+    say "no robot: s1d --fake, netpadd, robotctl and s1ctl on this Mac, every item judged on the wire"
+    cargo build -p s1d -p netpadd -p robotctl >/dev/null
+    target/debug/s1-e2e fake --dir "$D/work" --keep "$@" | tee "$D/e2e_fake.txt" || say "s1-e2e rc=$? — the verdict per item is in e2e_fake.txt"
+    art "$D/e2e_fake.txt"; art "$D/work/report.txt"; art "$D/work/wire.bin" ;;
 
   events)
     need_robot; D=$(dir events)
-    for c in "on --color red" "on --color green" "on --color blue" "off"; do sh_robot "$BB chroot $CHROOT /opt/robot/bin/robotctl flashlight $c"; sleep 1; done | tee "$D/led_effects.txt"
+    for c in "on --color red" "on --color green" "on --color blue" "off"; do sh_robot "$CHROOT_ENV /opt/robot/bin/robotctl flashlight $c"; sleep 1; done | tee "$D/led_effects.txt"
     $A forward tcp:9000 localfilesystem:$CHROOT/run/robotd.sock >/dev/null
-    python3 scripts/s1/bench-items.py "$D/led_effects.log" F10 | tee -a "$D/led_effects.txt"
-    say "now TAP each armour plate, point an IR source if you have one, and PRESS the button; 30 s"
-    sh_robot "$BB timeout -t 30 $BB cat /dev/input/event0 | $BB xxd" > "$D/event0.hex" 2>&1 || true
+    e2e_robot "$D/e2e.log" F10 F9 events | tee -a "$D/led_effects.txt" || true
+    say "now the raw button device for 15 s: PRESS the button"
+    sh_robot "$BB timeout -t 15 $BB cat /dev/input/event0 | $BB xxd" > "$D/event0.hex" 2>&1 || true
     $A pull /data/s1d.log "$D/s1d.log" >/dev/null
     grep -E "armour hit|infrared hit|button" "$D/s1d.log" | tee "$D/events_in_log.txt" || true
-    for f in "$D"/led_effects.txt "$D"/event0.hex "$D"/s1d.log; do art "$f"; done ;;
+    for f in "$D"/led_effects.txt "$D"/e2e.log "$D"/event0.hex "$D"/s1d.log; do art "$f"; done ;;
 
   camera)
     need_robot; D=$(dir camera)

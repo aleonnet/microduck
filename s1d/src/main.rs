@@ -33,6 +33,9 @@ struct Args {
     /// a laptop run against.
     #[arg(long)]
     fake: Option<PathBuf>,
+    /// With `--fake`: read as the body's pushes whatever is appended to this file (created empty).
+    #[arg(long, requires = "fake")]
+    fake_in: Option<PathBuf>,
     /// Loop rate. 100 is what the stock firmware's heartbeat runs at.
     #[arg(long, default_value_t = 100)]
     hz: u32,
@@ -47,9 +50,11 @@ struct Args {
     /// controller's own, to try).
     #[arg(long, default_value = "wheels", value_parser = ["wheels", "speed"])]
     twist: String,
-    /// The controller's button, if any. Absent or unreadable is not an error.
-    #[arg(long, default_value = "/dev/input/event0")]
-    button: PathBuf,
+    /// The controller's button: `/dev/input/event0` on the robot, read whenever there is a real
+    /// UART; with `--fake` only when given here (a bench feeds it `input_event`s through a FIFO).
+    /// Absent or unreadable is not an error.
+    #[arg(long)]
+    button: Option<PathBuf>,
     /// Telemetry rate asked of the motion controller, Hz: 1, 5, 10, 20 or 50.
     #[arg(long, default_value_t = 20)]
     dds_hz: u16,
@@ -108,10 +113,14 @@ async fn main() -> ExitCode {
     let mut body: Box<dyn S1Body> = match (&args.fake, args.baud) {
         (Some(path), _) => {
             tracing::warn!(path = %path.display(), "--fake: frames go to a file, no robot");
-            match FakeFile::create(path) {
+            let fake = FakeFile::create(path).and_then(|f| match &args.fake_in {
+                Some(inbound) => f.with_inbound_file(inbound),
+                None => Ok(f),
+            });
+            match fake {
                 Ok(f) => Box::new(f),
                 Err(e) => {
-                    tracing::error!(error = %e, "cannot create the fake body file");
+                    tracing::error!(error = %e, "cannot create the fake body files");
                     return ExitCode::FAILURE;
                 }
             }
@@ -159,8 +168,13 @@ async fn main() -> ExitCode {
             .spawn(move || s1d::tick::run(body.as_mut(), state, intents, cfg))
             .expect("spawn the control thread")
     };
-    if args.fake.is_none() {
-        let (state, button) = (Arc::clone(&state), args.button.clone());
+    let button = match (&args.button, args.fake.is_none()) {
+        (Some(path), _) => Some(path.clone()),
+        (None, true) => Some(PathBuf::from(s1d::button::DEFAULT_DEVICE)),
+        (None, false) => None,
+    };
+    if let Some(button) = button {
+        let state = Arc::clone(&state);
         let _ = std::thread::Builder::new()
             .name("button".into())
             .spawn(move || s1d::button::watch(button, state));

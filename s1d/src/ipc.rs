@@ -215,10 +215,11 @@ pub async fn handle(
             continue;
         }
         let call = request.as_call();
-        // Notifications get no reply; continuous intents arrive this way at up to 100 Hz.
+        // Notifications get no reply; continuous intents arrive this way at up to 100 Hz, and so
+        // do the pad's sounds (`pad-map` notifies `robot.sound` on a trigger's edge).
         let Some(id) = request.id.clone() else {
             if let Ok(call) = call {
-                apply_intent(&intents, &call);
+                apply_notification(&state, &intents, &call);
             }
             continue;
         };
@@ -443,6 +444,25 @@ pub fn dispatch_s1(
             accepted(id)
         }
     }
+}
+
+/// What a notification may do: a continuous intent, or a sound (the pad's triggers arrive as
+/// notifications, and a quack that waited for a reply nobody reads would never play). Anything
+/// else is a request in the contract and is ignored without an id, as `robotd` ignores it.
+pub fn apply_notification(state: &State, intents: &Intents, call: &proto::Call) -> bool {
+    if apply_intent(intents, call) {
+        return true;
+    }
+    if let proto::Call::RobotSound(p) = call
+        && let Ok(mut slot) = state.sound.lock()
+        && let Some(sound) = slot.as_mut()
+    {
+        if let Err(why) = sound.play(p.tag) {
+            tracing::debug!(why, "sound notification not played");
+        }
+        return true;
+    }
+    false
 }
 
 /// A continuous intent, from a notification or a request alike.

@@ -26,9 +26,10 @@ and every other page follows it:
 ## What lives where
 
 Two trees, one rule (owner, 2026-10-30): **anything that reproduces a proof is in this repository**,
-under `scripts/s1/` — the bench (`bench.sh`), the build and push scripts, the strace decoder
-(`duml-strace.py`), the socket driver for stage 5 (`bench-drive.py`) and the oracle that runs DJI's
-own packer (`dji-oracle.py`). **The lab, `~/Development/RoboMaster-S1/`, holds only raw matter**:
+under `scripts/s1/` — the bench (`bench.sh`) and its self-test against a stand-in `adb`
+(`bench-selftest.sh`), the build and push scripts, the strace decoder (`duml-strace.py`), the oracle
+that runs DJI's own packer (`dji-oracle.py`), and the end-to-end driver `s1-e2e` (`s1d/src/bin/`),
+which plays the pad and the shells for stages 5 and 6 against a fake body or the robot. **The lab, `~/Development/RoboMaster-S1/`, holds only raw matter**:
 captures, partition images, the binaries and the Python library pulled from the robot (DJI's code,
 never committed), the ONNX Runtime and rootfs builds — each cited here by path and SHA.
 
@@ -63,8 +64,8 @@ stages 5, 6 and 8.
 | 2 | `backup` | every partition dumped, SHA on robot == SHA on Mac | **done 2026-10-30** (below): 14 on the card, 11 pulled, SHA equal |
 | 3 | `exec` | a binary of ours runs on the robot (`/data`, or `setenforce 0` by the owner, or the microSD); the chroot answers `uname -a` and `ldd --version` | **done 2026-10-30** (below) — gate passed |
 | 4 | `stop` | `hdvt_uav` and `monitor` stopped; nobody holds `ttyS3` | **done 2026-10-30** (below) |
-| 5 | `drive` + `items` | `s1d` + `netpadd` + `robotctl health` in the chroot; `duckctl udp-pad` on the Mac drives wheels and gimbal; DDS telemetry in `robotctl monitor` | **wheels and gimbal done 2026-10-30** (below, owner's witness); telemetry still refused by the controller — open |
-| 6 | `events` | `robotctl flashlight` lights the LEDs; the full `0x3f/0x33` from the app's strace reproduced; armour hits, IR and the button in `s1d`'s log | pending |
+| 5 | `drive` + `items` | `s1d` + `netpadd` + `robotctl health` in the chroot; `s1-e2e robot` from the Mac: the pad over UDP into `netpadd` (wheels, turn, strafe, gimbal, lights, sounds, arm/disarm), the S1 list on the socket, telemetry | **wheels and gimbal done 2026-10-30** (below, owner's witness); **every item pre-tested on the Mac** (`s1-e2e fake`, 38 of 38, below); the robot session repeats the same program; telemetry still refused by the controller — open |
+| 6 | `events` | `robotctl flashlight` lights the LEDs; every effect of the real `0x3f/0x32`; armour hits, IR and the button as `s1.event` | pre-tested on the Mac (events fed to the fake body reach `s1ctl events`); pending on the robot |
 | 7 | `camera` | `v4l2-ctl` formats and one NV12 frame → PNG | pending |
 | 8 | `audio` | mic as a 60 s stream through `arecord`; `aplay` while driving, CPU sampled | pending |
 | 9 | `app` | what the DJI app does with the stock stopped | pending (informative) |
@@ -72,7 +73,10 @@ stages 5, 6 and 8.
 | 11 | `frames` | `gst-launch-1.0 v4l2src` — `mediad`'s element — at 720p and 360p: fps and CPU | pending — **gates the port** |
 | 12 | `infer` | `s1-infer` (the detector's ONNX path) on the S1 with `libonnxruntime` armv7 and on the Mac over the same frames: ms/frame on both tiers | pending on the robot; the Mac tier ran tonight on a synthetic frame (below) — **gates the port** (one tier suffices) |
 
-The `items` stage (`bench-items.py`) runs every other body command with DJI's own frames and records the owner's witness per item.
+The `items` stage is `s1-e2e robot` alone, with the daemons already up; `e2e` is the same program
+with no robot (`s1-e2e fake`), the pre-test every stage-5 and stage-6 item passes before the robot
+is plugged in; `bench-selftest.sh` runs every other stage against a stand-in `adb` and checks what
+each one asks of the robot.
 
 Viability of the port = stages 3, 5, 11 and 12 proven. 6, 7 and 8 are what phase 2 (intelligence)
 consumes; 9 informs; 2 is the prerequisite of phase 4's autostart, not of this phase.
@@ -130,6 +134,74 @@ Artefacts of the night (the bench adds its own lines per stage):
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/rootfs/rootfs-bookworm-armhf.tar sha256=19ff2018f22396f710e97fea7ef3c9c70f539c108cf8316e078628d30e3abdf8
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/rootfs/rootfs-bookworm-armhf.packages sha256=531c51d612a103205071fd663416f1f9995c808f097ad7c84fe960c8c1f660d4
 
+
+## Pre-test on the Mac, 2026-10-30 (night) — phase 1 through the duck's mechanism, no robot
+
+The owner's order: nothing goes back to the robot until the whole of phase 1 has been exercised by
+the same mechanism a duck is driven with, and every item is validated in one end-to-end run. The
+mechanism is `pad_map::wire` datagrams (what `duckctl udp-pad` sends) into `netpadd`, `robotctl`
+and `s1ctl` on the robot socket, and `s1d` on the wire; `s1-e2e fake` starts `s1d --fake` (frames
+to a file, pushes from a file — `--fake-in`), `netpadd`, and runs the real `robotctl` and `s1ctl`
+binaries beside them, then judges every item on the bytes the loop wrote: against DJI's own
+library's frames (`dji-oracle.py`, byte for byte) or the frames captured off the robot. It is also a
+test (`s1d/tests/e2e.rs`, so `cargo test -p s1d` runs it) and a bench stage (`bench.sh e2e`).
+
+```
+cargo test -p s1-duml -p s1d     → 67 passed, 0 failed (33 + 34; the e2e test builds netpadd and robotctl itself, 21 s)
+scripts/s1/bench.sh e2e          → 38 of 38 items passed
+scripts/s1/bench-selftest.sh     → every stage ran and asked what it must (43 artefact lines verified)
+RUSTFLAGS="-D warnings" cargo clippy -p s1-duml -p s1d --all-targets → clean · cargo fmt --check → clean
+```
+
+The 38 items, in the order the robot session repeats them (`bench.sh drive` runs `s1-e2e robot`
+with the same program; a person at the robot is the witness there):
+
+| through | items | judged on |
+|---|---|---|
+| `robotctl health --json` | the loop healthy | the answer |
+| the pad (UDP → `netpadd` → `robot.*`) | Start arms (five work-mode-1 frames, then the heartbeat); left stick forward (all four wheels, `[fr, −fl, −bl, br]` equal); right stick turns (sides opposed); left stick strafes; sticks centred (wheels zero); D-pad right + right stick (gimbal frames); Home twice (LEDs white solid, then off); RT and LT (chirp and wheee through `aplay`); Start disarms (no heartbeat for 300 ms) | the wire, and `aplay`'s stand-in |
+| `s1ctl` and the socket | version; `robot.enable`; F16 wheels (`[100, −100, −100, 100]`, zero after `robot.stop`); F1 follow gimbal_lead (gimbal work mode 0, stick overlay 1, the twist as `0x3f/0x22` with no wheel speeds), chassis_lead (work mode 2), F7 velocity frame gimbal (overlay 2), F4 FPV (work mode 1), free; F2 recenter; F3 speed 30/−15 then stop; F5 sleep, wake; F6 goto 1 −0.5 −90 then `--stop`; F10 lights solid red, breath blue, flash green, marquee white, off (effects `[1, 2, 3, 4, 0]` on the wire); F9 blaster LED; `robotctl flashlight on --color red`, off; F11 armour 1.0; F12 PWM 500 ‰ / 1 kHz; F17 blaster infrared, gel refused naming the key; volume 50 (`amixer -q -c 0 sset Speaker 50%`); `robot.sound greet` and `robotctl quack` (`aplay greet.wav`, `chirp.wav`); a raw frame | the wire: the oracle hex of each command |
+| telemetry | the subscription on the wire (add-node byte-identical to the stock's `dds_add_node_stock_real.bin`, node reset, nine subjects under msg `0x5d` with flags 3); a push of ours fed to the body → `s1ctl telemetry` reads battery 77 %, gimbal `[90, −15]`, picked up, x 1.5 m, wheel 123 rpm, the controller's answer `0x00` logged as accepted, and the push **acked with the stock's exact frame** (`dds_push_ack_stock_real.bin`); `robotctl monitor --json` → `robot.state` head yaw 1.5708 rad, odometry x 1.5, picked up | `s1ctl`, `robotctl`, the wire |
+| events | an armour hit on plate 3, an infrared hit and a button press (an `input_event` through a FIFO) → three `s1.event` notifications printed by `s1ctl events` | `s1ctl` |
+| the end | `robot.enable off` (no heartbeat after); every byte on the wire decodes as whole frames (4112 frames, 0 dropped) | the wire |
+
+Defects the pre-test found, each fixed and held by a test or the run itself:
+
+1. **The pad's sounds never played on the S1.** `pad-map` sends `robot.sound` as a notification
+   (no id) on a trigger's edge; `s1d`'s notification path applied only move and head. The run's
+   first pass: `pad RT quacks, LT rides  FAIL  aplay log: ""`. Fixed (`ipc::apply_notification`).
+2. **The left stick's sideways travel did nothing.** `[pad_roller]`'s defaults are the prototype
+   roller's "no strafe" (`vy_min = vy_max = 0`); a mecanum base strafes. First pass:
+   `pad left stick strafe  FAIL  0 moving wheel frames`. Fixed in `deploy/s1/robotd.toml`
+   (`[pad_roller]` with `vy ±0.5`, `vyaw ±1.0` — bench values, not the S1's maxima), held by
+   `tests/params.rs`.
+3. **`robot.sound` on the robot answered `aplay: No such file or directory`.** The daemon in the
+   chroot inherits Android's PATH (`/sbin:/system/bin:/system/xbin`, read from
+   `/proc/<pid>/environ` on the robot). `bench.sh` now enters the chroot with Debian's PATH
+   (`/usr/bin/env PATH=…`), and `bench-selftest.sh` checks that line is what the stage asks.
+4. **The sound bank was never created on the robot.** `s1-push.sh`'s loop used the Android shell's
+   `ln`, which is not on the adb shell's path; it created nothing and said nothing. Now
+   `busybox ln`, and the script fails unless seven entries exist.
+5. **Pushes were not acknowledged.** The stock acks every `0x48/0x08` push (1849 in 70 s); the
+   controller has never been seen pushing to a subscriber that does not. `s1d` now answers each
+   push with the stock's frame (`dds::push_ack`, fixture `dds_push_ack_stock_real.bin`, byte for
+   byte). Whether that is what the controller was waiting for is the robot session's first answer.
+
+Refutations run with the defect planted: one byte of F2's expected hex changed →
+`F2 s1ctl gimbal recenter  FAIL  wire lacks 551604fcc9040000403fb2070805640000006400bfa1; had ["3f/b2"]`,
+`0 of 1 items passed — FAILED`; the file restored, sha256 equal before and after. Items 1 and 2
+above are the run's own refutations: each failed with the text quoted before its fix.
+
+What the pre-test cannot do, and the robot session does, in this order: `exec` (remount `/system`
+into the chroot), `stop`, `drive` (the 38 items, wheels off the ground; the DDS answer codes with
+the push ack in place, and once more after `robot.enable` so the subscription is asked while the
+heartbeat streams), `events`, `camera`, `audio`, `frames`, `infer`, `restore` — then `capture` again
+with the stock alive for the button-press power-off (`dji_sys`, the frame behind `s1.power`) and the
+speaker-volume device. The Coral stays phase 2's (owner's decision, 2026-10-30).
+
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/e2e/e2e_fake.txt sha256=e19a2467a96baffb683fe072776f8f430f7905d7569f38f7b6a8ba8bab45f216
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/e2e/work/report.txt sha256=aa8bff5cfc4697fe97d200ebf37a1e77884edb9ca9a45c3eca5a5270aecbb4f8
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/e2e/work/wire.bin sha256=a643b035eb3fa99018d5d3c74c54be7333c97c5db76e5248d95fb3a0c1c60f5d
 
 ## Bench, 2026-10-30 morning — stage 1 (stock alive)
 

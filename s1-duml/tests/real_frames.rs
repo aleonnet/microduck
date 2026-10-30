@@ -157,6 +157,20 @@ fn decoder_recovers_frames_from_the_raw_read_stream() {
 }
 
 /// The subscription request as `ProtoAddSubMsg.pack_req` lays it out: two UIDs at 20 Hz.
+/// The stock answers every telemetry push with an ack carrying the push's sequence: ours must be
+/// its bytes, so the motion controller sees the subscriber it expects.
+#[test]
+fn push_ack_reproduces_the_stocks_frame_byte_for_byte() {
+    const PUSH_ACK_REAL: &[u8] = include_bytes!("fixtures/dds_push_ack_stock_real.bin");
+    let real = Frame::decode(PUSH_ACK_REAL).unwrap();
+    assert!(real.is_ack);
+    assert_eq!(real.ack, Ack::Now);
+    assert_eq!((real.cmd_set, real.cmd_id), cmd::id::DDS_PUSH);
+    assert_eq!(real.data, vec![0x01]);
+    assert_eq!(dds::push_ack(real.seq).encode().unwrap(), PUSH_ACK_REAL);
+    assert_eq!(real.seq, 0xc6e5);
+}
+
 #[test]
 fn add_node_and_add_sub_reproduce_the_stocks_frames_byte_for_byte() {
     // What `dji_hdvt_uav` wrote to the UART on start-up (strace, 2026-10-30): register node 9,

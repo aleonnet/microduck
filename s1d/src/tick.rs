@@ -414,6 +414,9 @@ pub fn run(body: &mut dyn S1Body, state: Arc<State>, intents: Arc<Intents>, cfg:
                             telemetry.foreign_pushes += 1;
                         }
                         changed = true;
+                        // Answer it as the stock does, ours or not: the controller has only ever
+                        // been seen pushing to a subscriber that acks every push.
+                        w.send(dds::push_ack(frame.seq));
                     } else if let Some(hit) = ArmorHit::parse(&frame) {
                         state.armor_hits.fetch_add(1, Ordering::Relaxed);
                         let _ = state.event_tx.send(crate::api::Event::ArmorHit {
@@ -448,6 +451,7 @@ pub fn run(body: &mut dyn S1Body, state: Arc<State>, intents: Arc<Intents>, cfg:
                         tracing::info!(
                             cmd_id = frame.cmd_id,
                             data = %hex(&frame.data),
+                            meaning = dds_retcode_meaning(frame.data.first().copied()),
                             "dds answer"
                         );
                     } else {
@@ -501,6 +505,19 @@ pub fn run(body: &mut dyn S1Body, state: Arc<State>, intents: Arc<Intents>, cfg:
     zero_wheels(&mut w, 10);
     state.armed.store(false, Ordering::Relaxed);
     tracing::info!("control loop stopped; wheels zeroed");
+}
+
+/// What the first byte of a DDS answer means, as far as DJI's SDK documents it
+/// (`ProtoSubscribeAddNode.unpack_resp`: `0` and `0x50` are the two it accepts, `0x50` being
+/// "already registered"). Every other value is a refusal the SDK only logs by number — the bench
+/// collects them (2026-10-30: `0x02` to add-node, `0x0f` and `0x21` to subscribe).
+pub fn dds_retcode_meaning(retcode: Option<u8>) -> &'static str {
+    match retcode {
+        Some(0x00) => "accepted",
+        Some(0x50) => "already registered (accepted by the SDK)",
+        Some(_) => "refused (undocumented code)",
+        None => "empty answer",
+    }
 }
 
 fn hex(bytes: &[u8]) -> String {

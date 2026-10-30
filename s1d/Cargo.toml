@@ -25,6 +25,8 @@ serde_json.workspace = true
 # `default-features = false` drops `libudev`, for the reason `duck-control/Cargo.toml` gives: the
 # port is opened by path, never enumerated, and libudev-sys has no sysroot in a cross-build.
 serialport = { version = "4.8", default-features = false }
+# `s1-e2e`: the pad datagram as `duckctl udp-pad` sends it (`pad_map::wire`), aimed at `netpadd`.
+pad-map = { path = "../pad-map" }
 # `s1-infer` (stage 12): the detector's ONNX path on this CPU. `ort` dlopens the library the bench
 # built (`scripts/s1/build-onnxruntime.sh`), so nothing links at build time.
 duck-detect = { path = "../duck-detect" }

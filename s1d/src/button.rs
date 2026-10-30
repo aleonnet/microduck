@@ -20,6 +20,10 @@ const EVENT_SIZE: usize = 24;
 const TIME_SIZE: usize = EVENT_SIZE - 8;
 
 const EV_KEY: u16 = 1;
+/// Where the intelligent controller's button is (among `dji_hdvt_uav`'s open files).
+pub const DEFAULT_DEVICE: &str = "/dev/input/event0";
+/// The size of one `struct input_event` on this build's target.
+pub const EVENT_LEN: usize = EVENT_SIZE;
 
 /// Parse one raw event into `(type, code, value)`.
 pub fn parse_event(raw: &[u8]) -> Option<(u16, u16, i32)> {

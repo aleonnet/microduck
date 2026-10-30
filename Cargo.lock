@@ -4283,6 +4283,7 @@ dependencies = [
  "duck-detect",
  "duck-ipc-proto",
  "image",
+ "pad-map",
  "robotd-params",
  "s1-duml",
  "serde",

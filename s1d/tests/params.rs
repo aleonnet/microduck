@@ -18,6 +18,13 @@ fn the_shipped_file_loads_with_netpad_enabled() {
         params.netpad.stale_ms < params.safety.deadman_ms,
         "stale_ms must stay below the deadman"
     );
+    // A mecanum base strafes: the prototype roller's `vy = 0` default would make the left
+    // stick's sideways travel do nothing on the S1 (caught by `s1-e2e fake`, 2026-10-30).
+    assert!(
+        params.pad_roller.vy_max > 0.0 && params.pad_roller.vy_min < 0.0,
+        "[pad_roller] must open the strafe: {:?}",
+        params.pad_roller
+    );
 }
 
 fn load_variant(from: &str, to: &str) -> Result<robotd_params::Params, robotd_params::ParamsError> {

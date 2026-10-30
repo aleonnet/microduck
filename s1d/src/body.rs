@@ -58,14 +58,19 @@ impl S1Body for Serial {
     }
 }
 
-/// A body made of a file: frames are appended as written, nothing is ever read back.
+/// A body made of files: frames are appended to one as written, and whatever another file grows
+/// by is read back as if the body had pushed it.
 ///
 /// What `--fake <path>` runs against, and what the tests decode afterwards with `s1_duml::Decoder`
-/// to see exactly what the loop would have put on the wire.
+/// to see exactly what the loop would have put on the wire. `--fake-in <path>` is the other
+/// direction: a bench on a laptop appends a telemetry push, an armour hit or a DDS answer to that
+/// file and the loop sees it on its next tick, exactly as it would see bytes from the UART.
 pub struct FakeFile {
     file: std::fs::File,
     /// Bytes to hand back on `read_available`, for a test that wants the loop to see telemetry.
     pub inbound: Vec<u8>,
+    /// The file appended to by whoever plays the body, read from its current end onwards.
+    inbound_file: Option<std::fs::File>,
 }
 
 impl FakeFile {
@@ -73,7 +78,15 @@ impl FakeFile {
         Ok(Self {
             file: std::fs::File::create(path)?,
             inbound: Vec::new(),
+            inbound_file: None,
         })
+    }
+
+    /// Also read what is appended to `path` (created empty here, so nothing stale is replayed).
+    pub fn with_inbound_file(mut self, path: &std::path::Path) -> std::io::Result<Self> {
+        std::fs::File::create(path)?;
+        self.inbound_file = Some(std::fs::File::open(path)?);
+        Ok(self)
     }
 }
 
@@ -87,6 +100,13 @@ impl S1Body for FakeFile {
         let n = self.inbound.len().min(buf.len());
         buf[..n].copy_from_slice(&self.inbound[..n]);
         self.inbound.drain(..n);
+        if n == 0
+            && let Some(f) = self.inbound_file.as_mut()
+        {
+            // A plain `read` at the end of a growing file returns 0 until more is appended,
+            // which is exactly "nothing pushed since the last tick".
+            return f.read(buf);
+        }
         Ok(n)
     }
 }
