@@ -507,9 +507,10 @@ from Android gave `ENODEV` until the next reboot; a power cycle precedes stage 7
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/camera/dji_camera_v4l2_decoded.strace sha256=ba572e0b80b6826d01245d5038902493dc098638d3ad126a821a820e3c2adcef
 
 **Stage 8, audio (2026-10-30, 18:00–18:40), three runs (the first two archived under their
-stamps).** The speaker: `aplay` of the stock's own wavs through `hw:0,0` ran (the owner's ear is
-the judge; the mixer's `Speaker Volume` control exists, value 20, for `s1.volume`). The
-microphone: the first run recorded nothing — the stage used `hw:0,1` and the device answered "read
+stamps).** The speaker is **proven by the owner's ear, several times over the day**: the chirp by
+`robotctl quack`, the chirp and the held wheee from the pad ("Sim, ouvi os dois"), the shot sound
+of F17 ("Ouvi os sons"), and the stock's own wavs through our `aplay` here; the mixer's `Speaker
+Volume` control (value 20) is the one for `s1.volume`. The microphone: the first run recorded nothing — the stage used `hw:0,1` and the device answered "read
 error: Invalid argument"; the stock camera process opens `pcmC0D0c` (its strace from start), i.e.
 capture device 0, which accepts S16_LE, 1–2 channels, 8–48 kHz (`--dump-hw-params`). A mono
 recording on it is a constant (RMS = peak = −50.1 dB); a stereo probe has that constant on channel
