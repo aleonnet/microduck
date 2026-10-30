@@ -161,6 +161,10 @@ case "$stage" in
     # reason to stop the stage before the logs are pulled.
     sh_robot "$CHROOT_ENV /opt/robot/bin/robotctl health --json" > "$D/health.json" 2>&1 || say "robotctl health rc=$? — the verdict is in health.json"
     cat "$D/health.json"
+    # The duck's own shell on the robot's socket, for the four items s1-e2e reaches by JSON from the
+    # Mac (robotctl speaks only the unix socket): quack here, flashlight and monitor below and in
+    # stage 6. LISTEN for the chirp.
+    sh_robot "$CHROOT_ENV /opt/robot/bin/robotctl quack" | tee "$D/quack.txt" || say "robotctl quack rc=$?"
     # The Mac plays the pad and the shells: the pad as `duckctl udp-pad` sends it, straight to the
     # robot's netpadd over Wi-Fi; the socket through an adb forward (measured 2026-10-30:
     # `localfilesystem:` forwards to the chroot's unix socket).
@@ -170,7 +174,7 @@ case "$stage" in
     say "collecting robot.state for 10 s"
     sh_robot "$BB timeout -t 10 $CHROOT_ENV /opt/robot/bin/robotctl monitor --json" > "$D/monitor.log" 2>&1 || true
     $A pull /data/s1d.log "$D/s1d.log" >/dev/null; $A pull /data/netpadd.log "$D/netpadd.log" >/dev/null
-    for f in "$D"/health.json "$D"/e2e.log "$D"/e2e_console.txt "$D"/monitor.log "$D"/s1d.log "$D"/netpadd.log; do art "$f"; done ;;
+    for f in "$D"/health.json "$D"/quack.txt "$D"/e2e.log "$D"/e2e_console.txt "$D"/monitor.log "$D"/s1d.log "$D"/netpadd.log; do art "$f"; done ;;
 
   items)
     need_robot; D=$(dir items)

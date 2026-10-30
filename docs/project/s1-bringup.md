@@ -155,9 +155,14 @@ RUSTFLAGS="-D warnings" cargo clippy -p s1-duml -p s1d --all-targets → clean �
 ```
 
 The 40 items, in the order the robot session repeats them (`bench.sh drive` runs `s1-e2e robot`:
-the same names, the same calls, the real `s1ctl --tcp`, minus the two wire-only checks — the
-test `items_are_the_same_program` in `s1-e2e.rs` holds the two lists equal; a person at the robot
-is the witness there, and only Enter or `y` passes an item):
+the same names and the same order, minus the two wire-only checks — the test
+`items_are_the_same_program` in `s1-e2e.rs` holds the two lists equal — with the real `s1ctl --tcp`
+for every `s1.*` call; a person at the robot is the witness there, and only Enter or `y` passes an
+item). Four items differ in transport, because `robotctl` speaks only the unix socket and the Mac
+reaches the robot through a TCP forward: `health`, `flashlight red, off`, `sound greet, chirp` and
+`robot.state` go through `robotctl` in the fake run and through the same JSON-RPC calls from the
+Mac in the robot run; `bench.sh drive` and `events` run `robotctl health`, `quack`, `flashlight` and
+`monitor` in the robot's chroot beside it, so the duck's shell is exercised on the robot too:
 
 | through | items | judged on |
 |---|---|---|
@@ -193,8 +198,11 @@ Defects the pre-test found, each fixed and held by a test or the run itself:
    `pad-map` resends `robot.sound {wheee, hold: true}` on every tick the left trigger is down and
    `hold: false` once on release; `s1d` played each one, cutting the last (six `aplay` spawns for
    a 150 ms hold, measured). Now the hold is a level, as `robotd` reads it (`Sound::play_held`):
-   one start per hold, the release stops it; held by a unit test with a stand-in player and by the
-   pad item, which counts exactly one `wheee.wav` for a 300 ms hold.
+   one start per hold, the release stops it, and a one-shot arriving mid-ride is dropped as
+   `robotd::sound::play` drops it (the second round found the chirp cutting the ride and the next
+   tick restarting it); held by a unit test with a stand-in player — which waits for the stand-in's
+   line with a deadline, after a fixed 200 ms sleep failed 2 runs in 35 under load in the second
+   round — and by the pad item, which counts exactly one `wheee.wav` for a 300 ms hold.
 
 The same round took four things out of the bench itself: the pad-gimbal judge passed on any gimbal
 frame (every one carries fixed non-zero bytes) and now reads yaw and pitch back; the robot-mode

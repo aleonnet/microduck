@@ -74,6 +74,8 @@ run drive
 asked drive "chroot /data/debian /usr/bin/env PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin /opt/robot/bin/s1d --port /dev/ttyS3 --baud 921600 --sounds /opt/robot/sounds"
 asked drive "chroot /data/debian /usr/bin/env PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin /opt/robot/bin/netpadd"
 asked drive "robotctl health --json"
+asked drive "robotctl quack"
+asked drive "robotctl monitor --json"
 run events
 asked events "robotctl flashlight on --color red"
 asked events "cat /dev/input/event0"
