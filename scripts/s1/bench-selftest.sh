@@ -26,7 +26,7 @@ case "$1" in
   forward|push) ;;
   pull) case "$2" in
           # A whole black 720p frame, so the camera stage's PNG conversion has real bytes to chew.
-          *frame.nv12) head -c 1382400 /dev/zero > "$3" ;;
+          *frame.nv12|*frame.raw) head -c 1382400 /dev/zero > "$3" ;;
           *) echo "shim" > "$3" ;;
         esac ;;
   shell)
@@ -89,8 +89,11 @@ asked events "robotctl flashlight on --color red"
 asked events "cat /dev/input/event0"
 run camera
 asked camera "v4l2-ctl -d /dev/video0 --list-formats-ext"
+# No S_FMT (the driver refuses it); the frame is streamed to the chroot's /tmp and pulled from there.
+asked camera "v4l2-ctl -d /dev/video0 --stream-mmap --stream-count=1 --stream-to=/tmp/frame.raw"
+grep -q -- "--set-fmt-video" "$ADB_SHIM_LOG" && { echo "selftest: camera still sets the format"; fail=1; } || echo "selftest: camera streams the device's own format"
 run audio
-asked audio "arecord -D hw:0,1"
+asked audio "arecord -D hw:0,0 -f S16_LE -r 48000 -c 2 -d 60 /tmp/mic.wav"
 asked audio "aplay -D hw:0,0 /mnt/system/audio/sound/engine_start.wav"
 run frames
 asked frames "|| mount -o bind /dev /data/debian/dev"

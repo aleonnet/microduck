@@ -229,10 +229,17 @@ case "$stage" in
     D=$(dir camera); need_chroot
     sh_robot "stop dji_camera; setprop ctl.stop dji_camera; $BB sleep 1; $BB chroot $CHROOT /usr/bin/v4l2-ctl -d /dev/video0 --all" | tee "$D/v4l2_all.txt" || true
     sh_robot "$BB chroot $CHROOT /usr/bin/v4l2-ctl -d /dev/video0 --list-formats-ext" | tee "$D/formats.txt" || true
-    sh_robot "$BB chroot $CHROOT /usr/bin/v4l2-ctl -d /dev/video0 --set-fmt-video=width=1280,height=720,pixelformat=NV12 --stream-mmap --stream-count=1 --stream-to=/data/frame.nv12 && ls -l /data/frame.nv12" | tee -a "$D/formats.txt" || true
-    $A pull /data/frame.nv12 "$D/frame.nv12" >/dev/null || true
-    [ -f "$D/frame.nv12" ] && ffmpeg -loglevel error -y -f rawvideo -pix_fmt nv12 -s 1280x720 -i "$D/frame.nv12" "$D/frame.png" && say "open $D/frame.png"
-    for f in "$D"/formats.txt "$D"/frame.nv12 "$D"/frame.png; do [ -f "$f" ] && art "$f"; done ;;
+    # The driver refuses VIDIOC_S_FMT (measured 2026-10-30: "Invalid argument" with the device
+    # already at 1280x720 NV12, Size Image 1382432): the frame is taken in the format the device
+    # reports, and converted with that geometry. Paths given to a chroot program are the chroot's:
+    # its /tmp is $CHROOT/tmp on the robot.
+    sh_robot "$BB chroot $CHROOT /usr/bin/v4l2-ctl -d /dev/video0 --get-fmt-video" | tee "$D/fmt.txt" || true
+    geo=$(awk '/Width\/Height/ {gsub(/[^0-9\/]/, "", $NF); print $NF}' "$D/fmt.txt" | tr '/' 'x'); geo=${geo:-1280x720}
+    pix=$(awk -F"'" '/Pixel Format/ {print tolower($2)}' "$D/fmt.txt"); pix=${pix:-nv12}
+    sh_robot "$BB chroot $CHROOT /usr/bin/v4l2-ctl -d /dev/video0 --stream-mmap --stream-count=1 --stream-to=/tmp/frame.raw && ls -l $CHROOT/tmp/frame.raw" | tee -a "$D/formats.txt" || true
+    $A pull "$CHROOT/tmp/frame.raw" "$D/frame.nv12" >/dev/null 2>&1 || true
+    [ -f "$D/frame.nv12" ] && ffmpeg -loglevel error -y -f rawvideo -pix_fmt "$pix" -s "$geo" -i "$D/frame.nv12" "$D/frame.png" && say "open $D/frame.png ($geo $pix)"
+    for f in "$D"/formats.txt "$D"/fmt.txt "$D"/frame.nv12 "$D"/frame.png; do [ -f "$f" ] && art "$f"; done ;;
 
   audio)
     D=$(dir audio); need_chroot
@@ -241,11 +248,20 @@ case "$stage" in
     sh_robot "$BB chroot $CHROOT /usr/bin/aplay -D hw:0,0 /mnt/system/audio/sound/engine_start.wav; $BB chroot $CHROOT /usr/bin/aplay -D hw:0,0 /mnt/system/audio/sound/media_sound_solmization_2C.wav" 2>&1 | tee "$D/aplay_stock_sounds.txt" || true
     say "route per the hdvt_uav strace (tinymix/amixer values) goes in $D/route.sh before this runs; PLAY MUSIC NOW"
     [ -f "$D/route.sh" ] && sh_robot "$(cat "$D/route.sh")"
-    sh_robot "$BB chroot $CHROOT /usr/bin/arecord -D hw:0,1 -f S16_LE -r 16000 -c 1 -d 60 /data/mic.wav 2>&1 | $BB tee /data/stream_60s.txt" || true
-    $A pull /data/mic.wav "$D/mic.wav" >/dev/null || true; $A pull /data/stream_60s.txt "$D/stream_60s.txt" >/dev/null || true
+    # The microphone is capture device 0 of card 0 — the stock camera process opens `pcmC0D0c`
+    # (its strace from start, 2026-10-30); `hw:0,1` answered "read error: Invalid argument". The
+    # device accepts S16_LE, 1–2 channels, 8–48 kHz (`arecord --dump-hw-params`), and the
+    # microphone is on the RIGHT channel: a stereo probe measured channel 0 as a constant (RMS =
+    # peak = −50.1 dB) and channel 1 as signal (mixer: `MIC2 Boost` on, `Dual-Mic` off). A mono
+    # recording takes channel 0 and hears nothing — so: stereo at 48 kHz, the right channel split
+    # off on the Mac. Paths given to the chroot's arecord are the chroot's ($CHROOT/tmp on the
+    # robot); the tee runs outside.
+    sh_robot "$BB chroot $CHROOT /usr/bin/arecord -D hw:0,0 -f S16_LE -r 48000 -c 2 -d 60 /tmp/mic.wav 2>&1 | $BB tee /data/stream_60s.txt" || true
+    $A pull "$CHROOT/tmp/mic.wav" "$D/mic.wav" >/dev/null || true; $A pull /data/stream_60s.txt "$D/stream_60s.txt" >/dev/null || true
+    [ -f "$D/mic.wav" ] && ffmpeg -loglevel error -y -i "$D/mic.wav" -af "pan=mono|c0=c1" "$D/mic_right.wav" && ffmpeg -hide_banner -loglevel info -i "$D/mic_right.wav" -af "astats=metadata=1:reset=0" -f null - 2>&1 | grep -E "RMS level|Peak level" | tee -a "$D/stream_60s.txt"
     say "aplay while driving: run stage drive in another terminal, then this plays 20 s and samples top"
-    sh_robot "$BB chroot $CHROOT /usr/bin/aplay -D hw:0,0 /data/mic.wav & for i in 1 2 3 4; do top -n 1 -m 8; $BB sleep 5; done" > "$D/cpu_play_drive.txt" 2>&1 || true
-    for f in "$D"/aplay_stock_sounds.txt "$D"/mic.wav "$D"/stream_60s.txt "$D"/cpu_play_drive.txt; do [ -f "$f" ] && art "$f"; done ;;
+    sh_robot "$BB chroot $CHROOT /usr/bin/aplay -D hw:0,0 /tmp/mic.wav & for i in 1 2 3 4; do top -n 1 -m 8; $BB sleep 5; done" > "$D/cpu_play_drive.txt" 2>&1 || true
+    for f in "$D"/aplay_stock_sounds.txt "$D"/mic.wav "$D"/mic_right.wav "$D"/stream_60s.txt "$D"/cpu_play_drive.txt; do [ -f "$f" ] && art "$f"; done ;;
 
   app)
     D=$(dir app); say "with hdvt_uav/monitor stopped: open the app, note connect/video/control. Type notes, Ctrl-D:"; cat > "$D/obs.txt"; art "$D/obs.txt" ;;
@@ -266,8 +282,8 @@ case "$stage" in
         sh_robot "$BB chroot $CHROOT /usr/bin/gst-launch-1.0 v4l2src device=/dev/video0 num-buffers=300 ! video/x-raw,width=$w,height=$h ! fakesink 2>&1 | $BB grep -E 'Execution ended|ERROR|WARNING' & for i in 1 2 3; do top -n 1 -m 5; $BB sleep 4; done; wait" > "$D/fps_${h}p.txt" 2>&1 || true
         awk '/Execution ended after/ { split($4, t, ":"); secs = t[1]*3600 + t[2]*60 + t[3]; if (secs > 0) printf "fps %.1f (300 buffers in %.2f s)\n", 300/secs, secs }' "$D/fps_${h}p.txt" | tee -a "$D/fps_${h}p.txt"
     done
-    sh_robot "$BB chroot $CHROOT /usr/bin/gst-launch-1.0 v4l2src device=/dev/video0 num-buffers=1 ! video/x-raw,width=640,height=360 ! pngenc ! filesink location=/data/sample.png" >/dev/null 2>&1 || true
-    $A pull /data/sample.png "$D/sample.png" >/dev/null 2>&1 || true
+    sh_robot "$BB chroot $CHROOT /usr/bin/gst-launch-1.0 v4l2src device=/dev/video0 num-buffers=1 ! video/x-raw,width=640,height=360 ! pngenc ! filesink location=/tmp/sample.png" >/dev/null 2>&1 || true
+    $A pull "$CHROOT/tmp/sample.png" "$D/sample.png" >/dev/null 2>&1 || true
     for f in "$D"/fps_720p.txt "$D"/fps_360p.txt "$D"/sample.png; do [ -f "$f" ] && art "$f"; done ;;
 
   infer)

@@ -483,6 +483,29 @@ next boot. Stage 7 started after the owner closed the app: formats listed (YUYV,
 offline** (powered off by the button at the end of the script): inconclusive, to repeat. Stages
 8, 11 and 12 were not reached.
 
+**Stage 7, the camera: two reboots and the stock's own setup, decoded (2026-10-30, evening).**
+`v4l2-ctl --set-fmt-video=… --stream-mmap` on `/dev/video0` (stock camera process stopped) made the
+robot drop off the network at the same point twice (17:01 and 18:3x); after the second the robot
+answered with an uptime of 55 s — a reboot, with no `/proc/last_kmsg` to read. **No more streaming
+by a generic tool.** The stock camera process was restarted under the chroot's `strace -v`
+(`camera/dji_camera_v4l2_decoded.strace`) and its setup is now known field by field: `QUERYCAP`
+(driver `comip`, capture + streaming) → `S_INPUT 0` → three private controls `S_CTRL`
+(`V4L2_CTRL_CLASS_CAMERA + 0x191b = 0`, `+ 0x1934 = 30`, `+ 0x1935 = 0`) → `S_FMT` 1280×720 NV12,
+field ANY, colourspace JPEG → `REQBUFS` MMAP, 5 buffers → `QUERYBUF` ×5 → `STREAMON` → `DQBUF`/`QBUF`
+at the frame rate → one more private control (`+ 0x1928`). The generic tool's `S_FMT` without the
+input and the controls was refused ("Invalid argument"), and its stream request is what preceded
+both reboots. The stage now takes the device's reported format without `S_FMT` and writes inside
+the chroot's own `/tmp` (files named to a chroot program are the chroot's: `/data/frame.nv12`
+never existed on the robot — the same defect in the frames and audio stages, fixed together, with
+the self-test asserting the paths); it is **not run again until a grabber of ours replays the
+decoded sequence exactly** (input, the three controls, the format with its field and colourspace,
+five MMAP buffers) — `s1-cam`, the next piece of code, and the base of stage 11 and of the
+`mediad` source. After the stock camera process was killed twice under strace, opening the device
+from Android gave `ENODEV` until the next reboot; a power cycle precedes stage 7.
+
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/camera/dji_camera_start.strace sha256=d11b0d55d6d7e430b575f58a5a3404a9a18d0a6469654e6811ff6a93a6c2dd48
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/camera/dji_camera_v4l2_decoded.strace sha256=ba572e0b80b6826d01245d5038902493dc098638d3ad126a821a820e3c2adcef
+
 ## Before the next battery (written 2026-10-30, night, robot off)
 
 The owner's rule after this session: **no frame goes to the robot without a captured frame or the
