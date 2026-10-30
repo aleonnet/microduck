@@ -365,7 +365,7 @@ Telemetry, three defects found and two fixed on the bench, one open:
 
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/exec/exec.txt sha256=3d38161894241b029aa2db218b42271da30344015b1e236c1e0f6cf1364d96a0
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/stop/stop.txt sha256=93993a72aca42aaa5d68f7f5908a965278cb4465616b8ad9b55f1e7cef566425
-- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/stop/owners.txt sha256=eb5253c4d6409da86194c9087887b9dffda5da2cec73f3461e68762b032e2904
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/stop/owners.txt sha256=dfa3ab767dc85cd9b759818b95b1d7df1a7ec15dd211b83eb3ca97481c099705
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/drive/health.json sha256=d3817efd88f12c66e52e1c8c20983a4e669aa284cf93009533616be7edb9dfe5
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/drive/move.log sha256=3d3ef2f5bb7664844e21a33e67e6c1b789ef03bbceb0caf06aa49d65e16f1f6a
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/drive/drive.py sha256=543331d05db8d47ae0e3fdbf9235bcfe9d8a1e1f2a6634ec9fdbef36886a52da
@@ -505,6 +505,35 @@ from Android gave `ENODEV` until the next reboot; a power cycle precedes stage 7
 
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/camera/dji_camera_start.strace sha256=d11b0d55d6d7e430b575f58a5a3404a9a18d0a6469654e6811ff6a93a6c2dd48
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/camera/dji_camera_v4l2_decoded.strace sha256=ba572e0b80b6826d01245d5038902493dc098638d3ad126a821a820e3c2adcef
+
+**Stage 8, audio (2026-10-30, 18:00–18:40), three runs (the first two archived under their
+stamps).** The speaker: `aplay` of the stock's own wavs through `hw:0,0` ran (the owner's ear is
+the judge; the mixer's `Speaker Volume` control exists, value 20, for `s1.volume`). The
+microphone: the first run recorded nothing — the stage used `hw:0,1` and the device answered "read
+error: Invalid argument"; the stock camera process opens `pcmC0D0c` (its strace from start), i.e.
+capture device 0, which accepts S16_LE, 1–2 channels, 8–48 kHz (`--dump-hw-params`). A mono
+recording on it is a constant (RMS = peak = −50.1 dB); a stereo probe has that constant on channel
+0 and a faint varying signal on channel 1 (`I2sL Out` = ADC2, `I2sR Out` = ADC1 in the mixer). The
+stage now records stereo at 48 kHz and splits the right channel. The third run, 60 s, stayed at
+−75 dB RMS throughout (the owner was not at the screen and did not speak), and a loopback with the
+robot's own speaker playing `engine_start.wav` while recording also reached only −73 dB RMS on the
+right channel: **the capture path is not carrying the microphone** with the mixer as the stock
+leaves it (identical dumps with the stock camera process stopped and running, so its six mixer
+writes at start are idempotent). Open: what the stock sets when the app records audio (a mixer
+dump during an app recording, 20 s, is the next measurement), and the stock's PCM parameters
+(`HW_PARAMS` undecoded). The mic stays 🟡 until a recording holds a voice or the loopback holds
+the speaker.
+
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/audio/amixer_contents.txt sha256=38bf6a11557fc8d21a1e8a829bdd7caab5ab92e37d79c4cea8f59854795c9573
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/audio/aplay_stock_sounds.txt sha256=88d664f490c8a6029da5f577330f0f5cc25c3f291c57c9f8479fa27df2368624
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/audio/mic.wav sha256=641906028e37b50c8eff86f1daa58ad315cda3fd9e63c5f4cd6a1972d393e738
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/audio/mic_right.wav sha256=64b764c6a1c2e07c878feadb1dec1b0ff81cb69d547df19c032d6f46cdfc3722
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/audio/stream_60s.txt sha256=4025356b8d20c4efb725bad03ed2bb06ab57cfe02e72a2d4c40c9306adc0193e
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/audio/cpu_play_drive.txt sha256=6740f5bfaea3b82e7f952eafb7588175627ac16366571a34d624227a9e302ce6
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/audio/loopback_speaker_to_mic.wav sha256=64422265225cc15889de549e8a5cc5de2db5fdf80abc043bd6b3490bc980dc46
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/audio-20261030-180316/probe_48k_stereo.wav sha256=dfc182c67be71deb2645137678bb8b2202c5bb1c7a3d707a17138c1ac6311383
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/audio-20261030-180316/mixer_camera_stopped.txt sha256=696f8ebcd397693a532677ff2bdfa73f2df2c553c93e866ed6dc6ea2a9351a31
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/audio-20261030-180316/mixer_camera_running.txt sha256=696f8ebcd397693a532677ff2bdfa73f2df2c553c93e866ed6dc6ea2a9351a31
 
 ## Before the next battery (written 2026-10-30, night, robot off)
 
