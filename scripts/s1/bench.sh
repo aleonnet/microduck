@@ -59,7 +59,18 @@ LIST
 }
 
 say() { echo "[$stage] $*"; }
-dir() { mkdir -p "$OUT/$1"; echo "$OUT/$1"; }
+# A stage's directory. A re-run never overwrites an earlier run's artefacts (measured 2026-10-30:
+# a second `capture` replaced eight files the record cited by hash, the morning's strace among
+# them): when the directory already holds a run (`cmd.txt`, the command log every stage writes),
+# it is moved aside under its own last-modified stamp first. `route.sh` placed by hand for stage 8
+# goes with the archived run and is placed again.
+dir() {
+    if [ -f "$OUT/$1/cmd.txt" ]; then
+        local stamp; stamp=$(date -r "$OUT/$1/cmd.txt" +%Y%m%d-%H%M%S)
+        mv "$OUT/$1" "$OUT/$1-$stamp"; say "earlier $1 run archived as $OUT/$1-$stamp" >&2
+    fi
+    mkdir -p "$OUT/$1"; echo "$OUT/$1"
+}
 cmdlog() { echo "\$ $*" >> "$OUT/$stage/cmd.txt"; }
 sh_robot() { cmdlog "adb shell $*"; $A shell "$@"; }
 # The chroot's device, proc, sys and system trees. Stage 3 makes them; a reboot drops them, and a
@@ -98,12 +109,14 @@ case "$stage" in
     say "  6 FIRE three times · 7 follow: chassis follows gimbal — turn the gimbal, the body turns (robot ON THE FLOOR)"
     say "  8 follow: gimbal follows chassis — drive, the gimbal stays · 9 FPV mode · 10 recentre gimbal · 11 drag the gimbal"
     say "  12 change the speaker volume · 13 speak into the mic · 14 person recognition"
-    say "  15 (Mac, not the app) stop and start dji_scratch while this runs: its telemetry subscription reaches the UART"
-    say "  at the very END: 16 power off by the button. 150 s."
+    say "  at the very END: 15 power off by the button. 150 s."
+    # Restarting `dji_scratch` here was tried once (2026-10-30 16:59): `stop dji_scratch` also
+    # SIGKILLed `dji_sys` (the power daemon; init brought it back) and no `0x48` request reached
+    # the UART in the window. Not done again until `dji_scratch.py` and the service group are read.
     sh_robot "top -n 1 -m 15" > "$D/top_before.txt" 2>&1 || true
     # Bounded: `strace -p` only ends with the traced process, so each gets a 70 s timeout and `wait`
     # returns; the top samples cover the same window.
-    sh_robot "$BB timeout -t 150 strace -f -tt -e trace=ioctl,write,read,open,openat -s 256 -o /data/hdvt.strace -p \$($BB pidof dji_hdvt_uav) & $BB timeout -t 150 strace -f -tt -e trace=ioctl,write,read,open,openat -s 256 -o /data/sys.strace -p \$($BB pidof dji_sys) & $BB timeout -t 150 strace -f -tt -e trace=ioctl,write,read,open,openat -s 256 -o /data/camera.strace -p \$($BB pidof dji_camera) & $BB sleep 60; stop dji_scratch; $BB sleep 2; start dji_scratch; for i in 1 2 3 4 5 6 7 8; do top -n 1 -m 10 >> /data/top_vision.txt; $BB sleep 10; done; wait" || true
+    sh_robot "$BB timeout -t 150 strace -f -tt -e trace=ioctl,write,read,open,openat -s 256 -o /data/hdvt.strace -p \$($BB pidof dji_hdvt_uav) & $BB timeout -t 150 strace -f -tt -e trace=ioctl,write,read,open,openat -s 256 -o /data/sys.strace -p \$($BB pidof dji_sys) & $BB timeout -t 150 strace -f -tt -e trace=ioctl,write,read,open,openat -s 256 -o /data/camera.strace -p \$($BB pidof dji_camera) & for i in 1 2 3 4 5 6 7 8; do top -n 1 -m 10 >> /data/top_vision.txt; $BB sleep 10; done; wait" || true
     $A pull /data/hdvt.strace "$D/hdvt_uav.strace" >/dev/null; $A pull /data/camera.strace "$D/dji_camera.strace" >/dev/null; $A pull /data/sys.strace "$D/dji_sys.strace" >/dev/null 2>&1 || true; $A pull /data/top_vision.txt "$D/top_vision.txt" >/dev/null
     for f in "$D"/*.txt "$D"/*.strace; do art "$f"; done ;;
 

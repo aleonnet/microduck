@@ -275,17 +275,17 @@ Measured:
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/capture/cat_proc_cpuinfo.txt sha256=af48bb92b627987ced943faa95d05373aca6a0b91da966686308418459056a0a
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/capture/cat_proc_mounts.txt sha256=b6aa9da3e0ee0741c2c7486b1cffa51233166ff3ed5c1ad416c3bc0f8a9fc80d
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/capture/cat_proc_partitions.txt sha256=1607a47bfc9f7ac309218559e294106ea15462ac10e05a4ca9cd3a66384d628b
-- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/capture/cmd.txt sha256=70dcb6ca7bdb5eb9ea3559a92172baddd406f66da5a910162a15509a02f409f5
-- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/capture/df.txt sha256=926eef759f3f7b84a115f4484a202aa9b789ff19684df90e9a97b53962d9ce4c
-- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/capture/dji_camera.strace sha256=87fdfa49843e68d3d71c1f9bce8d3702d790ad3982a476506f7c040bbfb24f3b
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/capture-20261030-165821/cmd.txt sha256=de63dc28afbc5b69091ec0882896bf5318af74d7bca99e6587ecaeb91c63c461
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/capture-20261030-165821/df.txt sha256=b9e3fc31b26f413c6d8bea8aeabde187fe27483437370865098b64eff7313ae1
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/capture-20261030-165821/dji_camera.strace sha256=6fef0cdba8efa52ee792cfe25e1c6c89950a4951e02036ddb3553868820d7713
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/capture/getenforce.txt sha256=1535895fea3509918515479905fb814e80657ea5db44bcd7bbdf6ffbde370de2
-- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/capture/getprop.txt sha256=9d9c50c6d93da4f3a40d1b9f75761bc8027e2d17091f2c97c9fa0471d38cdfb4
-- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/capture/hdvt_uav.strace sha256=f4af06fd573a4e37e849ca556443f1db2a6e65c9d567cc978a1f154b0fa924dc
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/capture-20261030-165821/getprop.txt sha256=6e8e4fffb2b439e910e83a22c336d1d819daefff3e872beaa083c362720e5a8e
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/capture-20261030-165821/hdvt_uav.strace sha256=bb21da55392e3e2c4a80d191a2e8b410c1988bbabb45804e6eed043d84e89054
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/capture/ls_-l_dev_block_platform_by-name.txt sha256=c7fbf3de2a68018357f375d2478d0ffe38dd26ef1af067f2f63494159ec7b04e
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/capture/ls_-l_dev_input_dev_video_dev_snd.txt sha256=d01c90f276822fd84c39c9bb2f720bb701b7d3023edc52959a29f1df710e484d
-- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/capture/ps.txt sha256=ba896e5a5f6f9f7cdc56ab5a13268d9db9814c99abdd1ceda37e0b76228a2acd
-- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/capture/top_before.txt sha256=cb3a80069c80834eeb59a86b52578e9880610295104c98bbc4d345644346da2b
-- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/capture/top_vision.txt sha256=abda4d6fb67b6d63551a1c42c119e8f08114ed0820f9f6fc633889d521ded8c7
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/capture-20261030-165821/ps.txt sha256=151fa1ba757ec9e7364a6cca2d8bfc45bfc879451601300efeeb959873e3c317
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/capture-20261030-165821/top_before.txt sha256=264f0f426ea57d1b4599622e960997b37035f410cdd0bbe2b0b3c9d1ab634e8e
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/capture-20261030-165821/top_vision.txt sha256=8de938b387193822a9c1719158d06d9ebd890f10b333385122eabe25c5bc0512
 
 ## Bench, 2026-10-30 morning — stage 2 (backup)
 
@@ -436,8 +436,48 @@ guarded mount line (to fix, with the self-test).
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/events/s1d_window3.log sha256=36a3703ccc5f9240c86eca5dc818403d41d0b347d8f0dd88b1a058671fa8a379
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/items/F17_infrared_fire3.log sha256=6c895b62fe0ca03d973b3ba900514167d3dd0d00bc30e6850262e0d3c2b85f94
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/items/F17_refute.txt sha256=997eae479b0a34dd82230d33fa1896d45ab8e322a3bbfc3caffdd6388fca99d5
-- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/capture/hdvt_fire.strace sha256=fb5224197975a4dc05b21305cd7c1d5beb328f20178ab0a5c9b2151465c1e3ba
-- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/capture/sys_fire.strace sha256=36ba6d9f66a2574b3339a983496411b848b2ec454e589c2e0d2f2654bc0a7fda
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/capture-20261030-165821/hdvt_fire.strace sha256=fb5224197975a4dc05b21305cd7c1d5beb328f20178ab0a5c9b2151465c1e3ba
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/capture-20261030-165821/sys_fire.strace sha256=36ba6d9f66a2574b3339a983496411b848b2ec454e589c2e0d2f2654bc0a7fda
+
+**Capture re-run of 16:58 (2026-10-30), and what it cost.** The first capture of the next battery
+ran without the app: its output was piped through `tail`, so the line that should have told the
+owner "window open" never reached the chat, and the 150 s passed with the robot idle (two body-LED
+frames, no fire, no follow). Its files **overwrote the morning's stage 1 artefacts** of the same
+names (`cmd.txt`, `df.txt`, `dji_camera.strace`, `getprop.txt`, `hdvt_uav.strace`, `ps.txt`,
+`top_before.txt`, `top_vision.txt`): the hashes below are the 16:58 files; the morning's strace,
+the one the LED fixtures came from, is lost as a file (the fixtures and the decoded tables survive
+in the record above). The bench now moves an earlier run aside under its stamp before a stage
+re-runs (`dir()`, proved in the self-test). The same run restarted `dji_scratch` at 60 s to put its
+telemetry subscription on the UART: `stop dji_scratch` also SIGKILLed `dji_sys` (the power daemon,
+pid 246, 16:59:24; init brought it back as 27689) and no `0x48` request appeared on the UART — the
+restart is out of the script until `dji_scratch.py` and the service group are read.
+
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/capture/hdvt_uav.strace sha256=b342068538f8ec0ed66a7bc218e665f3e1d3bcf3f0a9fe0fae60384302816eb5
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/capture/dji_camera.strace sha256=ac9a6c8e41b1bce3ce129a3ffde755b1ac796304cf1ba917e549dc92f0a7cf69
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/capture/dji_sys.strace sha256=1a5e6b8e9d87e47ed11c73c0497cf7f496064955221c84f7502b722663c280b0
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/capture/cmd.txt sha256=086041d64a61c78d9e0ecb6560b55a0059a4664cd99c8397cbf561b5b7757f23
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/capture/top_vision.txt sha256=148097cba43d81d292946d6e10945dec5ec524042ed9e4ad5443ebf887a035df
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/capture-follow/hdvt_follow.strace sha256=5c050a96cc9ceced0cd4f5a4e6ed29b7073d2d9ab3175265ac010e2d9a41d315
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/camera/formats.txt sha256=f8f22089c7f60bf0e726fba0f56568751f4113761b0d90c24511a149128aea2b
+
+**Captures of 17:05 and 17:12 (2026-10-30), the owner on the app.** The full script ran in the
+17:05 window (`capture/`, three straces): 101 fire frames, 38 body-LED frames, 12 muzzle flashes,
+gimbal work modes, and at 17:07:22 a sequence from the script runtime (sender `0xC9`: wheels zero,
+gimbal angle and recentre, then twelve pairs of gimbal speed ±120°/s with chassis yaw ∓120°/s) —
+an app behaviour running as a script; the window closed before the last steps. The app was very
+slow under the three full straces, so the follow steps were captured again at 17:12 with **writes
+only, `dji_hdvt_uav` only** (`capture-follow/hdvt_follow.strace`, 90 s), and that is what the
+record keeps for the modes: "chassis follows gimbal" → gimbal work mode **0** (`0x04/0x4c 00 00`,
+twice; the chassis side had gone at app connect: `0x3f/0x19 00` to the motion controller and
+`0x3f/0x66 02 00` to the chassis, sender `0x02`, 17:05:55); "gimbal follows chassis" → gimbal work
+mode **2** (`0x04/0x4c 02 00`) repeated at 8 Hz for as long as the mode is on (122 in 15 s). Both
+values are the library's own (`gimbal_free_mode`, `gimbal_yaw_follow_mode`). FPV fell outside the
+window; the mic and the volume do not pass the UART (camera and ALSA processes) and are stage 8's.
+The power-off trace of `dji_sys` (`/data/sys_poweroff.strace`, 17:15) stays on the robot for the
+next boot. Stage 7 started after the owner closed the app: formats listed (YUYV, NV12, NV21, two
+10-bit Bayer), then `VIDIOC_S_FMT` 1280×720 NV12 "Invalid argument" **while the robot was going
+offline** (powered off by the button at the end of the script): inconclusive, to repeat. Stages
+8, 11 and 12 were not reached.
 
 ## Before the next battery (written 2026-10-30, night, robot off)
 

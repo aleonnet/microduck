@@ -63,6 +63,10 @@ asked() { # asked <stage> <pattern>: the shim must have been asked it BY THAT ST
 
 run capture
 asked capture "strace -f -tt -e trace=ioctl,write,read,open,openat -s 256"
+# A second run must not overwrite the first: the first is moved aside under its stamp.
+run capture
+n=$(ls -d "$S1_OUT"/capture-* 2>/dev/null | wc -l | tr -d ' ')
+[ "$n" = "1" ] && [ -f "$S1_OUT"/capture-*/cmd.txt ] && echo "selftest: capture re-run archived the earlier run" || { echo "selftest: capture re-run did NOT archive the earlier run ($n archives)"; fail=1; }
 run backup
 asked backup "dd if="
 run exec
