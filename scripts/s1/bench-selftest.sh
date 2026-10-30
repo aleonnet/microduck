@@ -35,6 +35,7 @@ case "$1" in
       *"dd if="*) echo "0000000000000000000000000000000000000000000000000000000000000001  /sdcard/bk/system.img" ;;
       *getenforce*) echo Disabled; echo EXEC_IN_DATA_OK ;;
       *"test -"*) exit 0 ;;
+      *gst-launch-1.0*num-buffers=300*) echo "Execution ended after 0:00:12.500000000" ;;
       *) echo "shim: $*" ;;
     esac ;;
 esac
@@ -46,16 +47,17 @@ export PATH="$WORK/bin:$PATH"
 export S1_HOST=shim:5555 S1_OUT="$WORK/out" S1_BAUD=921600 S1_UDP=127.0.0.1:1 S1_TCP=127.0.0.1:1
 
 fail=0
-run() { # run <stage> [args]: the stage must exit 0
+run() { # run <stage> [args]: the stage must exit 0; `asked` then reads only what this stage sent
     local stage="$1"; shift
+    ASKED_FROM=$(wc -c < "$ADB_SHIM_LOG" 2>/dev/null || echo 0)
     if scripts/s1/bench.sh "$stage" "$@" > "$WORK/$stage.txt" 2>&1; then
         echo "selftest: stage $stage ran"
     else
         echo "selftest: stage $stage FAILED (rc=$?):"; tail -20 "$WORK/$stage.txt"; fail=1
     fi
 }
-asked() { # asked <stage> <pattern>: the shim must have been asked it
-    if grep -qF -- "$2" "$ADB_SHIM_LOG"; then echo "selftest: $1 asked: $2"
+asked() { # asked <stage> <pattern>: the shim must have been asked it BY THAT STAGE (not an earlier one)
+    if tail -c +"$((ASKED_FROM + 1))" "$ADB_SHIM_LOG" | grep -qF -- "$2"; then echo "selftest: $1 asked: $2"
     else echo "selftest: $1 NEVER asked: $2"; fail=1; fi
 }
 
@@ -71,6 +73,8 @@ asked stop "stop dji_hdvt_uav"
 # at a port that refuses: s1-e2e cannot connect, the stage records that and goes on — the
 # behaviour wanted on a bench, and what lets the launch lines be checked here.
 run drive
+# After a reboot the chroot has no /dev: the stage must re-make the mounts before the daemon starts.
+asked drive "|| mount -o bind /dev /data/debian/dev"
 asked drive "chroot /data/debian /usr/bin/env PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin /opt/robot/bin/s1d --port /dev/ttyS3 --baud 921600 --sounds /opt/robot/sounds"
 asked drive "chroot /data/debian /usr/bin/env PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin /opt/robot/bin/netpadd"
 asked drive "robotctl health --json"
@@ -85,7 +89,11 @@ run audio
 asked audio "arecord -D hw:0,1"
 asked audio "aplay -D hw:0,0 /mnt/system/audio/sound/engine_start.wav"
 run frames
-asked frames "gst-launch-1.0 -v v4l2src device=/dev/video0"
+asked frames "|| mount -o bind /dev /data/debian/dev"
+asked frames "gst-launch-1.0 v4l2src device=/dev/video0 num-buffers=300"
+# The shim answers every gst-launch with "Execution ended after 0:00:12.500000000": 300 buffers
+# in 12.5 s is 24.0 fps, and the stage must compute it.
+grep -q "fps 24.0 (300 buffers in 12.50 s)" "$S1_OUT/frames/fps_720p.txt" && echo "selftest: frames computed the rate" || { echo "selftest: frames did NOT compute the rate:"; cat "$S1_OUT/frames/fps_720p.txt"; fail=1; }
 # The verify step over what the stages wrote: every artefact line must resolve.
 grep -h "artefato:" "$WORK"/*.txt > "$WORK/record.md" || true
 if scripts/s1/bench.sh verify-record "$WORK/record.md" > "$WORK/verify.txt" 2>&1; then

@@ -439,6 +439,44 @@ guarded mount line (to fix, with the self-test).
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/capture/hdvt_fire.strace sha256=fb5224197975a4dc05b21305cd7c1d5beb328f20178ab0a5c9b2151465c1e3ba
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/capture/sys_fire.strace sha256=36ba6d9f66a2574b3339a983496411b848b2ec454e589c2e0d2f2654bc0a7fda
 
+## Before the next battery (written 2026-10-30, night, robot off)
+
+The owner's rule after this session: **no frame goes to the robot without a captured frame or the
+library's own bytes behind it, and a capture window with the stock alive follows the whole script
+below, never one item.** What each remaining item has, column by column:
+
+| Item | DJI's code (read) | Captured on the UART | Ours, byte for byte | Goes to the robot? |
+|---|---|---|---|---|
+| F1 follow, chassis after gimbal | `RobotCtrl.set_mode` → chassis work mode + `0x3f/0x22` (`Chassis.set_follow_speed`), gimbal work mode | not yet | oracle-held (`dji_oracle.rs`: workmode, follow, stick overlay) | after the capture (script item 7), robot on the floor |
+| F1 follow, gimbal after chassis; F4 FPV; F7 velocity frame | gimbal work mode 2 / 1, stick overlay 2 | not yet | oracle-held | after the capture (items 8, 9) |
+| F5 gimbal sleep / wake | `Gimbal.suspend/resume` (`0x2ab5` / `0x7ef2`) | not an app action | oracle-held | yes: the library's bytes are the source |
+| F6 goto | `Chassis.set_position` task | not an app action | oracle-held | yes, on the floor with 2 m free |
+| F12 PWM | `Chassis.set_pwm_value/freq` | not an app action | oracle-held | yes, with a load on a port |
+| F18 telemetry | `Tank.set_sub_node` + `add_gimbal_and_chassis_sub_msg`: node `0xC9`, msg 0, `sub_config` 0, `mode` 0, ten subjects with high word `0x20009`, 50 Hz — sent to the **stock controller** (`0x09`), which forwards; accepts `0x00` or `0x23` | the stock's own: node 9, msg 0, flags 3, one subject `d7f5dcfb/00020003`, 1 Hz (`hdvt_boot.strace`); the forwarded script subscription was never captured (it happens at boot) | subjects as the library's, flags 3 as the stock's — refused `21 03` | only the captured frames: script item 15 restarts `dji_scratch` under the strace, so its subscription reaches the UART through the stock controller and is read there |
+| volume | — | — | `amixer sset <control>` | after stage 8 names the control (`amixer_contents.txt`; stage 1 wrote none) |
+
+Stages 7, 8, 11, 12, read against what exists: the rootfs tar carries `v4l2-ctl`, `gst-launch-1.0`,
+`gst-inspect-1.0`, `arecord`, `aplay`, `amixer`, `strace` and the GStreamer plugins
+`video4linux2`, `png`, `jpeg`, `videoconvertscale`, `videorate`, `alsa`, `app`, `coreelements` —
+**not** `fpsdisplaysink` (gst-plugins-bad, never installed), which stage 11 used: the stage now
+reads the rate off gst-launch's own "Execution ended after" over 300 buffers, and the self-test
+checks the arithmetic (24.0 fps for 12.5 s). `libonnxruntime.so.1.28.0` armv7 is built
+(`out/onnxruntime/`) and `s1-infer` cross-compiles; stage 12 can run both tiers.
+
+The bench defect of the night is fixed: every stage that enters the chroot (`drive`, `camera`,
+`audio`, `frames`, `infer`) re-makes the chroot's `/dev`, `/proc`, `/sys` and `/mnt/system` mounts
+first, guarded, the same line stage 3 uses (`need_chroot`); the self-test asserts it per stage (its
+assertions now read only what the stage under test sent) and the refutation below removes it and
+breaks the frame-rate arithmetic, each caught.
+
+The capture script (stage 1's prompts, 150 s, three straces): 1 camera on · 2 a sound · 3 each
+armour plate · 4 LED colour, then each effect · 5 the controller button · 6 fire three times ·
+7 chassis follows gimbal (robot on the floor) · 8 gimbal follows chassis · 9 FPV · 10 recentre ·
+11 drag the gimbal · 12 speaker volume · 13 speak into the mic · 14 person recognition · 15 (the
+stage itself, at 60 s) stop and start `dji_scratch` · 16 power off by the button at the end.
+
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/items/bench_mounts_refute.txt sha256=4ed117577ea03b61fc8886886e49336258aa9c8610e8e40ba8ee66e6784f24e7
+
 ## Inventory sweep against the official SDK, 2026-10-30
 
 The master plan's body inventory was built from captures and proroklab, not from a whole reading

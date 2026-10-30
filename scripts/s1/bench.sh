@@ -62,6 +62,12 @@ say() { echo "[$stage] $*"; }
 dir() { mkdir -p "$OUT/$1"; echo "$OUT/$1"; }
 cmdlog() { echo "\$ $*" >> "$OUT/$stage/cmd.txt"; }
 sh_robot() { cmdlog "adb shell $*"; $A shell "$@"; }
+# The chroot's device, proc, sys and system trees. Stage 3 makes them; a reboot drops them, and a
+# daemon started without `/dev/urandom` dies at once ("failed to generate random data", measured
+# 2026-10-30 after stage 10). So every stage that enters the chroot re-makes them, guarded, before
+# anything else — the same line, one place.
+CHROOT_MOUNTS="$BB grep -q ' $CHROOT/dev ' /proc/mounts || mount -o bind /dev $CHROOT/dev; $BB grep -q ' $CHROOT/proc ' /proc/mounts || mount -t proc proc $CHROOT/proc; $BB grep -q ' $CHROOT/sys ' /proc/mounts || mount -t sysfs sys $CHROOT/sys; mkdir -p $CHROOT/mnt/system; $BB grep -q ' $CHROOT/mnt/system ' /proc/mounts || mount -o bind,ro /system $CHROOT/mnt/system"
+need_chroot() { need_robot; sh_robot "$CHROOT_MOUNTS"; }
 need_robot() { $A get-state >/dev/null 2>&1 || { echo "no adb at $HOST; enable root adb from the app's Lab first (pierluigizagaria/robomaster-s1-hacks)" >&2; exit 1; }; }
 # s1-e2e against the robot: built here (natively, like s1-infer's Mac tier), the socket through the
 # adb forward, the pad over UDP. Extra arguments narrow the items (`F2 F10 pad`).
@@ -87,14 +93,17 @@ case "$stage" in
     # The mixer as the stock leaves it (the mic route lives there: dji_camera sets four controls by
     # id) — through the chroot's amixer when stage 3 has run, which it can with the stock alive.
     $A shell "test -x $CHROOT/usr/bin/amixer" 2>/dev/null && sh_robot "$BB chroot $CHROOT /usr/bin/amixer -c 0 contents" > "$D/mixer_stock_alive.txt" 2>&1 || true
-    say "static capture done; now the strace. USE THE APP, one thing at a time, 3 s apart:"
-    say "  camera on · a sound · each armour plate · LED colour, then each effect · the controller button"
-    say "  follow toggle (chassis follows gimbal / gimbal follows chassis) · recentre gimbal · drag the gimbal"
-    say "  change the speaker volume · speak into the mic · person recognition · at the very END: power off by the button. 90 s."
+    say "static capture done; now the strace. USE THE APP, one thing at a time, 3 s apart — the WHOLE list, nothing left for a later window (2026-10-30: a window spent on shots alone cost the follow modes):"
+    say "  1 camera on · 2 a sound · 3 each armour plate · 4 LED colour, then each effect · 5 the controller button"
+    say "  6 FIRE three times · 7 follow: chassis follows gimbal — turn the gimbal, the body turns (robot ON THE FLOOR)"
+    say "  8 follow: gimbal follows chassis — drive, the gimbal stays · 9 FPV mode · 10 recentre gimbal · 11 drag the gimbal"
+    say "  12 change the speaker volume · 13 speak into the mic · 14 person recognition"
+    say "  15 (Mac, not the app) stop and start dji_scratch while this runs: its telemetry subscription reaches the UART"
+    say "  at the very END: 16 power off by the button. 150 s."
     sh_robot "top -n 1 -m 15" > "$D/top_before.txt" 2>&1 || true
     # Bounded: `strace -p` only ends with the traced process, so each gets a 70 s timeout and `wait`
     # returns; the top samples cover the same window.
-    sh_robot "$BB timeout -t 90 strace -f -tt -e trace=ioctl,write,read,open,openat -s 256 -o /data/hdvt.strace -p \$($BB pidof dji_hdvt_uav) & $BB timeout -t 90 strace -f -tt -e trace=ioctl,write,read,open,openat -s 256 -o /data/sys.strace -p \$($BB pidof dji_sys) & $BB timeout -t 90 strace -f -tt -e trace=ioctl,write,read,open,openat -s 256 -o /data/camera.strace -p \$($BB pidof dji_camera) & for i in 1 2 3 4 5 6 7; do top -n 1 -m 10 >> /data/top_vision.txt; $BB sleep 10; done; wait" || true
+    sh_robot "$BB timeout -t 150 strace -f -tt -e trace=ioctl,write,read,open,openat -s 256 -o /data/hdvt.strace -p \$($BB pidof dji_hdvt_uav) & $BB timeout -t 150 strace -f -tt -e trace=ioctl,write,read,open,openat -s 256 -o /data/sys.strace -p \$($BB pidof dji_sys) & $BB timeout -t 150 strace -f -tt -e trace=ioctl,write,read,open,openat -s 256 -o /data/camera.strace -p \$($BB pidof dji_camera) & $BB sleep 60; stop dji_scratch; $BB sleep 2; start dji_scratch; for i in 1 2 3 4 5 6 7 8; do top -n 1 -m 10 >> /data/top_vision.txt; $BB sleep 10; done; wait" || true
     $A pull /data/hdvt.strace "$D/hdvt_uav.strace" >/dev/null; $A pull /data/camera.strace "$D/dji_camera.strace" >/dev/null; $A pull /data/sys.strace "$D/dji_sys.strace" >/dev/null 2>&1 || true; $A pull /data/top_vision.txt "$D/top_vision.txt" >/dev/null
     for f in "$D"/*.txt "$D"/*.strace; do art "$f"; done ;;
 
@@ -137,7 +146,7 @@ case "$stage" in
         sh_robot "mkdir -p $CHROOT && cd $CHROOT && $BB tar -xf /data/rootfs.tar && rm /data/rootfs.tar" | tee -a "$D/exec.txt"
     fi
     # the Android shell has no chroot or head: both are busybox applets here; mounts are guarded so the stage re-runs
-    { sh_robot "$BB grep -q ' $CHROOT/dev ' /proc/mounts || mount -o bind /dev $CHROOT/dev; $BB grep -q ' $CHROOT/proc ' /proc/mounts || mount -t proc proc $CHROOT/proc; $BB grep -q ' $CHROOT/sys ' /proc/mounts || mount -t sysfs sys $CHROOT/sys; mkdir -p $CHROOT/mnt/system; $BB grep -q ' $CHROOT/mnt/system ' /proc/mounts || mount -o bind,ro /system $CHROOT/mnt/system; $BB chroot $CHROOT /bin/true && echo CHROOT_OK; $BB chroot $CHROOT /bin/uname -a; $BB chroot $CHROOT /usr/bin/ldd --version | $BB head -1; $BB chroot $CHROOT /bin/cat /etc/debian_version"; } | tee -a "$D/exec.txt"
+    { sh_robot "$CHROOT_MOUNTS; $BB chroot $CHROOT /bin/true && echo CHROOT_OK; $BB chroot $CHROOT /bin/uname -a; $BB chroot $CHROOT /usr/bin/ldd --version | $BB head -1; $BB chroot $CHROOT /bin/cat /etc/debian_version"; } | tee -a "$D/exec.txt"
     art "$D/exec.txt" ;;
 
   stop)
@@ -147,7 +156,7 @@ case "$stage" in
     art "$D/stop.txt"; art "$D/owners.txt" ;;
 
   drive)
-    need_robot; D=$(dir drive); : "${S1_BAUD:?S1_BAUD is the baud the capture stage measured with stty}"
+    D=$(dir drive); need_chroot; : "${S1_BAUD:?S1_BAUD is the baud the capture stage measured with stty}"
     say "starting s1d (baud $S1_BAUD) and netpadd in the chroot; WHEELS OFF THE GROUND"
     # `setsid` + `nohup` + stdin from /dev/null: measured on 2026-10-30, `nohup … &` alone left an
     # empty log — the daemon died with the adb shell that started it. `setsid` alone still lost the
@@ -204,7 +213,7 @@ case "$stage" in
     for f in "$D"/led_effects.txt "$D"/e2e.log "$D"/event0.hex "$D"/s1d.log; do art "$f"; done ;;
 
   camera)
-    need_robot; D=$(dir camera)
+    D=$(dir camera); need_chroot
     sh_robot "stop dji_camera; setprop ctl.stop dji_camera; $BB sleep 1; $BB chroot $CHROOT /usr/bin/v4l2-ctl -d /dev/video0 --all" | tee "$D/v4l2_all.txt" || true
     sh_robot "$BB chroot $CHROOT /usr/bin/v4l2-ctl -d /dev/video0 --list-formats-ext" | tee "$D/formats.txt" || true
     sh_robot "$BB chroot $CHROOT /usr/bin/v4l2-ctl -d /dev/video0 --set-fmt-video=width=1280,height=720,pixelformat=NV12 --stream-mmap --stream-count=1 --stream-to=/data/frame.nv12 && ls -l /data/frame.nv12" | tee -a "$D/formats.txt" || true
@@ -213,7 +222,7 @@ case "$stage" in
     for f in "$D"/formats.txt "$D"/frame.nv12 "$D"/frame.png; do [ -f "$f" ] && art "$f"; done ;;
 
   audio)
-    need_robot; D=$(dir audio)
+    D=$(dir audio); need_chroot
     sh_robot "$BB chroot $CHROOT /usr/bin/amixer -c 0 contents" > "$D/amixer_contents.txt" 2>&1 || true
     say "the stock's own sounds (F8): engine_start then the note 2C through aplay — LISTEN"
     sh_robot "$BB chroot $CHROOT /usr/bin/aplay -D hw:0,0 /mnt/system/audio/sound/engine_start.wav; $BB chroot $CHROOT /usr/bin/aplay -D hw:0,0 /mnt/system/audio/sound/media_sound_solmization_2C.wav" 2>&1 | tee "$D/aplay_stock_sounds.txt" || true
@@ -237,9 +246,12 @@ case "$stage" in
     need_robot; sh_robot "$BB pidof dji_hdvt_uav && echo hdvt_uav_alive; getprop | $BB grep init.svc.dji" | tee "$D/after.txt"; art "$D/after.txt" ;;
 
   frames)
-    need_robot; D=$(dir frames)
+    D=$(dir frames); need_chroot
+    # `fpsdisplaysink` is in gst-plugins-bad, which the rootfs does not carry (measured in the tar,
+    # 2026-10-30): the rate is 300 buffers over the "Execution ended after" time gst-launch prints.
     for geo in 1280,720 640,360; do w=${geo%,*}; h=${geo#*,}
-        sh_robot "$BB chroot $CHROOT /usr/bin/gst-launch-1.0 -v v4l2src device=/dev/video0 num-buffers=300 ! video/x-raw,width=$w,height=$h ! fpsdisplaysink video-sink=fakesink text-overlay=false signal-fps-measurements=true 2>&1 | $BB grep -E 'fps|rendered|dropped' | $BB tail -5 & for i in 1 2 3; do top -n 1 -m 5; $BB sleep 4; done; wait" > "$D/fps_${h}p.txt" 2>&1 || true
+        sh_robot "$BB chroot $CHROOT /usr/bin/gst-launch-1.0 v4l2src device=/dev/video0 num-buffers=300 ! video/x-raw,width=$w,height=$h ! fakesink 2>&1 | $BB grep -E 'Execution ended|ERROR|WARNING' & for i in 1 2 3; do top -n 1 -m 5; $BB sleep 4; done; wait" > "$D/fps_${h}p.txt" 2>&1 || true
+        awk '/Execution ended after/ { split($4, t, ":"); secs = t[1]*3600 + t[2]*60 + t[3]; if (secs > 0) printf "fps %.1f (300 buffers in %.2f s)\n", 300/secs, secs }' "$D/fps_${h}p.txt" | tee -a "$D/fps_${h}p.txt"
     done
     sh_robot "$BB chroot $CHROOT /usr/bin/gst-launch-1.0 v4l2src device=/dev/video0 num-buffers=1 ! video/x-raw,width=640,height=360 ! pngenc ! filesink location=/data/sample.png" >/dev/null 2>&1 || true
     $A pull /data/sample.png "$D/sample.png" >/dev/null 2>&1 || true
@@ -256,6 +268,7 @@ case "$stage" in
     # detector's ONNX path, cross-compiled here and built natively below for the other tier.
     # The on-board tier needs the robot; the Mac tier below runs regardless (one tier suffices).
     if [ -f "$ORT/libonnxruntime.so.$ORT_VER" ] && $A get-state >/dev/null 2>&1; then
+        need_chroot
         cargo s1 -p s1d --bin s1-infer >/dev/null
         $A push target/armv7-unknown-linux-gnueabihf/release/s1-infer "$CHROOT/opt/robot/bin/s1-infer" >/dev/null
         $A push "$ORT/libonnxruntime.so.$ORT_VER" "$CHROOT/usr/lib/" >/dev/null; $A push "$MODEL" "$CHROOT/opt/robot/duck_detect.onnx" >/dev/null
