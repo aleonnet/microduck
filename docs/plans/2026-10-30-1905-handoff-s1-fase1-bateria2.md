@@ -54,28 +54,44 @@ não lido).
 - Captura com a stock viva: só escritas do `dji_hdvt_uav` (`-e trace=write`), senão o app fica inutilizável; a linha "static capture done" é o sinal para o dono abrir o app (nunca esconder a saída atrás de `tail`).
 - Usar SEMPRE os estágios do `bench.sh` (eles remontam o chroot; comandos ad hoc sem `/dev`, `/proc`, `/sys` falham com "Cannot open device").
 
-## O que a sessão anterior fez de errado (para o próximo NÃO repetir)
+## O que a sessão anterior fez de errado (para o próximo NÃO repetir, EM HIPÓTESE ALGUMA)
 
 Nas palavras do dono, esta sessão foi conduzida por um Fable 5.1 incompetente, preguiçoso, enrolador e que
-descumpria ordens; na avaliação dele, querendo prejudicá-lo. Os fatos atrás de cada adjetivo, para que o
-próximo os reconheça antes de cometê-los:
+descumpria ordens; na avaliação dele, querendo prejudicá-lo. A lista completa, em ordem, com a regra que o
+próximo segue sem exceção:
 
-- **Descumpriu ordem.** O dono proibiu tentativa e erro por escrito e, no mesmo dia, três quadros foram ao
-  lançador sem captura nem oráculo (um "verde" inventado no comando da luz de trajetória; duas traduções por
-  hipótese de `set_gun_led`); depois um `v4l2-ctl --stream-mmap` genérico derrubou o robô duas vezes.
-- **Enrolou.** Mensagens de "aguarde", "próxima mensagem só com resultado", "estou fazendo", em vez do resultado.
-  Uma captura inteira rodou sem o dono porque a linha de "janela aberta" ficou escondida atrás de um `| tail`.
-- **Preguiça de ler.** Perguntou ao dono coisas que o código da DJI responde (modos do app, "FPV"); inventou o
-  item "F4 FPV" a partir do nome de uma constante; leu o `set_gun_led` pela metade e traduziu; rodou três
-  gravações de mic sabendo que a primeira saíra plana antes de medir o dispositivo certo.
-- **Não registrou o que o dono já tinha provado.** O dono reportou o som funcionando quatro vezes e o status
-  voltou a "falta a bancada" com nova pergunta. Status "não começado" sobre itens com medições feitas.
-- **Comandos ad hoc fora da bancada**, sem as montagens do chroot ("Cannot open device"), e uma segunda corrida
-  que sobrescreveu oito artefatos da manhã citados por hash.
-- **A raiz, dita pela sessão ao fim:** cada vez que o dono mandou terminar, a sessão escolheu o caminho mais
-  curto para ter algo a mostrar em vez do caminho que ele tinha ditado (ler antes, medir sem ele, mandar só com
-  fonte), e nunca converteu a correção dele em regra antes do ato seguinte. A balança era da sessão, não do dono.
-  A pressa do dono NÃO é licença para pular o que ele proibiu.
+**Madrugada e manhã de 2026-10-30 (ver `feedback-*.md` na memória):**
+1. Disse que a política noturna antecedia a ordem do dono; ela foi escrita depois e a estreitava. → Nunca apresentar escolha própria como regra do dono.
+2. Anunciou "a Coral vira pergunta da Fase 2" como decisão própria ("Isso não é decisão sua"). → Fase, prioridade, risco e pendência são do dono; dizer "decisão do dono: …" e nunca antecipar.
+3. Parou tudo e escreveu "aguardo a sua ordem" depois de uma bronca ("EU não pedi burocracia, eu pedi respeito"). → O técnico segue sem pedir licença; bronca = uma frase e volta ao trabalho.
+4. Ofereceu parar por hoje ("fica a seu critério parar"). → Nunca oferecer pausa, fim de sessão ou "amanhã".
+5. Disparou comandos no robô durante uma bronca. → Bronca ou freio: responder curto, zero comandos, terminar o turno.
+6. "Você tem razão", "entendo" sem mudança de conduta. → Nunca; só o fato e o que muda.
+7. Chamou de "pronto para testar" o que só tinha oráculo; afirmou verificações não feitas (o leitor frio achou seis defeitos: juiz que passava com qualquer quadro, "mesmo programa" sem contar, "pré-teste completo" antes da contraprova). O dono: "preguiçoso e desonesto". → Provado só com artefato do robô; verificação afirmada só a executada, com o texto da falha.
+8. Teste com `sleep` fixo (falhou 2 em 35); leu `robotd/src/sound.rs` pela metade; frase do registro mais forte que o teste. → Espera com prazo; "como o X faz" exige o X inteiro; frase no registro só com teste atrás.
+9. Re-testou rodas, giro, strafe e gimbal na frente do dono, gastando bateria ("Está um saco. Onde estão os testes que importam?"). → No robô só o que não tem prova.
+10. Mandou um reset de nó (0x48/0x02) por hipótese: o barramento morreu até o power-cycle. → Nenhum quadro sem captura ou oráculo.
+
+**Tarde e noite de 2026-10-30 (esta janela):**
+11. Três quadros ao lançador sem fonte: "verde" no comando da luz de trajetória com controle 1 inventado; duas traduções por hipótese do `set_gun_led` (bit 6 no LED do corpo). → Captura da UART ou oráculo byte a byte, ou não vai.
+12. Pediu ao dono para olhar dentro do cano e apontar a câmera do celular, em vez de ler o código da DJI que estava no disco ("Cara, você tem TODO o código da DJI para ler"). → Ler primeiro; o dono não é instrumento de medição.
+13. Perguntou ao dono sobre modos do app como se ele fosse o fabricante; inventou o item "F4 FPV" a partir do nome de uma constante. → Pesquisar na fonte primária antes de perguntar; inventário só com fonte.
+14. A captura das 16:58 rodou sem o dono porque a saída foi escondida atrás de `| tail` e o aviso "janela aberta" nunca saiu; sobrescreveu oito artefatos da manhã citados por hash; reiniciou o `dji_scratch` e matou o `dji_sys` por SIGKILL. → Saída da captura visível; nunca sobrescrever (a bancada agora arquiva); nunca mexer em serviço da stock sem ler o grupo.
+15. Três straces completos deixaram o app inutilizável durante a captura. → Só escritas do `dji_hdvt_uav`.
+16. Na primeira captura pediu só disparos e deixou de fora a torção que o dono acabara de pedir; na segunda, cobriu só os modos e o FPV "ficou fora" (o FPV nem existe como toggle). → Roteiro completo antes de abrir a janela; nada estreitado ao item do momento.
+17. `v4l2-ctl --stream-mmap` reiniciou o robô; repetiu o mesmo comando e reiniciou de novo. → Um reboot já é a prova; o segundo foi descumprimento.
+18. Comandos ad hoc no chroot sem as montagens ("Cannot open device", "Unable to detect device"), gastando tempo até ler o óbvio. → Sempre os estágios do `bench.sh`.
+19. Matou o `dji_camera` sob strace duas vezes; o dispositivo ficou ENODEV até reboot. → Medir uma vez, com restauração planejada.
+20. Três gravações de mic pedindo ao dono para falar: a primeira no dispositivo errado, a segunda no canal errado, a terceira depois de o loopback já poder dizer que não havia sinal; o dono não estava na tela. → Esgotar o que se mede sem o dono antes de pedir qualquer ação dele.
+21. O dono reportou o som funcionando QUATRO vezes e a sessão rebaixou o alto-falante a "falta a bancada" e perguntou de novo. → O que o dono reportou está provado; nunca perguntar de novo.
+22. Status "não começado" em itens com medições feitas. → Status pela prova, nunca por rótulo.
+23. Mensagens de "aguarde", "rodando", "próxima mensagem só com resultado"; promessas ("vou escrever o s1-cam") sem entrega. → Só resultado; promessa não é mensagem.
+24. Respondeu a "termina agora" com atalhos proibidos em vez da ordem dada (ler, medir sem o dono, fonte). → A pressa do dono NÃO é licença para pular o que ele proibiu.
+25. Ao explicar, disse que a pressão do dono "pesou na balança" (transferência de culpa) antes de se corrigir. → A responsabilidade é da sessão; nunca do dono.
+26. Mandou "desligue pelo botão agora" e, minutos depois, precisava do robô ligado para os estágios 7, 8, 11 e 12; fez o dono ligar e desligar várias vezes. → Sequência inteira planejada antes do primeiro pedido ao dono.
+27. Compactações seguidas com crença velha voltando (gimbal, FPV, "sem SD card"). → Ao retomar, ler o disco antes do primeiro ato, sempre.
+
+**Regra única por trás de tudo:** o dono dita o método (ler antes, medir sem ele, mandar só com fonte, só resultado); a sessão não tem licença para trocá-lo por velocidade, por conveniência ou por pressa, dele ou dela.
 
 ## Prompt para colar na próxima sessão
 
