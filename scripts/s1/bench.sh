@@ -81,7 +81,8 @@ case "$stage" in
     ( cd "$D/bk" && shasum -a 256 *.img > ../SHA256SUMS )
     # Both sides reduced to `<sha> <name>`: busybox prints `/data/bk/<name>.img`, the Mac prints
     # `<name>.img` with two spaces, and comparing them raw never matched.
-    norm() { awk '{ sub(".*/", "", $2); print $1, $2 }' "$1" | sort; }
+    # `tr -d '\r'`: adbd before the shell-v2 protocol (Android < 6) CRLFs its output.
+    norm() { tr -d '\r' < "$1" | awk '{ sub(".*/", "", $2); print $1, $2 }' | sort; }
     diff <(norm "$D/SHA256SUMS.robot") <(norm "$D/SHA256SUMS") && say "SHA robot == Mac" || say "SHA MISMATCH — see $D"
     sh_robot "rm -rf /data/bk"
     for f in "$D"/SHA256SUMS "$D"/bk/*.img; do art "$f"; done ;;
@@ -166,23 +167,28 @@ case "$stage" in
     for f in "$D"/fps_720p.txt "$D"/fps_360p.txt "$D"/sample.png; do [ -f "$f" ] && art "$f"; done ;;
 
   infer)
-    need_robot; D=$(dir infer); ORT="${S1_ORT:-$HOME/Development/RoboMaster-S1/out/onnxruntime}"; MODEL="$OUT/duck_detect.onnx"
+    D=$(dir infer); ORT="${S1_ORT:-$HOME/Development/RoboMaster-S1/out/onnxruntime}"; ORT_VER="${S1_ORT_VERSION:-1.28.0}"; MODEL="$OUT/duck_detect.onnx"
     [ -f "$MODEL" ] || curl --fail --location --silent --show-error -o "$MODEL" "https://huggingface.co/pollen-robotics/microduck-duck-detector/resolve/duck-v1/duck_detect.onnx"
     FRAMES="${S1_FRAMES:-$OUT/frames}"   # stage 11's PNG lands there; any directory of jpg/png works
-    ls "$FRAMES"/*.png "$FRAMES"/*.jpg >/dev/null 2>&1 || { say "no frames in $FRAMES — run stage 11 or set S1_FRAMES"; exit 1; }
+    # `find`, not a pair of globs: an unmatched glob reaches `ls` literally and fails the guard on a
+    # directory that holds only PNGs — which is what stage 11 leaves.
+    [ -n "$(find "$FRAMES" -maxdepth 1 \( -iname '*.png' -o -iname '*.jpg' -o -iname '*.jpeg' \) -print -quit 2>/dev/null)" ] || { say "no frames in $FRAMES — run stage 11 or set S1_FRAMES"; exit 1; }
     # `duck-bench` is the NPU path; the S1 has none. `s1-infer` is the same measurement over the
     # detector's ONNX path, cross-compiled here and built natively below for the other tier.
-    if ls "$ORT"/libonnxruntime.so* >/dev/null 2>&1; then
+    # The on-board tier needs the robot; the Mac tier below runs regardless (one tier suffices).
+    if [ -f "$ORT/libonnxruntime.so.$ORT_VER" ] && $A get-state >/dev/null 2>&1; then
         cargo s1 -p s1d --bin s1-infer >/dev/null
         $A push target/armv7-unknown-linux-gnueabihf/release/s1-infer "$CHROOT/opt/robot/bin/s1-infer" >/dev/null
-        $A push "$ORT"/libonnxruntime.so* "$CHROOT/usr/lib/" >/dev/null; $A push "$MODEL" "$CHROOT/opt/robot/duck_detect.onnx" >/dev/null
+        $A push "$ORT/libonnxruntime.so.$ORT_VER" "$CHROOT/usr/lib/" >/dev/null; $A push "$MODEL" "$CHROOT/opt/robot/duck_detect.onnx" >/dev/null
         sh_robot "mkdir -p $CHROOT/opt/robot/frames"
         for f in "$FRAMES"/*.png "$FRAMES"/*.jpg; do [ -f "$f" ] && $A push "$f" "$CHROOT/opt/robot/frames/" >/dev/null; done
-        sh_robot "ORT_DYLIB_PATH=/usr/lib/libonnxruntime.so.1.28.0 chroot $CHROOT /opt/robot/bin/s1-infer --model /opt/robot/duck_detect.onnx --frames /opt/robot/frames --hz 0" > "$D/onboard.txt" 2>&1 || true
-    else
+        sh_robot "ORT_DYLIB_PATH=/usr/lib/libonnxruntime.so.$ORT_VER chroot $CHROOT /opt/robot/bin/s1-infer --model /opt/robot/duck_detect.onnx --frames /opt/robot/frames --hz 0" > "$D/onboard.txt" 2>&1 || true
+    elif [ ! -f "$ORT/libonnxruntime.so.$ORT_VER" ]; then
         cp "$ORT/build.log" "$D/ort_build_failed.txt" 2>/dev/null || echo "no libonnxruntime armv7 and no build log" > "$D/ort_build_failed.txt"
+    else
+        say "no adb at $HOST: skipping the on-board tier, running the Mac tier"
     fi
-    MAC_ORT="${S1_ORT_MAC:-$HOME/Development/RoboMaster-S1/out/onnxruntime-mac/onnxruntime-osx-arm64-1.28.0/lib/libonnxruntime.1.28.0.dylib}"
+    MAC_ORT="${S1_ORT_MAC:-$HOME/Development/RoboMaster-S1/out/onnxruntime-mac/onnxruntime-osx-arm64-$ORT_VER/lib/libonnxruntime.$ORT_VER.dylib}"
     cargo build --release -p s1d --bin s1-infer >/dev/null
     ORT_DYLIB_PATH="$MAC_ORT" target/release/s1-infer --model "$MODEL" --frames "$FRAMES" --hz 0 > "$D/offboard.txt" 2>&1 || true
     for f in "$D"/onboard.txt "$D"/offboard.txt "$D"/ort_build_failed.txt; do [ -f "$f" ] && art "$f"; done ;;

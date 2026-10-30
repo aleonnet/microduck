@@ -33,9 +33,9 @@ struct Args {
     /// Timed runs skipped first, so the first-call costs are not the answer.
     #[arg(long, default_value_t = 3)]
     warmup: usize,
-    /// How many times the whole set is run.
-    #[arg(long, default_value_t = 3)]
-    passes: usize,
+    /// How many times the whole set is run. At least one: a run with no inference has no number.
+    #[arg(long, default_value_t = 3, value_parser = clap::value_parser!(u16).range(1..))]
+    passes: u16,
     /// Detection threshold, on this model's own score scale.
     #[arg(long, default_value_t = 0.35)]
     threshold: f32,
@@ -134,7 +134,7 @@ fn main() -> Result<()> {
 
     let period = (args.hz > 0.0).then(|| Duration::from_secs_f64(1.0 / args.hz));
     let mut next = Instant::now();
-    let mut latencies: Vec<Duration> = Vec::with_capacity(frames.len() * args.passes);
+    let mut latencies: Vec<Duration> = Vec::with_capacity(frames.len() * usize::from(args.passes));
     let mut detections = 0usize;
     let mut frames_with_one = 0usize;
     let cpu_before = cpu_seconds();
