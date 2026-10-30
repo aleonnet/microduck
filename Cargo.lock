@@ -4267,6 +4267,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
+name = "s1-duml"
+version = "0.17.8"
+dependencies = [
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "s1d"
+version = "0.17.8"
+
+[[package]]
 name = "safe_arch"
 version = "0.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"

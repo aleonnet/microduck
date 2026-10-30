@@ -1,0 +1,9 @@
+[package]
+name = "s1d"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "The RoboMaster S1 body service: robot.* over the microduck contract, DUML on /dev/ttyS3"
+
+[dependencies]

@@ -1,0 +1,17 @@
+# The RoboMaster S1's body speaks DUML/V1 to its motion controller over one UART (`/dev/ttyS3`).
+# This crate is that protocol and nothing else: frames, CRCs, the commands the body obeys and the
+# telemetry it pushes back. No tokio, no serial port, no socket — `s1d` owns the I/O, for the same
+# reason `duck-control` holds no daemon concerns (robotd-design.md §1.3).
+#
+# Provenance of every byte is a test against a frame captured on the robot or a layout quoted from
+# DJI's own SDK (`protocol.py`, Apache-2.0); nothing here is inferred from behaviour alone.
+[package]
+name = "s1-duml"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "DUML/V1 frames, commands and telemetry of the RoboMaster S1 motion controller"
+
+[dependencies]
+thiserror.workspace = true
