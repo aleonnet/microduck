@@ -72,7 +72,7 @@ stages 5, 6 and 8.
 | 10 | `restore` | reboot brings the stock back; the app drives | measured twice 2026-10-30 (stock back, app drove), artefact pending |
 | 11 | `frames` | frames at 720p and 360p: fps and CPU — by `s1-cam` over the stock's own call sequence (no `gst-launch v4l2src`: same generic path that rebooted the robot) | pending — **gates the port** (360p was never captured from the stock; a 360p `S_FMT` is a hypothesis and does not go to the robot) |
 | 12 | `infer` | `s1-infer` (the detector's ONNX path) on the S1 with `libonnxruntime` armv7 and on the Mac over the same frames: ms/frame on both tiers | pending on the robot; the Mac tier ran tonight on a synthetic frame (below) — **gates the port** (one tier suffices) |
-| — | `telemetry` | with the stock alive and nothing of ours on the UART: the stock controller process relaunched under `strace` from its first write (its boot-time DDS subscription, the subject list of the 176 B push) and 40 s of UART reads while the owner drives the gimbal to its stops (the `0x04/0x05` push against the manual's limits) | pending on the robot (2026-10-30 (night)) — confirms the layouts below |
+| — | `telemetry` | with the stock alive and nothing of ours on the UART: the stock controller process relaunched under `strace` from its first write (its boot-time DDS subscription, the subject list of the 176 B push) and 40 s of UART reads while the owner drives the gimbal to its stops (the `0x04/0x05` push against the manual's limits) | part (a) **done 2026-10-30 20:55** (subject list captured, below); part (b) `telemetry-gimbal` pending |
 
 The `items` stage is `s1-e2e robot` alone, with the daemons already up; `e2e` is the same program
 with no robot (`s1-e2e fake`), the pre-test every stage-5 and stage-6 item passes before the robot
@@ -590,9 +590,29 @@ the source restored by hash.
 mV/1000 and %; `head` ← `0x04/0x05` converted to the duck's signs. Only the S1 (`s1.telemetry`):
 wheel rpm and angles, velocities, the whole status word, temperature and current, the quaternion.
 
-**Still to confirm on the robot, one power-on, nothing of ours on the UART (stage `telemetry`):**
-the subject list of the stock's big subscription (names the 14 bytes at 8..22) and the gimbal's
-push at the stops. The DJI on-board runtime (`dji_scratch`) subscribes only when a script starts
+**Confirmed on the robot (2026-10-30, 20:50–20:55, stage `telemetry`, nothing of ours on the
+UART):** `dji_hdvt_uav` relaunched under `strace -e trace=write` from its first instruction sent,
+in its first seconds, three `0x48/0x01` add-node for node 9 and three `0x48/0x03`: msg 0, flags 3,
+one subject `0x00020003_d7f5dcfb` at 1 Hz; msg 0 again with two, `…d7f5dcfb` and
+`0x00020003_91a13d9c`, at 1 Hz; and **msg 1, flags 3, two subjects `0x00020003_47e6f7b3` and
+`0x00020003_1d13ee42`, frequency field 20** — this is the 176 B push: two composite subjects of
+DJI's internal namespace `0x20003` (not the SDK's `0x20009` singles), together 153 bytes after the
+time stamp. The controller's own clock in the pushes puts them **20 ms apart** (1314 of 2362
+consecutive gaps in the 17:05 capture; the rest multiples of 20 ms, i.e. drops), so the field's
+20 is not hertz on this firmware; the 1 Hz push's gaps are 1000 ms. The 14 bytes at 8..22 are
+therefore part of the first composite subject, whose internal layout DJI does not publish; the
+float there tracks the gimbal yaw (0, −1, −178 against the gimbal's −179.6°). The `msg_id` of the
+big push was 0 at 17:05 and 1 at 20:50: by length, as coded. The stage's first run hung: busybox
+`timeout -t 45` sent `strace` a TERM and it kept tracing for minutes; the owner killed the relaunched
+process by hand and the stage then restored init's service (`hdvt_uav_restored`); the stage now
+ends the tracee itself.
+
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry/relaunch.txt sha256=b2d36ce6ad5f548da690ff399a7c31a5598c88c64609e3c668a41f4d9d96c690
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry/hdvt_exec_writes.strace sha256=adae9b91c641ee3637693b6a975f33fb13e403c3fc9ce199b551ca4f80fc9e41
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry/dds_requests.txt sha256=779f4156981597a184490772363accd7aac97658c06bd8988d9e813d5a935842
+
+**Still to confirm on the robot (stage `telemetry-gimbal`):** the gimbal's `0x04/0x05` at the
+stops, against the manual's limits. The DJI on-board runtime (`dji_scratch`) subscribes only when a script starts
 (`script_framework.py:94`): node `0xC9`, msg 0, flags 0, ten subjects at 50 Hz, accepting retcode
 `0` or `0x23` (`rm_module.py:1300`, `rm_ctrl.py:5184`).
 
