@@ -2259,7 +2259,7 @@ mod robot {
         );
         item!(
             "F18 telemetry",
-            "pushes > 0 with a plausible battery %, attitude and gimbal angle (the subscription is re-asked every 5 s, armed)",
+            "pushes > 0 with a plausible battery %, attitude and gimbal angle — the stock's own boot-time push, decoded by its layout, and the gimbal's 0x04/0x05 (our own subscription is asked once and only re-asked while nothing flows)",
             {
                 std::thread::sleep(Duration::from_secs(6));
                 let r = call(&mut client, "s1.telemetry", json!({}))?;

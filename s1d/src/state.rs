@@ -24,10 +24,16 @@ pub struct Telemetry {
     pub sa_status: Option<s1_duml::dds::SaStatus>,
     pub gimbal_pos: Option<s1_duml::dds::GimbalPos>,
     pub stick: Option<s1_duml::dds::Stick>,
-    /// Pushes decoded so far, so health can say whether the subscription took.
+    /// The gimbal's own attitude push (`0x04/0x05`), the real angle whenever the gimbal runs.
+    pub gimbal: Option<s1_duml::events::GimbalPush>,
+    /// Pushes decoded so far — ours and the stock's alike — so health can say telemetry flows.
     pub pushes: u64,
-    /// Pushes that were not ours — another msg id, or ours with the wrong length. The stock
-    /// firmware's subscription keeps pushing after it is stopped; this is where those go.
+    /// Of those, the stock firmware's own subscription, recognised by its 161-byte layout
+    /// (`dds::StockPush`): the controller keeps pushing it after `dji_hdvt_uav` is stopped
+    /// (measured 2026-10-30), and it is what this daemon reads while its own subscription is
+    /// refused.
+    pub stock_pushes: u64,
+    /// Pushes nobody here decodes: the stock's 1 Hz subject, a truncation.
     pub foreign_pushes: u64,
 }
 
@@ -108,6 +114,7 @@ impl State {
         let t = self.telemetry.load();
         crate::api::TelemetryResult {
             pushes: t.pushes,
+            stock_pushes: t.stock_pushes,
             foreign_pushes: t.foreign_pushes,
             wheels_rpm: t.esc.map(|e| e.speed_rpm),
             position_m: t.position.map(|p| [p.x, p.y, p.z]),
@@ -128,9 +135,17 @@ impl State {
                 impact_z: s.impact_z,
                 roll_over: s.roll_over,
             }),
+            // The gimbal's own push is the angle that is actually on the wire; the DDS subject
+            // only arrives under a subscription of ours, which the controller has refused so far.
             gimbal_deg: t
-                .gimbal_pos
-                .map(|g| [f32::from(g.yaw_ddeg) / 10.0, f32::from(g.pitch_ddeg) / 10.0]),
+                .gimbal
+                .map(|g| [g.yaw_deg() as f32, g.pitch_deg() as f32])
+                .or_else(|| {
+                    t.gimbal_pos
+                        .map(|g| [f32::from(g.yaw_ddeg) / 10.0, f32::from(g.pitch_ddeg) / 10.0])
+                }),
+            gimbal_yaw_vs_chassis_deg: t.gimbal.map(|g| f32::from(g.yaw_vs_chassis_ddeg) / 10.0),
+            gimbal_quat: t.gimbal.map(|g| g.quat),
             sticks: t.stick.map(|s| [s.chassis, s.gimbal]),
             battery: t.battery.map(|b| crate::api::BatteryResult {
                 percent: b.percent,
@@ -163,13 +178,20 @@ impl State {
         }
     }
 
-    /// The verdict `updaterd`'s gate reads, plus the description a person reads.
+    /// The verdict `updaterd`'s gate reads, plus the description a person reads. The battery is
+    /// the controller's own reading (millivolts and percent, `dds::Battery`), when a push has
+    /// carried one — reported, never judged, as `robotd` reports its pack.
     pub fn health(&self) -> proto::HealthResult {
+        let battery = self.telemetry.load().battery.map(|b| proto::Battery {
+            volts: f64::from(b.adc_value) / 1000.0,
+            percent: f64::from(b.percent),
+        });
         let describe =
             |healthy: bool, degraded: bool, reason: Option<String>| proto::HealthResult {
                 healthy,
                 degraded,
                 reason,
+                battery,
                 control_loop: Some(self.loop_health()),
                 bus: proto::BusHealth {
                     consecutive_errors: self.consecutive_write_errors.load(Ordering::Relaxed)
@@ -222,12 +244,14 @@ impl State {
     /// joint vector in the duck's sense, and every client reads them with `get`. The gimbal travels
     /// in `head` as `[0, pitch, yaw, 0]`, the order `HeadParams` uses and the duck's signs (left
     /// and down positive; the gimbal's own are the opposite, `tick::gimbal_ddeg`) — the angle the
-    /// motion controller reports when telemetry flows, the last commanded one until then.
+    /// gimbal itself pushes (`0x04/0x05`) when it flows, else the DDS subject, else the last
+    /// commanded one.
     pub fn frame(&self, requested: [f64; 3], limited_by: Vec<String>) -> proto::RobotState {
         let t = self.telemetry.load();
-        let (yaw_ddeg, pitch_ddeg) = match t.gimbal_pos {
-            Some(g) => (g.yaw_ddeg, g.pitch_ddeg),
-            None => **self.gimbal_ddeg.load(),
+        let (yaw_ddeg, pitch_ddeg) = match (t.gimbal, t.gimbal_pos) {
+            (Some(g), _) => (g.yaw_ddeg, g.pitch_ddeg),
+            (None, Some(g)) => (g.yaw_ddeg, g.pitch_ddeg),
+            (None, None) => **self.gimbal_ddeg.load(),
         };
         let hz = f64::from_bits(self.achieved_hz.load(Ordering::Relaxed));
         let odom = t

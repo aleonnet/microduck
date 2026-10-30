@@ -95,6 +95,11 @@ grep -qE -- "--set-fmt-video|--stream-mmap" "$ADB_SHIM_LOG" && { echo "selftest:
 run audio
 asked audio "arecord -D hw:0,0 -f S16_LE -r 48000 -c 2 -d 60 /tmp/mic.wav"
 asked audio "aplay -D hw:0,0 /mnt/system/audio/sound/engine_start.wav"
+run telemetry
+# The stock controller process relaunched under strace from its first write, then init's service restored.
+asked telemetry "strace -f -tt -e trace=write -s 256 -o /data/hdvt_exec.strace /system/bin/dji_hdvt_uav -g"
+asked telemetry "start dji_hdvt_uav"
+tail -c +"$((ASKED_FROM + 1))" "$ADB_SHIM_LOG" | grep -qE "s1d|s1ctl|robotctl|forward" && { echo "selftest: telemetry stage ran something of ours"; fail=1; } || echo "selftest: telemetry stage runs nothing of ours"
 run frames
 asked frames "|| mount -o bind /dev /data/debian/dev"
 grep -q "gst-launch-1.0 v4l2src" "$ADB_SHIM_LOG" && { echo "selftest: frames still streams with gst-launch"; fail=1; } || echo "selftest: frames stops before the stream"

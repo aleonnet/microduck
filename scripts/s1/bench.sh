@@ -9,7 +9,7 @@
 # that every artefact a record cites exists with the sha256 it claims.
 #
 # Usage: scripts/s1/bench.sh <stage> [args]      stages: help | capture | backup | exec | stop | drive |
-#        items | events | camera | audio | app | restore | frames | infer | e2e | verify-record <record.md>
+#        items | events | camera | audio | app | restore | frames | infer | telemetry | e2e | verify-record <record.md>
 # Env:   S1_HOST (default 192.168.1.236:5555) · S1_OUT (default ~/Development/RoboMaster-S1/out/<date>-poc2)
 #        S1_CHROOT (default /data/debian) · S1_BAUD (from capture) · S1_ROOTFS (tar from build-rootfs.sh)
 #        S1_UDP (the robot's netpadd, default <host without port>:4210) · S1_TCP (the forwarded socket,
@@ -52,6 +52,10 @@ stages() {
 11 frames    gst-launch v4l2src 720p and 360p for 30 s: fps and CPU (mediad's own element)
 12 infer     s1-infer (the detector's ONNX path) on the S1 with libonnxruntime armv7, and on the Mac,
              over the same frames
+   telemetry with the stock ALIVE, nothing of ours on the UART: (a) dji_hdvt_uav relaunched under
+             strace from its first instruction, 45 s — its boot-time DDS subscription (the subject
+             list of the 176 B push); (b) 40 s of the UART reads while YOU drive the gimbal to its
+             stops in the app — the gimbal's 0x04/0x05 push against the manual's limits
    e2e       no robot: `s1-e2e fake` — the same items against s1d --fake, netpadd, robotctl and
              s1ctl on this Mac, judged on the wire bytes (the pre-test of stages 5 and 6)
    verify-record <md>   check every `artefato:` line of a record: path exists, sha256 matches
@@ -315,6 +319,25 @@ case "$stage" in
     cargo build --release -p s1d --bin s1-infer >/dev/null
     ORT_DYLIB_PATH="$MAC_ORT" target/release/s1-infer --model "$MODEL" --frames "$FRAMES" --hz 0 > "$D/offboard.txt" 2>&1 || true
     for f in "$D"/onboard.txt "$D"/offboard.txt "$D"/ort_build_failed.txt; do [ -f "$f" ] && art "$f"; done ;;
+
+  telemetry)
+    need_robot; D=$(dir telemetry)
+    # (a) The stock's subscription is sent in the first milliseconds of `dji_hdvt_uav`: a strace
+    # attached to the running service misses it (2026-10-30, `hdvt_boot.strace` holds only the
+    # 1 Hz one). So the service is stopped and the binary relaunched under strace from its first
+    # write, as init launches it (`init.rc`: `service dji_hdvt_uav /system/bin/dji_hdvt_uav -g`),
+    # for 45 s; then init's service is started again. Writes only: nothing of ours touches the UART.
+    say "the app will disconnect for about a minute: the stock controller process is relaunched under strace"
+    sh_robot "stop dji_hdvt_uav; setprop ctl.stop dji_hdvt_uav; $BB sleep 1; $BB timeout -t 45 strace -f -tt -e trace=write -s 256 -o /data/hdvt_exec.strace /system/bin/dji_hdvt_uav -g; start dji_hdvt_uav; $BB sleep 2; $BB pidof dji_hdvt_uav >/dev/null && echo hdvt_uav_restored || echo HDVT_NOT_RUNNING" | tee "$D/relaunch.txt"
+    $A pull /data/hdvt_exec.strace "$D/hdvt_exec_writes.strace" >/dev/null
+    scripts/s1/duml-strace.py "$D/hdvt_exec_writes.strace" dds_add_sub dds_add_node | tee "$D/dds_requests.txt"
+    # (b) The gimbal's own attitude push, read off the UART while the owner drives the gimbal to
+    # every stop: the values must reach the manual's limits (pitch −20°/+35°, yaw ±250°).
+    say "reconnect the app. For 40 s, drive the gimbal to its STOPS: full left, full right, full up, full down, then recentre"
+    sh_robot "$BB timeout -t 40 strace -f -tt -e trace=read -s 256 -o /data/hdvt_gimbal.strace -p \$($BB pidof dji_hdvt_uav)" || true
+    $A pull /data/hdvt_gimbal.strace "$D/hdvt_gimbal_reads.strace" >/dev/null
+    scripts/s1/duml-strace.py "$D/hdvt_gimbal_reads.strace" gimbal_push | tee "$D/gimbal_pushes.txt"
+    for f in "$D"/relaunch.txt "$D"/hdvt_exec_writes.strace "$D"/dds_requests.txt "$D"/hdvt_gimbal_reads.strace "$D"/gimbal_pushes.txt; do art "$f"; done ;;
 
   verify-record)
     md="${1:?usage: bench.sh verify-record <record.md>}"

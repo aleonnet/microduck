@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 
 use s1_duml::cmd::{self, SeqCounter};
 use s1_duml::dds;
-use s1_duml::events::{ArmorHit, IrHit};
+use s1_duml::events::{ArmorHit, GimbalPush, IrHit};
 use s1_duml::{Decoder, Frame};
 
 use crate::body::S1Body;
@@ -208,12 +208,35 @@ pub fn head_from_gimbal(yaw_ddeg: i16, pitch_ddeg: i16) -> [f64; 4] {
     ]
 }
 
-/// Decode a push into telemetry when it is ours — `DDS_MSG_ID` and exactly `DDS_PUSH_LEN` bytes,
-/// in `SUBJECTS` order — and say so. Anything else (the stock's subscription, a truncated push) is
-/// left alone: the telemetry keeps its last good values.
-fn decode_push(msg_id: u8, data: &[u8], t: &mut Telemetry) -> bool {
+/// Whose push a `0x48/0x08` was, once decoded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Push {
+    /// `DDS_MSG_ID` and exactly `DDS_PUSH_LEN` bytes, in `SUBJECTS` order.
+    Ours,
+    /// The stock firmware's boot-time subscription, `dds::StockPush::LEN` bytes under whatever
+    /// msg id that boot gave it (0 or 1, measured both ways on 2026-10-30).
+    Stock,
+    /// Nobody's here: the stock's 1 Hz subject, a truncation. Telemetry keeps its last values.
+    Foreign,
+}
+
+/// Decode a push into telemetry. Ours by id and length; the stock's by length alone — it is the
+/// telemetry that actually flows on this robot, our own subscription being refused by the
+/// controller (`02 03` / `0f …`, 2026-10-30) — and it carries every subject but the gimbal's and
+/// the sticks', which `0x04/0x05` supplies.
+fn decode_push(msg_id: u8, data: &[u8], t: &mut Telemetry) -> Push {
+    if let Some(p) = dds::StockPush::parse(data) {
+        t.esc = Some(p.esc);
+        t.position = Some(p.position);
+        t.velocity = Some(p.velocity);
+        t.imu = Some(p.imu);
+        t.attitude = Some(p.attitude);
+        t.sa_status = Some(p.sa_status);
+        t.battery = Some(p.battery);
+        return Push::Stock;
+    }
     if msg_id != DDS_MSG_ID || data.len() != DDS_PUSH_LEN {
-        return false;
+        return Push::Foreign;
     }
     // The length was checked, so every parse below has its bytes.
     let subjects = &data[dds::PUSH_TIMESTAMP_LEN..];
@@ -235,7 +258,7 @@ fn decode_push(msg_id: u8, data: &[u8], t: &mut Telemetry) -> bool {
     t.gimbal_pos = Some(gimbal_pos);
     t.stick = Some(stick);
     t.battery = Some(battery);
-    true
+    Push::Ours
 }
 
 struct Writer<'a> {
@@ -463,18 +486,33 @@ pub fn run(body: &mut dyn S1Body, state: Arc<State>, intents: Arc<Intents>, cfg:
                 let mut changed = false;
                 for frame in decoder.push(&inbox[..n]) {
                     if let Some(push) = dds::PushPeriod::parse(&frame) {
-                        let ours = decode_push(push.msg_id, push.data, &mut telemetry);
-                        tracing::trace!(msg_id = push.msg_id, len = push.data.len(), ours, "push");
-                        if ours {
-                            telemetry.pushes += 1;
+                        let whose = decode_push(push.msg_id, push.data, &mut telemetry);
+                        tracing::trace!(
+                            msg_id = push.msg_id,
+                            len = push.data.len(),
+                            ?whose,
+                            "push"
+                        );
+                        match whose {
+                            Push::Ours => telemetry.pushes += 1,
+                            Push::Stock => {
+                                telemetry.pushes += 1;
+                                telemetry.stock_pushes += 1;
+                            }
+                            Push::Foreign => telemetry.foreign_pushes += 1,
+                        }
+                        // Telemetry flowing, ours or the stock's, is what stops the re-ask: a
+                        // controller already pushing has nothing to be asked again.
+                        if whose != Push::Foreign {
                             last_push = Some(Instant::now());
-                        } else {
-                            telemetry.foreign_pushes += 1;
                         }
                         changed = true;
                         // Answer it as the stock does, ours or not: the controller has only ever
                         // been seen pushing to a subscriber that acks every push.
                         w.send(dds::push_ack(frame.seq));
+                    } else if let Some(gimbal) = GimbalPush::parse(&frame) {
+                        telemetry.gimbal = Some(gimbal);
+                        changed = true;
                     } else if let Some(hit) = ArmorHit::parse(&frame) {
                         state.armor_hits.fetch_add(1, Ordering::Relaxed);
                         let _ = state.event_tx.send(crate::api::Event::ArmorHit {
@@ -635,21 +673,42 @@ mod tests {
         );
     }
 
-    /// Msg id 1 is the stock's; a push of ours must be exactly the subjects we asked for. Either
-    /// mismatch leaves the telemetry as it was and says so.
+    /// The stock's push is known by its 161 bytes under any msg id and fills every subject but
+    /// the gimbal's; ours by id and exact length; anything else leaves the telemetry as it was.
     #[test]
-    fn a_push_is_decoded_only_under_our_id_and_length() {
+    fn a_push_is_decoded_by_whose_layout_it_has() {
         let mut t = Telemetry::default();
-        let stock = vec![0u8; 161];
-        assert!(!decode_push(1, &stock, &mut t), "the stock's id");
-        assert!(
-            !decode_push(DDS_MSG_ID, &stock, &mut t),
-            "our id, their length"
+        let mut stock = vec![0u8; dds::StockPush::LEN];
+        stock[82 + 8] = 80; // the battery percent where the stock's layout puts it
+        assert_eq!(
+            decode_push(1, &stock, &mut t),
+            Push::Stock,
+            "msg id 1 on one boot"
         );
-        assert!(t.battery.is_none());
+        assert_eq!(
+            decode_push(0, &stock, &mut t),
+            Push::Stock,
+            "msg id 0 on another"
+        );
+        assert_eq!(t.battery.map(|b| b.percent), Some(80));
+        assert!(
+            t.gimbal_pos.is_none() && t.stick.is_none(),
+            "not in the stock's push"
+        );
+        assert_eq!(
+            decode_push(DDS_MSG_ID, &stock[..160], &mut t),
+            Push::Foreign,
+            "our id, a length that is nobody's"
+        );
+        assert_eq!(
+            decode_push(0, &[0u8; 54], &mut t),
+            Push::Foreign,
+            "the 1 Hz subject"
+        );
+        assert_eq!(t.battery.map(|b| b.percent), Some(80), "left as it was");
         let mut ours = vec![0u8; DDS_PUSH_LEN];
         ours[DDS_PUSH_LEN - dds::Battery::SIZE + 8] = 77;
-        assert!(decode_push(DDS_MSG_ID, &ours, &mut t));
+        assert_eq!(decode_push(DDS_MSG_ID, &ours, &mut t), Push::Ours);
         assert_eq!(t.battery.map(|b| b.percent), Some(77));
         assert!(
             t.esc.is_some() && t.sa_status.is_some() && t.gimbal_pos.is_some(),

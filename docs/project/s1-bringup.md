@@ -64,7 +64,7 @@ stages 5, 6 and 8.
 | 2 | `backup` | every partition dumped, SHA on robot == SHA on Mac | **done 2026-10-30** (below): 14 on the card, 11 pulled, SHA equal |
 | 3 | `exec` | a binary of ours runs on the robot (`/data`, or `setenforce 0` by the owner, or the microSD); the chroot answers `uname -a` and `ldd --version` | **done 2026-10-30** (below) — gate passed |
 | 4 | `stop` | `hdvt_uav` and `monitor` stopped; nobody holds `ttyS3` | **done 2026-10-30** (below) |
-| 5 | `drive` + `items` | `s1d` + `netpadd` + `robotctl health` in the chroot; `s1-e2e robot` from the Mac: the pad over UDP into `netpadd` (wheels, turn, strafe, gimbal, lights, sounds, arm/disarm), the S1 list through `s1ctl --tcp`, telemetry | **wheels and gimbal done 2026-10-30** (below, owner's witness); **every item pre-tested on the Mac** (`s1-e2e fake`, 40 of 40, below); the robot session runs the same program minus the two wire-only items (a test holds the two lists equal); telemetry still refused by the controller — open |
+| 5 | `drive` + `items` | `s1d` + `netpadd` + `robotctl health` in the chroot; `s1-e2e robot` from the Mac: the pad over UDP into `netpadd` (wheels, turn, strafe, gimbal, lights, sounds, arm/disarm), the S1 list through `s1ctl --tcp`, telemetry | **wheels and gimbal done 2026-10-30** (below, owner's witness); **every item pre-tested on the Mac** (`s1-e2e fake`, 40 of 40, below); the robot session runs the same program minus the two wire-only items (a test holds the two lists equal); telemetry: the controller's own boot-time push and the gimbal's `0x04/0x05` decoded by layout and held to two real captures (2026-10-30 (night), below); robot confirmation = stage `telemetry` |
 | 6 | `events` | `robotctl flashlight` lights the LEDs; every effect of the real `0x3f/0x32`; armour hits, IR and the button as `s1.event` | pre-tested on the Mac (events fed to the fake body reach `s1ctl events`; the button through a FIFO); pending on the robot |
 | 7 | `camera` | formats listed; the frame waits for `s1-cam` (a generic stream rebooted the robot twice, 2026-10-30) | **measured 2026-10-30**, frame pending |
 | 8 | `audio` | mic as a 60 s stream through `arecord`; `aplay` while driving, CPU sampled | speaker **proven** (owner, four times); mic: device `hw:0,0` right channel, no signal yet (2026-10-30) |
@@ -72,6 +72,7 @@ stages 5, 6 and 8.
 | 10 | `restore` | reboot brings the stock back; the app drives | measured twice 2026-10-30 (stock back, app drove), artefact pending |
 | 11 | `frames` | frames at 720p and 360p: fps and CPU — by `s1-cam` over the stock's own call sequence (no `gst-launch v4l2src`: same generic path that rebooted the robot) | pending — **gates the port** (360p was never captured from the stock; a 360p `S_FMT` is a hypothesis and does not go to the robot) |
 | 12 | `infer` | `s1-infer` (the detector's ONNX path) on the S1 with `libonnxruntime` armv7 and on the Mac over the same frames: ms/frame on both tiers | pending on the robot; the Mac tier ran tonight on a synthetic frame (below) — **gates the port** (one tier suffices) |
+| — | `telemetry` | with the stock alive and nothing of ours on the UART: the stock controller process relaunched under `strace` from its first write (its boot-time DDS subscription, the subject list of the 176 B push) and 40 s of UART reads while the owner drives the gimbal to its stops (the `0x04/0x05` push against the manual's limits) | pending on the robot (2026-10-30 (night)) — confirms the layouts below |
 
 The `items` stage is `s1-e2e robot` alone, with the daemons already up; `e2e` is the same program
 with no robot (`s1-e2e fake`), the pre-test every stage-5 and stage-6 item passes before the robot
@@ -348,6 +349,8 @@ Telemetry, three defects found and two fixed on the bench, one open:
    msg id 1 too, so it decoded the stock's subjects with our layout (gyro in the 10³² range,
    `monitor_before_fix.log`). Fixed: own msg id `0x5d`, a push is ours only at exactly
    `DDS_PUSH_LEN` bytes, foreign pushes counted; the subscription is sent armed or not.
+   Superseded 2026-10-30 (night): the stock's push is now decoded by its own layout (section "Telemetry, read off
+   the pushes that already flow"); it is the telemetry the robot actually gives.
 2. The controller then ignored our subscription outright. Running the stock `dji_hdvt_uav` under
    `strace` for 10 s (`hdvt_boot.strace`) shows what it sends on start: `0x48/0x01` register node 9
    (`09 00 00 00 03`), then `0x48/0x03` subscribe — both with attribute `0x40`, the SDK's
@@ -536,6 +539,63 @@ the speaker.
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/audio-20261030-180316/mixer_camera_stopped.txt sha256=696f8ebcd397693a532677ff2bdfa73f2df2c553c93e866ed6dc6ea2a9351a31
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/audio-20261030-180316/mixer_camera_running.txt sha256=696f8ebcd397693a532677ff2bdfa73f2df2c553c93e866ed6dc6ea2a9351a31
 
+## Telemetry, read off the pushes that already flow (2026-10-30 (night))
+
+**What the raw captures say (CRC-checked frames, decoded independently of the Rust code):**
+with the stock alive (`capture/hdvt_uav.strace`, 17:05–17:07, the UART's reads) the motion
+controller (`0x03` → `0x09`) pushes two `0x48/0x08` subscriptions it was given at boot: one of
+176 B at 50 Hz nominal (median gap 20 ms; 2362 in the window) and one of 69 B at 1 Hz (59). Their
+`msg_id` swaps between boots (0/1 at 17:05, 1/0 in the daemon's own run at 14:30), so the push is
+recognised by its length. With `dji_hdvt_uav` stopped the pushes go on: the daemon's trace log of
+the 14:30 run counted 399 of the big one and 8 of the small one, all discarded as "foreign".
+
+**Layout of the 161-byte payload** (after `sub_mode`, `msg_id`), fitted on all 2362 pushes and
+holding on the 2026-10-29 idle push too — `dds::StockPush`, `s1-duml/tests/stock_push.rs`:
+`0..8` time (ms, then µs) · `8..22` one subject the SDK does not name: a float that tracks the
+gimbal yaw in whole degrees (0, −1, −178 against the gimbal's own −179.6°) and ten zero bytes ·
+`22..46` velocity (world xyz, body xyz) · `46..82` ESC (rpm, angle, timer, state ×4) · `82..92`
+battery (mV, 0.1 °C, mA, %, recv) · `92..104` position · `104..128` IMU (acc in g, gyro in rad/s) ·
+`128..132` status word · `132..144` attitude (yaw, pitch, roll, degrees) · `144..161` 17 zero bytes
+(the servo subject). Physical agreement is the proof: 11.94 V / 31.6 °C / −1060 mA / 80 % at 17:05
+and 11.862 V / 33.2 °C / −1129 mA / 77 % on 2026-10-29; acc_z = −1.00 g on both; on 2026-10-29
+the pitch is −6.6° **and** the controller's own "on slope" bit is set in the same push; at 17:05
+the yaw goes from −0.7° to 19.3° as the owner turned the robot, gyro_z reaches 1.65 rad/s, body
+speed 0.44 m/s, the "slip" bit shows twice. The order is the stock's own request, which was never
+captured: it is sent in the first milliseconds of `dji_hdvt_uav`, before a `strace -p` can attach
+(`hdvt_boot.strace` holds only the 1 Hz subscription, msg 0, one subject `00020003_d7f5dcfb`).
+
+**The gimbal angle is not in that push.** It travels on its own frame, `0x04/0x05` from the gimbal
+(`0x04`) to host `0xf1`, 40 B, 2969 in the window (~21 Hz) — `events::GimbalPush`: pitch at 0 and
+yaw at 4 in tenths of a degree, a second yaw at 8, the gimbal's clock at 12, a quaternion at 24.
+Pinned by the extremes: pitch reaches +35.8° where the manual's limit is +35°, yaw ±179.6°, and
+the quaternion agrees with the yaw (−179.6° gives w ≈ 0.006, z ≈ −0.95). The yaw at 8 is 21° less
+than the one at 4 when the chassis had turned 19°: ground frame at 4, relative to the chassis at 8
+— consistent with the data, confirmed by stage `telemetry` driving the gimbal to its stops.
+
+**What changed in `s1d`:** a `0x48/0x08` of 161 bytes is decoded as the stock's under any msg id
+(`tick::Push::Stock`), ours stays by id and exact length, anything else is counted as foreign and
+left alone; `0x04/0x05` fills the gimbal angle; `robot.health` carries the controller's battery
+(volts, percent); `robot.state` takes odometry, attitude, the status bits and the gimbal's real
+angle in `head`; `s1.telemetry` adds `stock_pushes`, `gimbal_yaw_vs_chassis_deg`, `gimbal_quat`.
+Our own subscription is still sent once at start and re-asked only while nothing flows — the
+controller refuses it (`02 03` to add-node, `0f …` to subscribe, also `21 03` on another boot;
+cause undetermined) and it is no longer needed for the telemetry the duck consumes. Fixtures cut
+from the capture: `dds_push_stock_{idle,moving,turned,1hz}_2026-10-30.bin`,
+`gimbal_push_{first,yaw_max,pitch_max}_2026-10-30.bin`. Refutation: `scripts/s1/telemetry-refute.sh`
+plants the battery ten bytes early and the layout tests fail naming it (`left: 11`, `right: 11940`),
+the source restored by hash.
+
+**What the duck's contract receives from it:** `RobotState.odom` ← position + attitude yaw;
+`imu.gyro` ← gyro; `safety.fallen` / `picked_up` ← status bits 9 / 4; `HealthResult.battery` ←
+mV/1000 and %; `head` ← `0x04/0x05` converted to the duck's signs. Only the S1 (`s1.telemetry`):
+wheel rpm and angles, velocities, the whole status word, temperature and current, the quaternion.
+
+**Still to confirm on the robot, one power-on, nothing of ours on the UART (stage `telemetry`):**
+the subject list of the stock's big subscription (names the 14 bytes at 8..22) and the gimbal's
+push at the stops. The DJI on-board runtime (`dji_scratch`) subscribes only when a script starts
+(`script_framework.py:94`): node `0xC9`, msg 0, flags 0, ten subjects at 50 Hz, accepting retcode
+`0` or `0x23` (`rm_module.py:1300`, `rm_ctrl.py:5184`).
+
 ## Corrections after the cold reader (2026-10-30 18:29 -0300) — this section supersedes the hand-off's open-items table
 
 A cold reader resumed from `docs/plans/2026-10-30-1905-handoff-s1-fase1-bateria2.md` alone and found
@@ -595,7 +655,7 @@ below, never one item.** What each remaining item has, column by column:
 | F5 gimbal sleep / wake | `Gimbal.suspend/resume` (`0x2ab5` / `0x7ef2`) | not an app action | oracle-held | yes: the library's bytes are the source |
 | F6 goto | `Chassis.set_position` task | not an app action | oracle-held | yes, on the floor with 2 m free |
 | F12 PWM | `Chassis.set_pwm_value/freq` | not an app action | oracle-held | yes, with a load on a port |
-| F18 telemetry | `Tank.set_sub_node` + `add_gimbal_and_chassis_sub_msg`: node `0xC9`, msg 0, `sub_config` 0, `mode` 0, ten subjects with high word `0x20009`, 50 Hz — sent to the **stock controller** (`0x09`), which forwards; accepts `0x00` or `0x23` | the stock's own: node 9, msg 0, flags 3, one subject `d7f5dcfb/00020003`, 1 Hz (`hdvt_boot.strace`); the forwarded script subscription was never captured (it happens at boot) | subjects as the library's, flags 3 as the stock's — refused `21 03` | only the captured frames: script item 15 restarts `dji_scratch` under the strace, so its subscription reaches the UART through the stock controller and is read there |
+| F18 telemetry | `Tank.set_sub_node` + `add_gimbal_and_chassis_sub_msg`: node `0xC9`, msg 0, `sub_config` 0, `mode` 0, ten subjects with high word `0x20009`, 50 Hz — sent to the **stock controller** (`0x09`), which forwards; accepts `0x00` or `0x23` | the stock's own: node 9, msg 0, flags 3, one subject `d7f5dcfb/00020003`, 1 Hz (`hdvt_boot.strace`); the forwarded script subscription was never captured (it happens at boot) | subjects as the library's, flags 3 as the stock's — refused `21 03` | nothing of ours: the stock's push is decoded as it flows (2026-10-30 (night)); stage `telemetry` relaunches `dji_hdvt_uav` under strace for its subject list and reads the gimbal's `0x04/0x05` at the stops |
 | volume | — | — | `amixer sset <control>` | after stage 8 names the control (`amixer_contents.txt`; stage 1 wrote none) |
 
 Stages 7, 8, 11, 12, read against what exists: the rootfs tar carries `v4l2-ctl`, `gst-launch-1.0`,

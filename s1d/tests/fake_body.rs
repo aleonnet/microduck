@@ -129,19 +129,23 @@ fn disarmed_sends_nothing_but_zeroes_on_exit() {
 }
 
 /// The stock firmware's subscription outlives `dji_hdvt_uav` (measured 2026-10-30: the motion
-/// controller kept pushing msg id 1 after the stock was stopped), so a push with any other msg id,
-/// or ours with the wrong length, is somebody else's and must not become our telemetry.
+/// controller kept pushing it after the stock was stopped), and it is decoded by its layout: the
+/// 2026-10-29 push lands as battery 77 %, then a push of ours (66 %) overwrites it; a push with a
+/// length nobody owns is counted and left alone. Both are acked as the stock acks.
 #[test]
-fn only_our_pushes_become_telemetry() {
+fn the_stocks_push_and_ours_both_become_telemetry() {
     const STOCK_PUSH: &[u8] = include_bytes!("../../s1-duml/tests/fixtures/dds_push_176_real.bin");
+    const ONE_HZ_PUSH: &[u8] =
+        include_bytes!("../../s1-duml/tests/fixtures/dds_push_stock_1hz_2026-10-30.bin");
     let path = std::env::temp_dir().join(format!("s1d-fake-push-{}.bin", std::process::id()));
     let mut body = FakeFile::create(&path).unwrap();
-    // The stock's real push (msg id 1, 161 bytes of subjects), then ours: the time stamp, then the
-    // subjects in SUBJECTS order, battery first with 77 % at its ninth byte.
     body.inbound.extend_from_slice(STOCK_PUSH);
+    body.inbound.extend_from_slice(ONE_HZ_PUSH);
+    // Ours: the time stamp, then the subjects in SUBJECTS order, battery last with 66 % at its
+    // ninth byte.
     let mut ours = vec![0u8, DDS_MSG_ID];
     let mut subjects = vec![0u8; DDS_PUSH_LEN];
-    subjects[DDS_PUSH_LEN - 10 + 8] = 77; // battery is the last subject, ten bytes, percent ninth
+    subjects[DDS_PUSH_LEN - 10 + 8] = 66;
     ours.extend_from_slice(&subjects);
     let frame = Frame::request(
         host::MOTION_CONTROLLER,
@@ -154,6 +158,7 @@ fn only_our_pushes_become_telemetry() {
     body.inbound.extend_from_slice(&frame.encode().unwrap());
 
     let stock_seq = Frame::decode(STOCK_PUSH).unwrap().seq;
+    let one_hz_seq = Frame::decode(ONE_HZ_PUSH).unwrap().seq;
     let state = Arc::new(State::new(100));
     let intents = Arc::new(Intents::new());
     let (s, i) = (Arc::clone(&state), Arc::clone(&intents));
@@ -165,11 +170,19 @@ fn only_our_pushes_become_telemetry() {
     let _ = std::fs::remove_file(&path);
 
     let t = state.telemetry.load();
-    assert_eq!(t.pushes, 1, "the stock's push must not count");
-    assert_eq!(t.foreign_pushes, 1, "but it is seen and counted");
-    assert_eq!(t.battery.map(|b| b.percent), Some(77));
-    assert_eq!(t.sa_status.map(|s| s.is_pick_up), Some(false));
-    // Both pushes were acknowledged with the stock's frame, each echoing the push's own sequence.
+    assert_eq!(t.pushes, 2, "the stock's push and ours");
+    assert_eq!(t.stock_pushes, 1);
+    assert_eq!(
+        t.foreign_pushes, 1,
+        "the 1 Hz subject: seen, counted, not decoded"
+    );
+    assert_eq!(t.battery.map(|b| b.percent), Some(66), "ours came last");
+    assert_eq!(
+        t.sa_status.map(|s| s.on_slope),
+        Some(false),
+        "ours, all zero, came last"
+    );
+    // Every push was acknowledged with the stock's frame, each echoing the push's own sequence.
     let acks: Vec<Vec<u8>> = Decoder::new()
         .push(&bytes)
         .iter()
@@ -180,10 +193,67 @@ fn only_our_pushes_become_telemetry() {
         acks,
         vec![
             s1_duml::dds::push_ack(stock_seq).encode().unwrap(),
+            s1_duml::dds::push_ack(one_hz_seq).encode().unwrap(),
             s1_duml::dds::push_ack(7).encode().unwrap()
         ],
-        "one ack per push, the stock's then ours, with their sequences"
+        "one ack per push, in order, with their sequences"
     );
+}
+
+/// The stock's push alone (what the robot gives with `dji_hdvt_uav` stopped) fills `robot.health`
+/// with the controller's battery and `robot.state` with odometry, attitude and the status bits;
+/// the gimbal's own push puts the real angle in `head`, converted to the duck's signs.
+#[test]
+fn stock_pushes_fill_health_state_and_the_head() {
+    let path = std::env::temp_dir().join(format!("s1d-fake-stock-{}.bin", std::process::id()));
+    let mut body = FakeFile::create(&path).unwrap();
+    body.inbound.extend_from_slice(include_bytes!(
+        "../../s1-duml/tests/fixtures/dds_push_stock_turned_2026-10-30.bin"
+    ));
+    body.inbound.extend_from_slice(include_bytes!(
+        "../../s1-duml/tests/fixtures/gimbal_push_yaw_max_2026-10-30.bin"
+    ));
+    let state = Arc::new(State::new(100));
+    let intents = Arc::new(Intents::new());
+    let (s, i) = (Arc::clone(&state), Arc::clone(&intents));
+    let handle = std::thread::spawn(move || run(&mut body, s, i, Config::default()));
+    std::thread::sleep(Duration::from_millis(200));
+    state.shutdown.store(true, Ordering::Relaxed);
+    handle.join().unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    let health = state.health();
+    let battery = health.battery.expect("the controller's battery reading");
+    assert!((battery.volts - 11.819).abs() < 1e-9, "{}", battery.volts);
+    assert_eq!(battery.percent, 78.0);
+
+    let frame = state.frame([0.0; 3], Vec::new());
+    assert!((frame.odom.position[0] - 0.0938).abs() < 1e-4);
+    assert!(
+        (frame.odom.yaw - 19.329f64.to_radians()).abs() < 1e-4,
+        "attitude yaw, radians"
+    );
+    assert!(!frame.safety.fallen && !frame.safety.picked_up);
+    let imu = frame.imu.expect("gyro present once a push arrived");
+    assert!((imu.gyro[2] + 0.0034).abs() < 1e-4);
+    // DJI's gimbal yaw −179.6° (right positive) is the duck's +179.6° (left positive); pitch
+    // +35.6° up is the duck's −35.6°.
+    assert!(
+        (frame.head[2] - 179.6f64.to_radians()).abs() < 1e-6,
+        "{}",
+        frame.head[2]
+    );
+    assert!(
+        (frame.head[1] + 35.6f64.to_radians()).abs() < 1e-6,
+        "{}",
+        frame.head[1]
+    );
+
+    let t = state.telemetry_result();
+    assert_eq!((t.pushes, t.stock_pushes, t.foreign_pushes), (1, 1, 0));
+    assert_eq!(t.gimbal_deg, Some([-179.6, 35.6]));
+    assert_eq!(t.gimbal_yaw_vs_chassis_deg, Some(158.3));
+    assert_eq!(t.battery.map(|b| b.adc_value), Some(11_819));
 }
 
 /// A frame queued over the socket reaches the wire with its own sequence number, and in gimbal

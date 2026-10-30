@@ -398,3 +398,73 @@ impl Stick {
         ))
     }
 }
+
+/// The telemetry the stock firmware subscribes at boot and the motion controller keeps pushing —
+/// to `dji_hdvt_uav` while it lives, and to whoever reads the UART after it is stopped (measured
+/// 2026-10-30: 399 of these reached `s1d` with the stock dead). 161 bytes after `sub_mode` and
+/// `msg_id`; the `msg_id` is not stable across boots (0 on 2026-10-30 17:05, 1 the same afternoon),
+/// so this push is recognised by its length alone.
+///
+/// Offsets were fitted to 2362 pushes of `capture/hdvt_uav.strace` and hold on the 2026-10-29 idle
+/// capture too (`tests/stock_push.rs`): the subject formats are the SDK's (`chassis.py`,
+/// `battery.py`), the order is the stock's own request, which was never captured — it is
+/// subscribed in the first milliseconds of `dji_hdvt_uav` — and the 14 bytes at 8..22 are one
+/// subject the SDK does not name: a float that tracks the gimbal's yaw in whole degrees
+/// (0, −1, −178 against the gimbal's own `0x04/0x05` push of −179.6°) and ten zero bytes.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StockPush {
+    /// The controller's clock, milliseconds, then the same instant in microseconds.
+    pub time_ms: u32,
+    pub time_us: u32,
+    /// The gimbal's yaw in whole degrees, ground frame, as the unnamed subject carries it.
+    pub gimbal_yaw_deg: f32,
+    pub velocity: Velocity,
+    pub esc: Esc,
+    pub battery: Battery,
+    pub position: Position,
+    pub imu: Imu,
+    pub sa_status: SaStatus,
+    pub attitude: Attitude,
+}
+
+impl StockPush {
+    /// Bytes of subjects after `sub_mode` and `msg_id`.
+    pub const LEN: usize = 161;
+    const AT_GIMBAL_YAW: usize = 8;
+    const AT_VELOCITY: usize = 22;
+    const AT_ESC: usize = 46;
+    const AT_BATTERY: usize = 82;
+    const AT_POSITION: usize = 92;
+    const AT_IMU: usize = 104;
+    const AT_SA_STATUS: usize = 128;
+    const AT_ATTITUDE: usize = 132;
+    // 17 zero bytes follow the attitude: the servo subject an S1 has no servos for.
+
+    /// `data` is [`PushPeriod::data`]; `None` for any other length.
+    pub fn parse(data: &[u8]) -> Option<Self> {
+        if data.len() != Self::LEN {
+            return None;
+        }
+        let u32_at =
+            |i: usize| u32::from_le_bytes([data[i], data[i + 1], data[i + 2], data[i + 3]]);
+        let (velocity, _) = Velocity::parse(&data[Self::AT_VELOCITY..])?;
+        let (esc, _) = Esc::parse(&data[Self::AT_ESC..])?;
+        let (battery, _) = Battery::parse(&data[Self::AT_BATTERY..])?;
+        let (position, _) = Position::parse(&data[Self::AT_POSITION..])?;
+        let (imu, _) = Imu::parse(&data[Self::AT_IMU..])?;
+        let (sa_status, _) = SaStatus::parse(&data[Self::AT_SA_STATUS..])?;
+        let (attitude, _) = Attitude::parse(&data[Self::AT_ATTITUDE..])?;
+        Some(Self {
+            time_ms: u32_at(0),
+            time_us: u32_at(4),
+            gimbal_yaw_deg: f32_at(data, Self::AT_GIMBAL_YAW),
+            velocity,
+            esc,
+            battery,
+            position,
+            imu,
+            sa_status,
+            attitude,
+        })
+    }
+}

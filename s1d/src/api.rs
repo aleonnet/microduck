@@ -227,7 +227,10 @@ pub struct SubscribeParams {
 /// Everything the motion controller pushes, as last decoded.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct TelemetryResult {
+    /// Pushes decoded: ours and the stock firmware's own (see `stock_pushes`).
     pub pushes: u64,
+    /// The stock's boot-time subscription, read by its layout; what flows while ours is refused.
+    pub stock_pushes: u64,
     pub foreign_pushes: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wheels_rpm: Option<[i16; 4]>,
@@ -245,8 +248,15 @@ pub struct TelemetryResult {
     pub attitude_deg: Option<[f32; 3]>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<StatusWord>,
+    /// `[yaw, pitch]`, degrees, DJI's signs (right and up positive), ground frame.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gimbal_deg: Option<[f32; 2]>,
+    /// The gimbal's yaw relative to the chassis heading, degrees (`0x04/0x05`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gimbal_yaw_vs_chassis_deg: Option<f32>,
+    /// The gimbal's attitude quaternion `[w, x, y, z]` (`0x04/0x05`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gimbal_quat: Option<[f32; 4]>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sticks: Option<[bool; 2]>,
     #[serde(skip_serializing_if = "Option::is_none")]
