@@ -85,6 +85,8 @@ pub struct Intents {
     /// gives each its own sequence number; the caller only says what.
     frames: Mutex<VecDeque<Frame>>,
     follow: AtomicU8,
+    /// Per-wheel rpm asked directly (`s1.wheels`); when fresher than the twist it is what goes out.
+    wheels: ArcSwap<Stamped<Option<[i16; 4]>>>,
 }
 
 /// What the loop reads at the top of a tick.
@@ -96,6 +98,8 @@ pub struct Snapshot {
     pub head_age: Duration,
     pub enabled: bool,
     pub follow: FollowMode,
+    pub wheels: Option<[i16; 4]>,
+    pub wheels_age: Duration,
 }
 
 impl Default for Intents {
@@ -122,6 +126,10 @@ impl Intents {
             led: Mutex::new(None),
             frames: Mutex::new(VecDeque::new()),
             follow: AtomicU8::new(FollowMode::Free as u8),
+            wheels: ArcSwap::from_pointee(Stamped {
+                value: None,
+                at_us: 0,
+            }),
         }
     }
 
@@ -136,6 +144,13 @@ impl Intents {
         }));
     }
 
+    pub fn set_wheels(&self, rpm: [i16; 4]) {
+        self.wheels.store(Arc::new(Stamped {
+            value: Some(rpm),
+            at_us: self.now_us(),
+        }));
+    }
+
     pub fn set_head(&self, head: [f64; 4]) {
         self.head.store(Arc::new(Stamped {
             value: head,
@@ -146,6 +161,7 @@ impl Intents {
     /// Zero the velocity now. Deliberate, unlike the deadman.
     pub fn stop(&self) {
         self.set_twist([0.0; 3]);
+        self.set_wheels([0; 4]);
     }
 
     pub fn enabled(&self) -> bool {
@@ -208,6 +224,7 @@ impl Intents {
         let now = self.now_us();
         let twist = self.twist.load();
         let head = self.head.load();
+        let wheels = self.wheels.load();
         Snapshot {
             twist: twist.value,
             twist_age: Duration::from_micros(now.saturating_sub(twist.at_us)),
@@ -215,6 +232,8 @@ impl Intents {
             head_age: Duration::from_micros(now.saturating_sub(head.at_us)),
             enabled: self.enabled.load(Ordering::Relaxed),
             follow: self.follow(),
+            wheels: wheels.value,
+            wheels_age: Duration::from_micros(now.saturating_sub(wheels.at_us)),
         }
     }
 }

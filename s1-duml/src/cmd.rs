@@ -65,6 +65,7 @@ pub mod id {
     pub const GIMBAL_SUBSCRIBE_POSITION: (u8, u8) = (0x04, 0x1e);
     pub const GIMBAL_POSITION_PUSH: (u8, u8) = (0x04, 0x05);
     pub const GUN_LED: (u8, u8) = (0x3f, 0x55);
+    pub const GUN_FIRE: (u8, u8) = (0x3f, 0x51);
     pub const ARMOR_SENSITIVITY: (u8, u8) = (0x3f, 0x07);
     pub const DDS_ADD_NODE: (u8, u8) = (0x48, 0x01);
     pub const DDS_RESET_NODE: (u8, u8) = (0x48, 0x02);
@@ -558,6 +559,22 @@ pub fn armor_sensitivity(seq: u16, receiver: u8, k: f32) -> Frame {
         id::ARMOR_SENSITIVITY.0,
         id::ARMOR_SENSITIVITY.1,
         data,
+    )
+    .with_ack(Ack::WhenDone)
+}
+
+/// `0x3f/0x51`: fire the blaster `times` (1..8) shots, `ir` for the infrared beam, else gel beads
+/// (`Gun.set_cmd_fire`: `mode << 4 | count`, mode 1 single… the library addresses it to the stock
+/// controller, `receiver` here; the bench finds whether the blaster host takes it directly).
+pub fn gun_fire(seq: u16, receiver: u8, ir: bool, times: u8) -> Frame {
+    let kind: u8 = if ir { 1 } else { 0 };
+    Frame::request(
+        host::CHASSIS_SENDER,
+        receiver,
+        seq,
+        id::GUN_FIRE.0,
+        id::GUN_FIRE.1,
+        vec![((kind << 4) & 0xf0) | (times & 0x0f)],
     )
     .with_ack(Ack::WhenDone)
 }

@@ -189,3 +189,12 @@ fn system_led_solid_matches_the_oracles_rebuild_of_the_captured_layout() {
         "551a04b109180000003f3201ff00ff000000000000003f0084d3"
     );
 }
+
+#[test]
+fn gun_fire_matches_the_library() {
+    // The library's `fire_once` in mode 1 ("single"), one shot, to the stock controller.
+    assert_eq!(
+        hex(&cmd::gun_fire(0, host::BASE, true, 1)),
+        "550e0466c9090000403f51115403"
+    );
+}

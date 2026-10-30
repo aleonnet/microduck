@@ -211,3 +211,67 @@ fn queued_frames_and_gimbal_lead_reach_the_wire() {
         .count();
     assert_eq!(moving_wheels, 0, "no wheel speeds while the gimbal leads");
 }
+
+/// `s1.wheels` fresher than the twist drives the wheels directly, and the deadman zeroes it too.
+#[test]
+fn direct_wheel_speeds_reach_the_wire_and_die_with_the_deadman() {
+    let path = std::env::temp_dir().join(format!("s1d-fake-wheels-{}.bin", std::process::id()));
+    let mut body = FakeFile::create(&path).unwrap();
+    let state = Arc::new(State::new(100));
+    let intents = Arc::new(Intents::new());
+    let cfg = Config {
+        deadman: Duration::from_millis(300),
+        ..Config::default()
+    };
+    intents.set_enabled(true);
+    intents.set_wheels([100, 200, 300, 400]);
+    let (s, i) = (Arc::clone(&state), Arc::clone(&intents));
+    let handle = std::thread::spawn(move || run(&mut body, s, i, cfg));
+    std::thread::sleep(Duration::from_millis(800));
+    state.shutdown.store(true, Ordering::Relaxed);
+    handle.join().unwrap();
+    let bytes = std::fs::read(&path).unwrap();
+    let _ = std::fs::remove_file(&path);
+    let wheels: Vec<[i16; 4]> = Decoder::new()
+        .push(&bytes)
+        .iter()
+        .filter(|f| (f.cmd_set, f.cmd_id) == id::CHASSIS_WHEEL_SPEED)
+        .map(wheel_rpm)
+        .collect();
+    // On the wire the left wheels are negated: the PoC convention the robot drove straight with.
+    assert_eq!(
+        wheels[0],
+        [100, -200, -300, 400],
+        "the first ticks carry the direct rpm"
+    );
+    assert!(
+        wheels[wheels.len() - 40..].iter().all(|w| *w == [0; 4]),
+        "zero after the deadman"
+    );
+}
+
+/// An armour hit on the wire reaches `s1.event` subscribers as a notification with the plate.
+#[test]
+fn an_armour_hit_on_the_wire_becomes_an_event() {
+    let path = std::env::temp_dir().join(format!("s1d-fake-hit-{}.bin", std::process::id()));
+    let mut body = FakeFile::create(&path).unwrap();
+    // `ProtoArmorHitEvent`'s bytes: index 3 in the high nibble... as `events_parse_as_the_sdk_unpacks_them`.
+    let hit = Frame::request(3, 9, 0, 0x3f, 0x02, vec![0x31, 0x34, 0x12, 0x02, 0x00]);
+    body.inbound.extend_from_slice(&hit.encode().unwrap());
+    let state = Arc::new(State::new(100));
+    let mut events = state.event_tx.subscribe();
+    let intents = Arc::new(Intents::new());
+    let (s, i) = (Arc::clone(&state), Arc::clone(&intents));
+    let handle = std::thread::spawn(move || run(&mut body, s, i, Config::default()));
+    std::thread::sleep(Duration::from_millis(100));
+    state.shutdown.store(true, Ordering::Relaxed);
+    handle.join().unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert_eq!(state.armor_hits.load(Ordering::Relaxed), 1);
+    match events.try_recv() {
+        Ok(s1d::api::Event::ArmorHit {
+            plate, hit_kind, ..
+        }) => assert_eq!((plate, hit_kind), (3, 1)),
+        other => panic!("expected an armour hit event, got {other:?}"),
+    }
+}

@@ -51,11 +51,17 @@ pub struct State {
     pub ir_hits: AtomicU64,
     pub button_presses: AtomicU64,
     pub state_tx: tokio::sync::broadcast::Sender<proto::RobotState>,
+    /// Armour hits, infrared hits and button presses, as `s1.event` notifications to subscribers.
+    pub event_tx: tokio::sync::broadcast::Sender<crate::api::Event>,
     pub shutdown: AtomicBool,
     /// Whether the last `robot.flashlight` left the LEDs on, for `toggle`.
     pub flashlight_on: AtomicBool,
     /// The speaker, when `main` gave this daemon a sound bank; `None` on a fake body.
     pub sound: std::sync::Mutex<Option<crate::sound::Sound>>,
+    /// `--blaster-gel`: the owner's key for gel beads; without it every shot is infrared.
+    pub blaster_gel_allowed: AtomicBool,
+    /// `--volume-control`: the mixer control `s1.volume` sets, once the bench names it.
+    pub volume_control: std::sync::Mutex<Option<String>>,
 }
 
 /// Consecutive write failures that make the body unhealthy. One is a hiccup; this many in a row
@@ -69,6 +75,7 @@ pub const MIN_RATE_FRACTION: f64 = 0.9;
 impl State {
     pub fn new(hz: u32) -> Self {
         let (state_tx, _) = tokio::sync::broadcast::channel(16);
+        let (event_tx, _) = tokio::sync::broadcast::channel(64);
         Self {
             started: Instant::now(),
             period_us: 1_000_000 / u64::from(hz.max(1)),
@@ -87,9 +94,50 @@ impl State {
             ir_hits: AtomicU64::new(0),
             button_presses: AtomicU64::new(0),
             state_tx,
+            event_tx,
             shutdown: AtomicBool::new(false),
             flashlight_on: AtomicBool::new(false),
             sound: std::sync::Mutex::new(None),
+            blaster_gel_allowed: AtomicBool::new(false),
+            volume_control: std::sync::Mutex::new(None),
+        }
+    }
+
+    /// Everything the controller pushed, in the S1 list's shape.
+    pub fn telemetry_result(&self) -> crate::api::TelemetryResult {
+        let t = self.telemetry.load();
+        crate::api::TelemetryResult {
+            pushes: t.pushes,
+            foreign_pushes: t.foreign_pushes,
+            wheels_rpm: t.esc.map(|e| e.speed_rpm),
+            position_m: t.position.map(|p| [p.x, p.y, p.z]),
+            velocity_world: t.velocity.map(|v| v.world),
+            velocity_body: t.velocity.map(|v| v.body),
+            acc: t.imu.map(|i| i.acc),
+            gyro: t.imu.map(|i| i.gyro),
+            attitude_deg: t.attitude.map(|a| [a.yaw, a.pitch, a.roll]),
+            status: t.sa_status.map(|s| crate::api::StatusWord {
+                static_flag: s.static_flag,
+                up_hill: s.up_hill,
+                down_hill: s.down_hill,
+                on_slope: s.on_slope,
+                picked_up: s.is_pick_up,
+                slip: s.slip,
+                impact_x: s.impact_x,
+                impact_y: s.impact_y,
+                impact_z: s.impact_z,
+                roll_over: s.roll_over,
+            }),
+            gimbal_deg: t
+                .gimbal_pos
+                .map(|g| [f32::from(g.yaw_ddeg) / 10.0, f32::from(g.pitch_ddeg) / 10.0]),
+            sticks: t.stick.map(|s| [s.chassis, s.gimbal]),
+            battery: t.battery.map(|b| crate::api::BatteryResult {
+                percent: b.percent,
+                adc_value: b.adc_value,
+                temperature: b.temperature,
+                current_ma: b.current,
+            }),
         }
     }
 

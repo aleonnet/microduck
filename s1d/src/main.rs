@@ -59,6 +59,12 @@ struct Args {
     /// ALSA device of the speaker.
     #[arg(long, default_value = "hw:0,0")]
     audio_device: String,
+    /// The mixer control `s1.volume` sets (the bench's `amixer contents` names it).
+    #[arg(long)]
+    volume_control: Option<String>,
+    /// The owner's key for gel beads: without it `s1.blaster` fires infrared only.
+    #[arg(long)]
+    blaster_gel: bool,
 }
 
 #[tokio::main]
@@ -121,6 +127,12 @@ async fn main() -> ExitCode {
     };
 
     let state = Arc::new(State::new(args.hz));
+    state
+        .blaster_gel_allowed
+        .store(args.blaster_gel, Ordering::Relaxed);
+    if let (Some(control), Ok(mut slot)) = (&args.volume_control, state.volume_control.lock()) {
+        *slot = Some(control.clone());
+    }
     if let Some(bank) = &args.sounds {
         if let Ok(mut slot) = state.sound.lock() {
             *slot = Some(s1d::sound::Sound::new(

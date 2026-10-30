@@ -308,10 +308,24 @@ pub fn run(body: &mut dyn S1Body, state: Arc<State>, intents: Arc<Intents>, cfg:
             } else {
                 snap.twist
             };
-            match (snap.follow, cfg.twist_mode) {
+            // `s1.wheels` asked for rpm directly and more recently than any twist: send those,
+            // under the same deadman.
+            let direct = match snap.wheels {
+                Some(rpm)
+                    if snap.wheels_age <= snap.twist_age && snap.wheels_age <= cfg.deadman =>
+                {
+                    Some(rpm)
+                }
+                _ => None,
+            };
+            match (direct, snap.follow, cfg.twist_mode) {
+                (Some([fr, fl, bl, br]), _, _) => {
+                    let s = w.seq(cmd::id::CHASSIS_WHEEL_SPEED);
+                    w.send(cmd::chassis_wheel_speed(s, fr, fl, bl, br));
+                }
                 // Gimbal lead: the controller steers the chassis after the gimbal; the twist's
                 // yaw rate has no say and goes as a zero offset (`Chassis.set_follow_speed`).
-                (FollowMode::GimbalLead, _) => {
+                (None, FollowMode::GimbalLead, _) => {
                     let s = w.seq(cmd::id::CHASSIS_FOLLOW);
                     w.send(cmd::chassis_follow(
                         s,
@@ -320,13 +334,13 @@ pub fn run(body: &mut dyn S1Body, state: Arc<State>, intents: Arc<Intents>, cfg:
                         0.0,
                     ));
                 }
-                (_, TwistMode::Wheels) => {
+                (None, _, TwistMode::Wheels) => {
                     let [fr, fl, bl, br] =
                         mecanum_rpm(twist, cfg.wheel_radius_m, cfg.half_sum_lw_m);
                     let s = w.seq(cmd::id::CHASSIS_WHEEL_SPEED);
                     w.send(cmd::chassis_wheel_speed(s, fr, fl, bl, br));
                 }
-                (_, TwistMode::Speed) => {
+                (None, _, TwistMode::Speed) => {
                     let s = w.seq(cmd::id::CHASSIS_SPEED);
                     w.send(cmd::chassis_speed(
                         s,
@@ -402,6 +416,11 @@ pub fn run(body: &mut dyn S1Body, state: Arc<State>, intents: Arc<Intents>, cfg:
                         changed = true;
                     } else if let Some(hit) = ArmorHit::parse(&frame) {
                         state.armor_hits.fetch_add(1, Ordering::Relaxed);
+                        let _ = state.event_tx.send(crate::api::Event::ArmorHit {
+                            plate: hit.index,
+                            hit_kind: hit.kind,
+                            mic_value: hit.mic_value,
+                        });
                         tracing::warn!(
                             plate = hit.index,
                             kind = hit.kind,
@@ -410,6 +429,12 @@ pub fn run(body: &mut dyn S1Body, state: Arc<State>, intents: Arc<Intents>, cfg:
                         );
                     } else if let Some(ir) = IrHit::parse(&frame) {
                         state.ir_hits.fetch_add(1, Ordering::Relaxed);
+                        let _ = state.event_tx.send(crate::api::Event::IrHit {
+                            role: ir.role_id,
+                            skill: ir.skill_id,
+                            device: ir.recv_dev,
+                            pin: ir.recv_ir_pin,
+                        });
                         tracing::warn!(
                             role = ir.role_id,
                             skill = ir.skill_id,

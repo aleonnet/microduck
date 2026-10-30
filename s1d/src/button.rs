@@ -55,6 +55,9 @@ pub fn watch(path: std::path::PathBuf, state: Arc<State>) {
                 if let Some((EV_KEY, code, value)) = parse_event(&raw) {
                     if value == 1 {
                         state.button_presses.fetch_add(1, Ordering::Relaxed);
+                        let _ = state
+                            .event_tx
+                            .send(crate::api::Event::Button { code, value });
                     }
                     tracing::info!(code, value, "button");
                 }

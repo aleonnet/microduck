@@ -304,7 +304,54 @@ each sound (F8); zoom and photo (F13); change the LED effect (F10); hit the armo
 sensitivity (F11); power off by the button with the strace alive (F5). Each becomes a real fixture and
 a byte-for-byte test.
 
-## Two corrections to earlier notes
+## The S1's own list (2026-10-30)
+
+The owner's ruling: the S1 does not extend the duck's contract, it has **its own list**, served by
+`s1d` on the same socket beside the duck routes a wheeled body honours (`robot.move`, `robot.head`,
+`robot.flashlight`, `robot.sound`, `robot.state`, `robot.health`, `robot.enable`). `duck-ipc-proto`
+is untouched; the list lives in `s1d/src/api.rs` with its own `S1_API_VERSION`, `s1ctl` is its
+shell, and every call that moves something queues the frame DJI's own library would send
+(`s1d/tests/s1_api.rs` holds each to the oracle byte for byte).
+
+| route | hardware | what it carries |
+|---|---|---|
+| `s1.follow` | chassis + gimbal | `mode` free / gimbal_lead / chassis_lead; `velocity_frame` body / gimbal; `gimbal_fpv` |
+| `s1.gimbal` | gimbal | `recenter` (speeds), `speed` (°/s yaw, pitch), `stop`, `sleep`, `wake` |
+| `s1.goto` | chassis, controller's loop | x, y (m), yaw (°), speed, yaw_speed; `stop` |
+| `s1.wheels` | the four motors | rpm per wheel, under the deadman |
+| `s1.lights` | 2×8 gimbal LEDs, 4 chassis plates, blaster LED | effect, colour, times, groups; `blaster` |
+| `s1.blaster` | blaster | `times`; `gel` only with `--blaster-gel` and the tank out, else infrared |
+| `s1.armor` | the six hit detectors | sensitivity `k` |
+| `s1.pwm` | the six PWM ports | duty, hz, mask |
+| `s1.volume` | speaker | percent, through the mixer control the bench names |
+| `s1.telemetry` | motion controller pushes | wheels, odometry, velocities, IMU, attitude, status word, gimbal angle, sticks, battery |
+| `s1.subscribe` → `s1.event` | armour, infrared receiver, button | notifications: armor_hit, ir_hit, button |
+| `s1.frame` | diagnostic | one raw frame |
+| `s1.version` | — | the list's version |
+
+Still without a route, declared: `s1.power` (the battery message `dji_sys` sends — captured next
+stage 1), the camera and the microphone (V4L2 and ALSA, `mediad`'s and `pet-detect`'s mechanisms,
+stages 7, 8, 11), Wi-Fi (phase 4), the MA2100 vision coprocessor (phase 2).
+
+## What the stock binaries say about the rest of the hardware (2026-10-30)
+
+`strings` over the daemons pulled from the robot (`out/2026-10-30-poc2/stock/bin/`), read whole,
+not guessed:
+
+- **`dji_sys` owns power.** It talks to an **M0** microcontroller over a UART (reset and power
+  GPIOs, its own firmware upgrade), to an **LTC CPLD** over I²C, and to an **MA2100** — a Movidius
+  Myriad 2 vision processor — over SPI (reset GPIO). "Power off now…", "Power save now…", "Send
+  reboot request to battery", "Request power/boot %d after %d ms", "Send ota power down message
+  to 0x%x": the robot powers itself off by a message to the battery board. The frame is not in
+  any library we hold; stage 1 is repeated with `strace` on `dji_sys` while the owner powers the
+  robot off by its button, and that frame becomes `s1.power`.
+- **`dji_hdvt_uav` reads the button** (`/dev/input/event0`: "Key_code %d key pressed / key long
+  pressed", a long press triggers Wi-Fi pairing — "Wifi Pairing is triggered") and a few GPIOs
+  (`hu_gpio.c`: AMT test pins, "paring_gpio"). `s1d` already reads the same device; press and long
+  press are the two events `s1.event` reports.
+- **The vision coprocessor (MA2100)** is where DJI's detectors run (`dji_vision`); it is hardware
+  phase 2 may drive, and it is listed here so it is not forgotten.
+
 
 The lab's capture parser read the command bytes at the wrong offset, so earlier notes name
 `CmdSet 0x00/CmdId 0x3f` and friends; the real pairs (bytes 9 and 10 of the frame) are

@@ -16,6 +16,7 @@ use s1_duml::cmd::SystemLed;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 
+use crate::api::{self, S1Call};
 use crate::intents::{FollowMode, Intents};
 use crate::state::State;
 use crate::{MAX_LINE, MODEL_API, SOCKET_MODE};
@@ -122,12 +123,30 @@ pub async fn handle(
     let (read_half, mut write_half) = stream.into_split();
     let mut lines = BufReader::new(read_half).lines();
     let mut states: Option<tokio::sync::broadcast::Receiver<proto::RobotState>> = None;
+    let mut events: Option<tokio::sync::broadcast::Receiver<api::Event>> = None;
     let mut decimate = Duration::ZERO;
     let mut last_sent: Option<Instant> = None;
 
     loop {
+        // Pending events go out before the next line is awaited; the broadcast buffer holds 64.
+        if let Some(rx) = events.as_mut() {
+            while let Ok(event) = rx.try_recv() {
+                write_line(&mut write_half, &event_notification(&event)).await?;
+            }
+        }
         let line = match states.as_mut() {
-            None => lines.next_line().await?,
+            None => match events.as_mut() {
+                None => lines.next_line().await?,
+                Some(rx) => tokio::select! {
+                    line = lines.next_line() => line?,
+                    received = rx.recv() => {
+                        if let Ok(event) = received {
+                            write_line(&mut write_half, &event_notification(&event)).await?;
+                        }
+                        continue;
+                    }
+                },
+            },
             Some(rx) => tokio::select! {
                 line = lines.next_line() => line?,
                 received = rx.recv() => {
@@ -180,16 +199,19 @@ pub async fn handle(
         // `s1.*`: this body's own maintenance routes, outside the duck contract — the bench's
         // way to put any frame on the wire and to choose who leads whom. Never reached over a
         // remote transport (robotd-design.md §3.5); phase 2 maps what survives into the contract.
-        if request.method.starts_with("s1.") {
-            if let Some(id) = request.id.clone() {
-                let response = bench(
-                    intents.as_ref(),
-                    id,
-                    &request.method,
-                    request.params.as_ref(),
-                );
-                write_line(&mut write_half, &response).await?;
-            }
+        if let Some(parsed) = S1Call::parse(&request.method, request.params.as_ref()) {
+            let Some(id) = request.id.clone() else {
+                continue;
+            };
+            let response = match parsed {
+                Ok(S1Call::Subscribe(p)) => {
+                    events = p.events.then(|| state.event_tx.subscribe());
+                    dispatch_s1(&state, &intents, id, &S1Call::Subscribe(p))
+                }
+                Ok(call) => dispatch_s1(&state, &intents, id, &call),
+                Err(e) => proto::Response::err(Some(id), e),
+            };
+            write_line(&mut write_half, &response).await?;
             continue;
         }
         let call = request.as_call();
@@ -217,25 +239,34 @@ pub async fn handle(
     }
 }
 
-/// The `s1.*` routes. `s1.frame {hex}`: one DUML frame, re-sequenced by the loop, on the wire —
-/// what the bench sends straight out of `scripts/s1/dji-oracle.py`. `s1.mode {mode}`: `free`,
-/// `gimbal_lead` or `chassis_lead`, as the app's follow button; the gimbal's work mode goes out at
-/// once, the chassis side is how the twist is sent from here on.
-pub fn bench(
+/// The S1's own list, answered. Every call that moves something becomes the frame DJI's own
+/// library would send (`s1_duml::cmd`, oracle-tested), queued for the loop; the rest reads state.
+pub fn dispatch_s1(
+    state: &State,
     intents: &Intents,
     id: proto::Id,
-    method: &str,
-    params: Option<&serde_json::Value>,
+    call: &S1Call,
 ) -> proto::Response {
+    use s1_duml::cmd;
     let accepted = |id| proto::Response::ok(Some(id), &proto::IntentResult::accepted());
     let refused =
         |id, why: String| proto::Response::ok(Some(id), &proto::IntentResult::refused(&why));
-    let field = |name: &str| params.and_then(|p| p.get(name)).and_then(|v| v.as_str());
-    match method {
-        "s1.frame" => {
-            let Some(hex) = field("hex") else {
-                return refused(id, "s1.frame wants {\"hex\": \"55…\"}".to_owned());
-            };
+    // Task id for the controller's tasks (position, recentre): any byte but 0; the controller
+    // keys progress pushes by it.
+    const TASK_ID: u8 = 7;
+    match call {
+        S1Call::Version => proto::Response::ok(
+            Some(id),
+            &api::VersionResult {
+                s1_api_version: api::S1_API_VERSION,
+                daemon: env!("CARGO_PKG_VERSION").to_owned(),
+            },
+        ),
+        S1Call::Telemetry => proto::Response::ok(Some(id), &state.telemetry_result()),
+        // The connection handler switches the stream on; this is the acknowledgement.
+        S1Call::Subscribe(_) => accepted(id),
+        S1Call::Frame(p) => {
+            let hex = &p.hex;
             let bytes: Result<Vec<u8>, _> = (0..hex.len())
                 .step_by(2)
                 .map(|i| u8::from_str_radix(hex.get(i..i + 2).unwrap_or("zz"), 16))
@@ -251,31 +282,166 @@ pub fn bench(
                 Err(e) => refused(id, format!("not a frame: {e}")),
             }
         }
-        "s1.mode" => {
-            let Some(mode) = field("mode").and_then(FollowMode::parse) else {
-                return refused(
-                    id,
-                    "s1.mode wants free, gimbal_lead or chassis_lead".to_owned(),
-                );
+        S1Call::Follow(p) => {
+            let mode = match p.mode {
+                api::Follow::Free => FollowMode::Free,
+                api::Follow::GimbalLead => FollowMode::GimbalLead,
+                api::Follow::ChassisLead => FollowMode::ChassisLead,
             };
             intents.set_follow(mode);
-            // Gimbal work mode 2 follows the chassis; 0 is free. Chassis work mode 1 is what
-            // every twist form needs and what arming already sends.
-            let gimbal_mode = if mode == FollowMode::ChassisLead {
-                2
-            } else {
-                0
+            // Gimbal work mode: 2 follows the chassis, 1 holds its heading (FPV), 0 free.
+            let gimbal_mode = match (mode, p.gimbal_fpv) {
+                (FollowMode::ChassisLead, _) => 2,
+                (_, true) => 1,
+                _ => 0,
             };
-            intents.request_frame(s1_duml::cmd::gimbal_workmode(0, gimbal_mode));
+            intents.request_frame(cmd::gimbal_workmode(0, gimbal_mode));
+            let frame = match p.velocity_frame {
+                api::VelocityFrame::Body => 1,
+                api::VelocityFrame::Gimbal => 2,
+            };
+            intents.request_frame(cmd::chassis_stick_overlay(0, frame));
             accepted(id)
         }
-        other => proto::Response::err(
-            Some(id),
-            proto::Error::new(
-                proto::code::METHOD_NOT_FOUND,
-                format!("{other} is not an s1 route (s1.frame, s1.mode)"),
-            ),
-        ),
+        S1Call::Gimbal(p) => {
+            let clamp_speed = |v: u16| v.clamp(5, 540);
+            match *p {
+                api::GimbalAction::Recenter {
+                    yaw_speed,
+                    pitch_speed,
+                } => intents.request_frame(cmd::gimbal_recenter(
+                    0,
+                    TASK_ID,
+                    clamp_speed(yaw_speed),
+                    clamp_speed(pitch_speed),
+                )),
+                api::GimbalAction::Speed { yaw, pitch } => {
+                    let ddeg = |v: f64| (v.clamp(-540.0, 540.0) * 10.0).round() as i16;
+                    intents.request_frame(cmd::gimbal_speed(0, ddeg(yaw), ddeg(pitch), 0xdc));
+                }
+                api::GimbalAction::Stop => intents.request_frame(cmd::gimbal_speed(0, 0, 0, 0)),
+                api::GimbalAction::Sleep => {
+                    intents.request_frame(cmd::gimbal_suspend_resume(0, true))
+                }
+                api::GimbalAction::Wake => {
+                    intents.request_frame(cmd::gimbal_suspend_resume(0, false))
+                }
+            }
+            accepted(id)
+        }
+        S1Call::Goto(p) => {
+            if p.stop {
+                intents.request_frame(cmd::chassis_position_stop(0, TASK_ID));
+                return accepted(id);
+            }
+            let cm = |m: f64| (m.clamp(-5.0, 5.0) * 100.0).round() as i16;
+            // DJI's library negates the yaw it is given (`update_position`: `-yaw_angle`), so a
+            // positive yaw here is counter-clockwise, as `robot.move`'s is.
+            let yaw_ddeg = (-p.yaw.clamp(-1800.0, 1800.0) * 10.0).round() as i16;
+            let vel = (p.speed.clamp(0.1, 2.5) * 100.0).round() as u8;
+            let omega = (p.yaw_speed.clamp(10.0, 540.0) * 10.0).round() as u16;
+            intents.request_frame(cmd::chassis_position(
+                0,
+                TASK_ID,
+                0,
+                cm(p.x),
+                cm(p.y),
+                yaw_ddeg,
+                vel,
+                omega,
+            ));
+            accepted(id)
+        }
+        S1Call::Lights(p) => {
+            if p.blaster {
+                let (ctrl, mode) = match p.effect {
+                    api::LightEffect::Off => (0, 0),
+                    api::LightEffect::Solid => (1, 0),
+                    api::LightEffect::Breath => (1, 1),
+                    api::LightEffect::Flash => (1, 2),
+                    api::LightEffect::Marquee => (1, 3),
+                };
+                intents.request_frame(cmd::gun_led(0, ctrl, mode, p.r, p.g, p.b, 1, p.t1, p.t2));
+            } else {
+                intents.request_led(cmd::SystemLed {
+                    effect: p.effect as u8,
+                    led_mask: 0xff,
+                    r: p.r,
+                    g: p.g,
+                    b: p.b,
+                    repeat: 0,
+                    t1: p.t1,
+                    t2: p.t2,
+                    comp_mask: p.groups & 0x3f,
+                });
+            }
+            accepted(id)
+        }
+        S1Call::Armor(p) => {
+            if !(0.1..=5.0).contains(&p.k) {
+                return refused(id, "k must be within 0.1..=5".to_owned());
+            }
+            intents.request_frame(cmd::armor_sensitivity(0, cmd::host::LED, p.k));
+            accepted(id)
+        }
+        S1Call::Pwm(p) => {
+            if p.duty.is_none() && p.hz.is_none() {
+                return refused(id, "give duty (per mille) and/or hz".to_owned());
+            }
+            if let Some(hz) = p.hz {
+                intents.request_frame(cmd::chassis_pwm_freq(0, p.mask & 0x3f, [hz.min(50_000); 6]));
+            }
+            if let Some(duty) = p.duty {
+                intents.request_frame(cmd::chassis_pwm_value(
+                    0,
+                    p.mask & 0x3f,
+                    [duty.min(1000); 6],
+                ));
+            }
+            accepted(id)
+        }
+        S1Call::Wheels(p) => {
+            if p.rpm.iter().any(|r| r.abs() > 1000) {
+                return refused(id, "rpm is within ±1000".to_owned());
+            }
+            intents.set_wheels(p.rpm);
+            accepted(id)
+        }
+        S1Call::Volume(p) => {
+            let control = state.volume_control.lock().ok().and_then(|c| c.clone());
+            let Some(control) = control else {
+                return refused(
+                    id,
+                    "no mixer control named yet (--volume-control, from the bench's amixer dump)"
+                        .to_owned(),
+                );
+            };
+            let percent = p.percent.min(100);
+            match std::process::Command::new("amixer")
+                .args(["-q", "-c", "0", "sset", &control, &format!("{percent}%")])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+            {
+                Ok(st) if st.success() => accepted(id),
+                Ok(st) => refused(id, format!("amixer exited with {st}")),
+                Err(e) => refused(id, format!("amixer: {e}")),
+            }
+        }
+        S1Call::Blaster(p) => {
+            if p.gel && !state.blaster_gel_allowed.load(Ordering::Relaxed) {
+                return refused(
+                    id,
+                    "gel beads need the daemon's --blaster-gel key and the tank out".to_owned(),
+                );
+            }
+            if !(1..=8).contains(&p.times) {
+                return refused(id, "times is 1..=8".to_owned());
+            }
+            intents.request_frame(cmd::gun_fire(0, cmd::host::GUN, !p.gel, p.times));
+            accepted(id)
+        }
     }
 }
 
@@ -514,6 +680,16 @@ pub fn dispatch(
                 format!("{} is not served by s1d", other.method()),
             ),
         ),
+    }
+}
+
+/// `s1.event` as a notification: no id, the event as params.
+pub fn event_notification(event: &api::Event) -> proto::Request {
+    proto::Request {
+        jsonrpc: "2.0".to_owned(),
+        id: None,
+        method: api::method::EVENT.to_owned(),
+        params: serde_json::to_value(event).ok(),
     }
 }
 
