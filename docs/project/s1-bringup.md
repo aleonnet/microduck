@@ -36,8 +36,8 @@ stages 5, 6 and 8.
 
 | # | stage | what it proves | status |
 |---|---|---|---|
-| 1 | `capture` | cpuinfo, partitions, mounts, `getenforce`, the UART's baud (`stty`), and `strace` of `dji_hdvt_uav` and `dji_camera` while the app is used: LED effects, armour hits, button, audio and camera init, `top` during person recognition | pending |
-| 2 | `backup` | every partition dumped, SHA on robot == SHA on Mac | pending |
+| 1 | `capture` | cpuinfo, partitions, mounts, `getenforce`, the UART's baud (`stty`), and `strace` of `dji_hdvt_uav` and `dji_camera` while the app is used: LED effects, armour hits, button, audio and camera init, `top` during person recognition | **done 2026-10-30** (below) |
+| 2 | `backup` | every partition dumped, SHA on robot == SHA on Mac | **done 2026-10-30** (below): 14 on the card, 11 pulled, SHA equal |
 | 3 | `exec` | a binary of ours runs on the robot (`/data`, or `setenforce 0` by the owner, or the microSD); the chroot answers `uname -a` and `ldd --version` | pending — **gates the port** |
 | 4 | `stop` | `hdvt_uav` and `monitor` stopped; nobody holds `ttyS3` | pending |
 | 5 | `drive` | `s1d` + `netpadd` + `robotctl health` in the chroot; `duckctl udp-pad` on the Mac drives wheels and gimbal; DDS telemetry in `robotctl monitor` | pending — **gates the port** |
@@ -148,6 +148,36 @@ Measured:
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/capture/ps.txt sha256=ba896e5a5f6f9f7cdc56ab5a13268d9db9814c99abdd1ceda37e0b76228a2acd
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/capture/top_before.txt sha256=cb3a80069c80834eeb59a86b52578e9880610295104c98bbc4d345644346da2b
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/capture/top_vision.txt sha256=abda4d6fb67b6d63551a1c42c119e8f08114ed0820f9f6fc633889d521ded8c7
+
+## Bench, 2026-10-30 morning — stage 2 (backup)
+
+`bench.sh backup` with the staging on the card (`S1_STAGE=/sdcard/bk`): all **14 partitions of the
+eMMC** dumped by `dd` between 09:00 and 09:11 (3.75 GB on the vfat card, `busybox ls -l /sdcard/bk`),
+`sha256sum` run on the robot over all 14 (`backup/SHA256SUMS.robot`), then the images that fit
+pulled to the Mac at ~1.4 MB/s and hashed again (`backup/SHA256SUMS`): **the 11 pulled images hash
+the same on both sides** (`bench.sh` prints `SHA robot == Mac (pulled set)`; 452 MB on the Mac).
+`blackbox` (1.9 GB), `userdata` (1.1 GB) and `cache` (256 MB) stay on the card with their robot-side
+hash on record; they are pulled later in the background, not on the bench's clock.
+
+Observed, not interpreted: `ddr`, `gpt` and `panic` are 4 MB each and read back as all zeros
+(the three share one SHA, `bb9f8df6…`). Restoring them from these images changes nothing; where the
+controller keeps its partition table is not settled by this dump. Restoring any other partition is
+`dd` of the image from a root shell; the images of `userdata`, `cache` and `blackbox` are live
+snapshots of a running system, not a quiesced one.
+
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/backup/SHA256SUMS sha256=d8987f72046b0381f87cdcb3df7d86518e5d2d336b072aee808c5d760a60c0ae
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/backup/SHA256SUMS.robot sha256=068c0a308fbc2b012ab66ea8eb2ca004b21080cf044561a3138ece4336c05db3
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/backup/bk/amt.img sha256=568feb8315a9160bd7e4da5ba2892d281aaca85dac78f207d5970362f4089cc0
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/backup/bk/ddr.img sha256=bb9f8df61474d25e71fa00722318cd387396ca1736605e1248821cc0de3d3af8
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/backup/bk/env.img sha256=e79002df36d720eb8ed90b352db184e0f824b3d3bfc0ff8aac728e4b4eb91c64
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/backup/bk/factory.img sha256=8e92781d32dba7e4d3e1a5151bf85ee9b19b03b45d43e889931d805171617def
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/backup/bk/factory_out.img sha256=0382c952a2e9fcba6f2230617772f886c0c91fdc11a342fd71cb39c38bedbd62
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/backup/bk/gpt.img sha256=bb9f8df61474d25e71fa00722318cd387396ca1736605e1248821cc0de3d3af8
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/backup/bk/normal.img sha256=0398e49b594bf290daa473551dd387422d374959684daaf97fce971203c0d274
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/backup/bk/panic.img sha256=bb9f8df61474d25e71fa00722318cd387396ca1736605e1248821cc0de3d3af8
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/backup/bk/recovery.img sha256=38737e740abb46ae49848aa6928957d69f14f0f41c3a6820b8735aa3180c952d
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/backup/bk/system.img sha256=10cc3cf264cc013d1c5bf2189a2aa86bfe3c58f522d97c4687480cb7232d5c02
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/backup/bk/vendor.img sha256=73faeae59cae04b3ab169a13e4110395ddc0cf20cc5fd42ad0003da84fbc7123
 
 ## Two corrections to earlier notes
 
