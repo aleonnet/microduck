@@ -12,12 +12,14 @@
 #        items | events | camera | audio | app | restore | frames | infer | e2e | verify-record <record.md>
 # Env:   S1_HOST (default 192.168.1.236:5555) · S1_OUT (default ~/Development/RoboMaster-S1/out/<date>-poc2)
 #        S1_CHROOT (default /data/debian) · S1_BAUD (from capture) · S1_ROOTFS (tar from build-rootfs.sh)
-#        S1_UDP (the robot's netpadd, default <host without port>:4210)
+#        S1_UDP (the robot's netpadd, default <host without port>:4210) · S1_TCP (the forwarded socket,
+#        default 127.0.0.1:9000) · S1_VOLUME_CONTROL (the speaker's mixer control, from stage 8's dump)
 set -euo pipefail
 cd "$(dirname "$0")/../.."   # `cargo s1` (the alias in .cargo/config.toml) and target/ are the repo's
 
 HOST="${S1_HOST:-192.168.1.236:5555}"
 UDP="${S1_UDP:-${HOST%%:*}:4210}"
+TCP="${S1_TCP:-127.0.0.1:9000}"
 OUT="${S1_OUT:-$HOME/Development/RoboMaster-S1/out/$(date +%Y-%m-%d)-poc2}"
 CHROOT="${S1_CHROOT:-/data/debian}"
 BB=/system/xbin/busybox
@@ -65,8 +67,8 @@ need_robot() { $A get-state >/dev/null 2>&1 || { echo "no adb at $HOST; enable r
 # adb forward, the pad over UDP. Extra arguments narrow the items (`F2 F10 pad`).
 e2e_robot() { local log="$1"; shift
     cargo build -p s1d --bin s1-e2e >/dev/null
-    if [ "$#" -gt 0 ]; then target/debug/s1-e2e robot --tcp 127.0.0.1:9000 --udp "$UDP" --log "$log" --only "$@"
-    else target/debug/s1-e2e robot --tcp 127.0.0.1:9000 --udp "$UDP" --log "$log"; fi
+    if [ "$#" -gt 0 ]; then target/debug/s1-e2e robot --tcp "$TCP" --udp "$UDP" --log "$log" --only "$@"
+    else target/debug/s1-e2e robot --tcp "$TCP" --udp "$UDP" --log "$log"; fi
 }
 art() { # art <file>: print the record line for an artefact
     local f="$1"; [ -f "$f" ] || { say "MISSING artefact $f"; return 1; }
@@ -150,17 +152,19 @@ case "$stage" in
     # `setsid` + `nohup` + stdin from /dev/null: measured on 2026-10-30, `nohup … &` alone left an
     # empty log — the daemon died with the adb shell that started it. `setsid` alone still lost the
     # race with the pty closing (netpadd, same day); the `sleep 1` inside the shell is what settles it.
-    sh_robot "($BB setsid $BB nohup $CHROOT_ENV /opt/robot/bin/s1d --port /dev/ttyS3 --baud $S1_BAUD --sounds /opt/robot/sounds ${S1_ARGS:-} </dev/null >/data/s1d.log 2>&1 &); $BB sleep 1"
+    # `--volume-control` only once stage 8's `amixer contents` has named the speaker's control:
+    # until then `s1.volume` is refused by name and the e2e item says so.
+    sh_robot "($BB setsid $BB nohup $CHROOT_ENV /opt/robot/bin/s1d --port /dev/ttyS3 --baud $S1_BAUD --sounds /opt/robot/sounds ${S1_VOLUME_CONTROL:+--volume-control $S1_VOLUME_CONTROL} ${S1_ARGS:-} </dev/null >/data/s1d.log 2>&1 &); $BB sleep 1"
     sleep 2
     sh_robot "($BB setsid $BB nohup $CHROOT_ENV /opt/robot/bin/netpadd </dev/null >/data/netpadd.log 2>&1 &); $BB sleep 1"; sleep 1
     # `robotctl health` exits non-zero on an unhealthy verdict; that is a result to record, not a
     # reason to stop the stage before the logs are pulled.
-    sh_robot "$BB chroot $CHROOT /opt/robot/bin/robotctl health --json" > "$D/health.json" 2>&1 || say "robotctl health rc=$? — the verdict is in health.json"
+    sh_robot "$CHROOT_ENV /opt/robot/bin/robotctl health --json" > "$D/health.json" 2>&1 || say "robotctl health rc=$? — the verdict is in health.json"
     cat "$D/health.json"
     # The Mac plays the pad and the shells: the pad as `duckctl udp-pad` sends it, straight to the
     # robot's netpadd over Wi-Fi; the socket through an adb forward (measured 2026-10-30:
     # `localfilesystem:` forwards to the chroot's unix socket).
-    $A forward tcp:9000 localfilesystem:$CHROOT/run/robotd.sock >/dev/null
+    $A forward "tcp:${TCP##*:}" localfilesystem:$CHROOT/run/robotd.sock >/dev/null
     say "WHEELS OFF THE GROUND: every item now, in the fake run's order; answer each prompt"
     e2e_robot "$D/e2e.log" "$@" | tee "$D/e2e_console.txt" || say "s1-e2e rc=$? — the verdict per item is in e2e_console.txt"
     say "collecting robot.state for 10 s"
@@ -170,7 +174,7 @@ case "$stage" in
 
   items)
     need_robot; D=$(dir items)
-    $A forward tcp:9000 localfilesystem:$CHROOT/run/robotd.sock >/dev/null
+    $A forward "tcp:${TCP##*:}" localfilesystem:$CHROOT/run/robotd.sock >/dev/null
     say "the body's items through the daemons already up; WHEELS OFF THE GROUND; answer each prompt"
     e2e_robot "$D/e2e.log" "$@" | tee "$D/e2e_console.txt" || say "s1-e2e rc=$? — the verdict per item is in e2e_console.txt"
     $A pull /data/s1d.log "$D/s1d.log" >/dev/null
@@ -180,13 +184,14 @@ case "$stage" in
     D=$(dir e2e)
     say "no robot: s1d --fake, netpadd, robotctl and s1ctl on this Mac, every item judged on the wire"
     cargo build -p s1d -p netpadd -p robotctl >/dev/null
-    target/debug/s1-e2e fake --dir "$D/work" --keep "$@" | tee "$D/e2e_fake.txt" || say "s1-e2e rc=$? — the verdict per item is in e2e_fake.txt"
+    target/debug/s1-e2e fake --dir "$D/work" --keep "$@" 2>&1 | tee "$D/e2e_fake.txt" || say "s1-e2e rc=$? — the verdict per item is in e2e_fake.txt"
+    grep -q "items passed" "$D/e2e_fake.txt" || { say "s1-e2e did not run to its table: $(tail -3 "$D/e2e_fake.txt")"; exit 1; }
     art "$D/e2e_fake.txt"; art "$D/work/report.txt"; art "$D/work/wire.bin" ;;
 
   events)
     need_robot; D=$(dir events)
     for c in "on --color red" "on --color green" "on --color blue" "off"; do sh_robot "$CHROOT_ENV /opt/robot/bin/robotctl flashlight $c"; sleep 1; done | tee "$D/led_effects.txt"
-    $A forward tcp:9000 localfilesystem:$CHROOT/run/robotd.sock >/dev/null
+    $A forward "tcp:${TCP##*:}" localfilesystem:$CHROOT/run/robotd.sock >/dev/null
     e2e_robot "$D/e2e.log" F10 F9 events | tee -a "$D/led_effects.txt" || true
     say "now the raw button device for 15 s: PRESS the button"
     sh_robot "$BB timeout -t 15 $BB cat /dev/input/event0 | $BB xxd" > "$D/event0.hex" 2>&1 || true
@@ -221,6 +226,9 @@ case "$stage" in
 
   restore)
     need_robot; D=$(dir restore)
+    # The forward of stages 5 and 6 is undone here, so a later run without a robot (the
+    # self-test, `s1-e2e robot` by mistake) finds nothing listening on the Mac's port.
+    $A forward --remove "tcp:${TCP##*:}" >/dev/null 2>&1 || true
     sh_robot "reboot" || true; say "rebooting; re-enable root adb from the app's Lab, then press Enter"; read -r _
     need_robot; sh_robot "$BB pidof dji_hdvt_uav && echo hdvt_uav_alive; getprop | $BB grep init.svc.dji" | tee "$D/after.txt"; art "$D/after.txt" ;;
 

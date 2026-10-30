@@ -457,7 +457,7 @@ pub fn apply_notification(state: &State, intents: &Intents, call: &proto::Call) 
         && let Ok(mut slot) = state.sound.lock()
         && let Some(sound) = slot.as_mut()
     {
-        if let Err(why) = sound.play(p.tag) {
+        if let Err(why) = sound.play_held(p.tag, p.hold) {
             tracing::debug!(why, "sound notification not played");
         }
         return true;
@@ -635,7 +635,7 @@ pub fn dispatch(
         proto::Call::RobotSound(p) => match state.sound.lock() {
             Ok(mut slot) => match slot.as_mut() {
                 None => refused(id, "no sound bank on this daemon (--sounds)"),
-                Some(sound) => match sound.play(p.tag) {
+                Some(sound) => match sound.play_held(p.tag, p.hold) {
                     Ok(_) => accepted(id),
                     Err(why) => refused(id, &why),
                 },

@@ -451,7 +451,7 @@ pub fn run(body: &mut dyn S1Body, state: Arc<State>, intents: Arc<Intents>, cfg:
                         tracing::info!(
                             cmd_id = frame.cmd_id,
                             data = %hex(&frame.data),
-                            meaning = dds_retcode_meaning(frame.data.first().copied()),
+                            meaning = dds_retcode_meaning(frame.cmd_id, frame.data.first().copied()),
                             "dds answer"
                         );
                     } else {
@@ -507,16 +507,17 @@ pub fn run(body: &mut dyn S1Body, state: Arc<State>, intents: Arc<Intents>, cfg:
     tracing::info!("control loop stopped; wheels zeroed");
 }
 
-/// What the first byte of a DDS answer means, as far as DJI's SDK documents it
-/// (`ProtoSubscribeAddNode.unpack_resp`: `0` and `0x50` are the two it accepts, `0x50` being
-/// "already registered"). Every other value is a refusal the SDK only logs by number — the bench
-/// collects them (2026-10-30: `0x02` to add-node, `0x0f` and `0x21` to subscribe).
-pub fn dds_retcode_meaning(retcode: Option<u8>) -> &'static str {
-    match retcode {
-        Some(0x00) => "accepted",
-        Some(0x50) => "already registered (accepted by the SDK)",
-        Some(_) => "refused (undocumented code)",
-        None => "empty answer",
+/// What the first byte of a DDS answer means, as far as DJI's SDK documents it: `0` is accepted
+/// on every request; `0x50` only on add-node (`ProtoSubscribeAddNode.unpack_resp` takes it as
+/// "already registered"; the other `unpack_resp`s accept `0` alone). Every other value is a
+/// refusal the SDK only logs by number — the bench collects them (2026-10-30: `0x02` to add-node,
+/// `0x0f` and `0x21` to subscribe).
+pub fn dds_retcode_meaning(cmd_id: u8, retcode: Option<u8>) -> &'static str {
+    match (cmd_id, retcode) {
+        (_, Some(0x00)) => "accepted",
+        (0x01, Some(0x50)) => "already registered (accepted by the SDK for add-node)",
+        (_, Some(_)) => "refused (undocumented code)",
+        (_, None) => "empty answer",
     }
 }
 
@@ -596,6 +597,16 @@ mod tests {
             t.esc.is_some() && t.sa_status.is_some() && t.gimbal_pos.is_some(),
             "every subject lands in one push"
         );
+    }
+
+    /// `0x50` is "already there" only where the SDK reads it so, on add-node.
+    #[test]
+    fn dds_answer_codes_are_named_per_request() {
+        assert_eq!(dds_retcode_meaning(0x03, Some(0)), "accepted");
+        assert!(dds_retcode_meaning(0x01, Some(0x50)).starts_with("already registered"));
+        assert!(dds_retcode_meaning(0x03, Some(0x50)).starts_with("refused"));
+        assert!(dds_retcode_meaning(0x01, Some(0x02)).starts_with("refused"));
+        assert_eq!(dds_retcode_meaning(0x02, None), "empty answer");
     }
 
     #[test]

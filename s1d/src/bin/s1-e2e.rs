@@ -12,9 +12,12 @@
 //!   library sends (`s1_duml::cmd`, oracle-tested) or with the real frames captured off the
 //!   robot. This is the pre-test the bench runs before the robot is plugged in.
 //! - **`robot`** — the robot's `s1d` and `netpadd` in the chroot, reached through
-//!   `adb forward tcp:9000 … /run/robotd.sock` (`--tcp`) and the robot's own UDP port (`--udp`).
-//!   The same items, the same order; the proof is the daemon's answer, the telemetry it reports
-//!   and the person at the robot saying what moved (the witness, asked on a terminal).
+//!   `adb forward tcp:9000 … /run/robotd.sock` (`--tcp`, the real `s1ctl --tcp` for the S1
+//!   list) and the robot's own UDP port (`--udp`). The same items, the same order, the same
+//!   calls — minus the two that only a wire file can answer (the subscription bytes, the wire's
+//!   integrity), which `items_are_the_same_program` holds — and the proof is the daemon's answer,
+//!   the telemetry it reports and the person at the robot saying what moved (the witness, asked
+//!   on a terminal: Enter or `y` passes, anything else fails and is recorded).
 //!
 //! Exit status is the verdict: 0 when every item passed, 1 otherwise. The table it prints is what
 //! the record `docs/project/s1-bringup.md` quotes.
@@ -137,6 +140,9 @@ fn wanted(only: &[String], item: &str) -> bool {
     only.is_empty() || only.iter().any(|w| item.starts_with(w.as_str()))
 }
 
+/// The two items only a wire file can answer; `robot` mode has every other one.
+const WIRE_ONLY: [&str; 2] = ["F18 telemetry subscription on the wire", "wire integrity"];
+
 // ---------------------------------------------------------------------------------------------
 // The socket client: NDJSON, one request, one answer — what robotctl and s1ctl do.
 
@@ -148,6 +154,8 @@ struct Client {
     writer: Box<dyn Stream>,
     next_id: u64,
     log: Option<std::fs::File>,
+    /// Round trips of every call, ms — what `bench-drive.py` measured on stage 5.
+    rtt_ms: Vec<f64>,
 }
 
 impl Client {
@@ -171,6 +179,7 @@ impl Client {
             writer,
             next_id: 1,
             log: None,
+            rtt_ms: Vec::new(),
         }
     }
 
@@ -179,6 +188,7 @@ impl Client {
         let id = self.next_id;
         self.next_id += 1;
         let req = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
+        let t0 = Instant::now();
         writeln!(self.writer, "{req}")?;
         self.writer.flush()?;
         let mut line = String::new();
@@ -191,8 +201,15 @@ impl Client {
             if v.get("id").and_then(Value::as_u64) != Some(id) {
                 continue; // a notification (state, event) on this connection
             }
+            let rtt = t0.elapsed().as_secs_f64() * 1e3;
+            self.rtt_ms.push(rtt);
             if let Some(log) = self.log.as_mut() {
-                let _ = writeln!(log, "{} {method} {params} -> {}", stamp(), line.trim());
+                let _ = writeln!(
+                    log,
+                    "{} {method} {params} -> {} rtt_ms={rtt:.1}",
+                    stamp(),
+                    line.trim()
+                );
             }
             return Ok(v.get("result").cloned().unwrap_or(v));
         }
@@ -222,6 +239,22 @@ impl Client {
             }
         }
         out
+    }
+
+    /// `min · p50 · max` of the round trips so far.
+    fn rtt_summary(&self) -> String {
+        let mut v = self.rtt_ms.clone();
+        if v.is_empty() {
+            return "no calls".to_owned();
+        }
+        v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        format!(
+            "socket round trip over {} calls: min {:.1} ms · p50 {:.1} ms · max {:.1} ms",
+            v.len(),
+            v[0],
+            v[v.len() / 2],
+            v[v.len() - 1]
+        )
     }
 }
 
@@ -300,7 +333,38 @@ impl Pad {
 }
 
 // ---------------------------------------------------------------------------------------------
-// The items, shared by both settings: what to do, and what a person must see on the robot.
+// The S1 list from a shell: the real `s1ctl`, on the unix socket or through the forward.
+
+fn s1ctl_at(bin: &Path, target: &[&str], args: &[&str]) -> (bool, String) {
+    let out = Command::new(bin.join("s1ctl"))
+        .args(target)
+        .args(args)
+        .env("RUST_LOG", "warn")
+        .output();
+    match out {
+        Ok(o) => {
+            let text = format!(
+                "{}{}",
+                String::from_utf8_lossy(&o.stdout),
+                String::from_utf8_lossy(&o.stderr)
+            );
+            let v: Value = serde_json::from_str(text.trim()).unwrap_or(Value::Null);
+            // A call with an `accepted` member passes only when it is true; version and
+            // telemetry carry none and pass on a `result`.
+            let ok = o.status.success()
+                && v.get("result").is_some()
+                && v["result"]
+                    .get("accepted")
+                    .map(|a| a == &Value::Bool(true))
+                    .unwrap_or(true);
+            (ok, text.trim().to_owned())
+        }
+        Err(e) => (false, e.to_string()),
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Frames: what the loop writes, and what the body is fed.
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
@@ -316,6 +380,13 @@ fn wire_hex(f: &Frame) -> String {
 fn wheel_rpm(f: &Frame) -> [i16; 4] {
     let h = |i: usize| i16::from_le_bytes([f.data[i], f.data[i + 1]]);
     [h(0), h(2), h(4), h(6)]
+}
+
+/// Yaw and pitch of a gimbal-angle frame, tenths of a degree (`cmd::gimbal_angles`' layout:
+/// three fixed bytes, then yaw, roll, pitch as `i16`).
+fn gimbal_ddeg(f: &Frame) -> (i16, i16) {
+    let h = |i: usize| i16::from_le_bytes([f.data[i], f.data[i + 1]]);
+    (h(3), h(7))
 }
 
 /// A telemetry push of ours: battery 77 %, gimbal yaw +90.0° pitch −15.0°, picked up, x = 1.5 m,
@@ -387,8 +458,13 @@ mod fake {
             let _ = self.netpadd.wait();
             let _ = self.s1d.kill();
             let _ = self.s1d.wait();
+            let _ = std::fs::remove_file(&self.socket);
         }
     }
+
+    /// The `[pad_roller]` of `deploy/s1/robotd.toml`, verbatim: a mecanum base strafes, so the
+    /// prototype roller's "no strafe" default must not be what the pad test runs under.
+    const PAD_ROLLER: &str = "[pad_roller]\nvx_min = -0.5\nvx_max = 0.6\nvy_min = -0.5\nvy_max = 0.5\nvyaw_min = -1.0\nvyaw_max = 1.0\n";
 
     /// 44-byte RIFF header and no samples: enough for `aplay`'s stand-in, which only records
     /// which file it was asked to play.
@@ -409,10 +485,6 @@ mod fake {
         std::fs::write(path, b)
     }
 
-    /// The `[pad_roller]` of `deploy/s1/robotd.toml`, verbatim: a mecanum base strafes, so the
-    /// prototype roller's "no strafe" default must not be what the pad test runs under.
-    const PAD_ROLLER: &str = "[pad_roller]\nvx_min = -0.5\nvx_max = 0.6\nvy_min = -0.5\nvy_max = 0.5\nvyaw_min = -1.0\nvyaw_max = 1.0\n";
-
     fn free_udp_port() -> std::io::Result<u16> {
         Ok(UdpSocket::bind("127.0.0.1:0")?.local_addr()?.port())
     }
@@ -431,7 +503,8 @@ mod fake {
                 ));
             }
         }
-        // The speaker and the mixer, stood in for: each records its argument line.
+        // The speaker and the mixer, stood in for: each records its argument line. The wheee's
+        // stand-in keeps "playing" so a held ride can be told from a restarted one.
         let fakebin = dir.join("bin");
         std::fs::create_dir_all(&fakebin).map_err(|e| e.to_string())?;
         let tool_log = dir.join("tools.log");
@@ -440,7 +513,7 @@ mod fake {
             std::fs::write(
                 &path,
                 format!(
-                    "#!/bin/sh\necho \"{tool} $*\" >> \"{}\"\n",
+                    "#!/bin/sh\necho \"{tool} $*\" >> \"{}\"\ncase \"$*\" in *wheee.wav) exec sleep 30;; esac\n",
                     tool_log.display()
                 ),
             )
@@ -455,6 +528,9 @@ mod fake {
             write_wav(&bank.join(format!("{tag}.wav"))).map_err(|e| e.to_string())?;
         }
         let button_fifo = dir.join("button.fifo");
+        // A directory reused across runs (`--dir`) still holds the last run's FIFO; `mkfifo`
+        // refuses to make it twice (measured: an empty `bench.sh e2e` artefact, 2026-10-30).
+        let _ = std::fs::remove_file(&button_fifo);
         let st = Command::new("mkfifo")
             .arg(&button_fifo)
             .status()
@@ -472,7 +548,9 @@ mod fake {
         )
         .map_err(|e| e.to_string())?;
 
-        let socket = dir.join("robotd.sock");
+        // The socket's path stays short whatever `--dir` is: a unix socket path is limited to
+        // 104 bytes on macOS (`SUN_LEN`), and the lab's directories are longer than that.
+        let socket = std::env::temp_dir().join(format!("s1-e2e-{}.sock", std::process::id()));
         let wire = dir.join("wire.bin");
         let inbound = dir.join("inbound.bin");
         let s1d_log = dir.join("s1d.log");
@@ -607,17 +685,25 @@ mod fake {
     }
 
     fn s1ctl(d: &Daemons, args: &[&str]) -> (bool, String) {
-        let mut full = vec!["--socket", d.socket.to_str().unwrap()];
-        full.extend_from_slice(args);
-        let (ok, out) = run_bin(d, "s1ctl", &full);
-        let v: Value = serde_json::from_str(out.trim()).unwrap_or(Value::Null);
-        (ok && accepted(&v["result"]), out.trim().to_owned())
+        s1ctl_at(&d.bin, &["--socket", d.socket.to_str().unwrap()], args)
     }
 
     fn robotctl(d: &Daemons, args: &[&str]) -> (bool, String) {
         let mut full = vec!["--robot-socket", d.socket.to_str().unwrap()];
         full.extend_from_slice(args);
         run_bin(d, "robotctl", &full)
+    }
+
+    /// Lines of the tool log written since `from`.
+    fn tools_since(d: &Daemons, from: usize) -> String {
+        let log = std::fs::read_to_string(&d.tool_log).unwrap_or_default();
+        log[from.min(log.len())..].to_owned()
+    }
+
+    fn tools_len(d: &Daemons) -> usize {
+        std::fs::read_to_string(&d.tool_log)
+            .map(|s| s.len())
+            .unwrap_or(0)
     }
 
     pub fn run(keep: bool, dir: Option<PathBuf>, only: &[String]) -> Result<bool, String> {
@@ -633,8 +719,8 @@ mod fake {
         let mut client = Client::unix(&d.socket).map_err(|e| e.to_string())?;
         let mut pad = Pad::new(&format!("127.0.0.1:{}", d.pad_port)).map_err(|e| e.to_string())?;
 
-        // A closure-free item runner: name, what a person sees on the robot, and a judge over
-        // the frames written during the item.
+        // Name, what a person sees on the robot, the act (its early exits are the item's
+        // failures), and a judge over the frames written during the item.
         macro_rules! item {
             ($name:expr, $expected:expr, $act:block, $judge:expr) => {
                 if wanted(only, $name) {
@@ -654,6 +740,8 @@ mod fake {
                                 ok,
                                 if note.is_empty() {
                                     proof
+                                } else if proof.is_empty() {
+                                    note
                                 } else {
                                     format!("{note}; {proof}")
                                 },
@@ -694,11 +782,18 @@ mod fake {
                 },
             )
         };
+        let wheels_of = |f: &[Frame]| -> Vec<[i16; 4]> {
+            f.iter()
+                .filter(|x| (x.cmd_set, x.cmd_id) == id::CHASSIS_WHEEL_SPEED)
+                .map(wheel_rpm)
+                .collect()
+        };
+        let judged_true = |_: &[Frame]| (true, String::new());
 
         // --- stage 5 through the pad ------------------------------------------------------
         item!(
-            "health robotctl",
-            "robotctl health --json reports the loop healthy at 100 Hz",
+            "health",
+            "the loop reports healthy (robotctl health --json)",
             {
                 let (_, out) = robotctl(&d, &["health", "--json"]);
                 let v: Value = serde_json::from_str(&out).map_err(|e| format!("{e}: {out}"))?;
@@ -706,11 +801,11 @@ mod fake {
                     return Err(format!("robot.healthy is not true: {}", v["robot"]));
                 }
                 Ok(format!(
-                    "healthy at {} Hz",
-                    v["robot"]["control_loop"]["achieved_hz"]
+                    "robotctl health: healthy, loop {}",
+                    v["robot"]["control_loop"]
                 ))
             },
-            |_| (true, "answered".to_owned())
+            judged_true
         );
         item!(
             "pad Start arms",
@@ -739,10 +834,8 @@ mod fake {
                 Ok(String::new())
             },
             |f: &[Frame]| {
-                let moving: Vec<[i16; 4]> = f
-                    .iter()
-                    .filter(|x| (x.cmd_set, x.cmd_id) == id::CHASSIS_WHEEL_SPEED)
-                    .map(wheel_rpm)
+                let moving: Vec<[i16; 4]> = wheels_of(f)
+                    .into_iter()
                     .filter(|w| w.iter().any(|&r| r != 0))
                     .collect();
                 // On the wire the left wheels are negated (the PoC's convention): forward is
@@ -768,10 +861,8 @@ mod fake {
                 Ok(String::new())
             },
             |f: &[Frame]| {
-                let turning = f
-                    .iter()
-                    .filter(|x| (x.cmd_set, x.cmd_id) == id::CHASSIS_WHEEL_SPEED)
-                    .map(wheel_rpm)
+                let turning = wheels_of(f)
+                    .into_iter()
                     .any(|w| w.iter().all(|&r| r != 0) && w[0] != -w[1]);
                 (
                     turning,
@@ -787,10 +878,8 @@ mod fake {
                 Ok(String::new())
             },
             |f: &[Frame]| {
-                let moving: Vec<[i16; 4]> = f
-                    .iter()
-                    .filter(|x| (x.cmd_set, x.cmd_id) == id::CHASSIS_WHEEL_SPEED)
-                    .map(wheel_rpm)
+                let moving: Vec<[i16; 4]> = wheels_of(f)
+                    .into_iter()
                     .filter(|w| w.iter().any(|&r| r != 0))
                     .collect();
                 let strafe = moving
@@ -814,11 +903,7 @@ mod fake {
                 Ok(String::new())
             },
             |f: &[Frame]| {
-                let last: Vec<[i16; 4]> = f
-                    .iter()
-                    .filter(|x| (x.cmd_set, x.cmd_id) == id::CHASSIS_WHEEL_SPEED)
-                    .map(wheel_rpm)
-                    .collect();
+                let last = wheels_of(f);
                 let tail = last.iter().rev().take(10).all(|w| *w == [0; 4]);
                 (
                     tail && !last.is_empty(),
@@ -835,13 +920,19 @@ mod fake {
                 Ok(String::new())
             },
             |f: &[Frame]| {
-                let moved = f
+                let angles: Vec<(i16, i16)> = f
                     .iter()
                     .filter(|x| (x.cmd_set, x.cmd_id) == id::GIMBAL_ROTATE)
-                    .any(|x| x.data.iter().any(|&b| b != 0));
+                    .map(gimbal_ddeg)
+                    .collect();
+                let moved = angles.iter().any(|&(y, p)| y != 0 && p != 0);
                 (
                     moved,
-                    format!("{} gimbal frames", count(f, id::GIMBAL_ROTATE)),
+                    format!(
+                        "{} gimbal frames, angles (yaw, pitch) in tenths e.g. {:?}",
+                        angles.len(),
+                        angles.iter().find(|&&(y, p)| y != 0 && p != 0)
+                    ),
                 )
             }
         );
@@ -853,7 +944,17 @@ mod fake {
                 pad.tap(Buttons::LEFT);
                 Ok(String::new())
             },
-            |f: &[Frame]| (count(f, id::HEARTBEAT) > 0, "still armed".to_owned())
+            |f: &[Frame]| {
+                let last = f
+                    .iter()
+                    .filter(|x| (x.cmd_set, x.cmd_id) == id::GIMBAL_ROTATE)
+                    .map(gimbal_ddeg)
+                    .next_back();
+                (
+                    last == Some((0, 0)) && count(f, id::HEARTBEAT) > 0,
+                    format!("last gimbal frame {last:?}, still armed"),
+                )
+            }
         );
         item!(
             "pad Home toggles the lights",
@@ -880,23 +981,26 @@ mod fake {
         );
         item!(
             "pad RT quacks, LT rides",
-            "right trigger: the chirp plays on the speaker; left trigger: the wheee",
+            "right trigger: the chirp plays once; left trigger held: one wheee, not one per tick, and the release stops it",
             {
+                let from = tools_len(&d);
                 pad.hold([0.0; 4], [0.0, 1.0], Buttons::NONE, 150);
                 pad.hold([0.0; 4], [0.0, 0.0], Buttons::NONE, 150);
-                pad.hold([0.0; 4], [1.0, 0.0], Buttons::NONE, 150);
+                pad.hold([0.0; 4], [1.0, 0.0], Buttons::NONE, 300);
                 pad.hold([0.0; 4], [0.0, 0.0], Buttons::NONE, 150);
                 settle();
-                let log = std::fs::read_to_string(&d.tool_log).unwrap_or_default();
-                let chirp = log.contains("chirp.wav");
-                let wheee = log.contains("wheee.wav");
-                if chirp && wheee {
-                    Ok("aplay ran chirp.wav and wheee.wav".to_owned())
+                let log = tools_since(&d, from);
+                let chirps = log.matches("chirp.wav").count();
+                let wheees = log.matches("wheee.wav").count();
+                if chirps == 1 && wheees == 1 {
+                    Ok("aplay ran chirp.wav once and wheee.wav once for a 300 ms hold".to_owned())
                 } else {
-                    Err(format!("aplay log: {log:?}"))
+                    Err(format!(
+                        "aplay starts: chirp {chirps}, wheee {wheees}; log: {log:?}"
+                    ))
                 }
             },
-            |_| (true, String::new())
+            judged_true
         );
         item!(
             "pad Start disarms",
@@ -922,14 +1026,14 @@ mod fake {
             "s1ctl version",
             "the list's version answers",
             {
-                let (_, out) = s1ctl(&d, &["version"]);
+                let (ok, out) = s1ctl(&d, &["version"]);
                 let v: Value = serde_json::from_str(&out).map_err(|e| e.to_string())?;
-                if v["result"]["s1_api_version"] != json!(s1d::api::S1_API_VERSION) {
+                if !ok || v["result"]["s1_api_version"] != json!(s1d::api::S1_API_VERSION) {
                     return Err(out);
                 }
                 Ok(out)
             },
-            |_| (true, String::new())
+            judged_true
         );
         item!(
             "robot.enable arms (socket)",
@@ -947,7 +1051,7 @@ mod fake {
         );
         item!(
             "F16 s1ctl wheels",
-            "all four wheels forward at 100 rpm for the deadman's window",
+            "all four wheels forward at 100 rpm, then robot.stop",
             {
                 let (ok, out) = s1ctl(&d, &["wheels", "100", "100", "100", "100"]);
                 if !ok {
@@ -964,11 +1068,7 @@ mod fake {
                 }
             },
             |f: &[Frame]| {
-                let wheels: Vec<[i16; 4]> = f
-                    .iter()
-                    .filter(|x| (x.cmd_set, x.cmd_id) == id::CHASSIS_WHEEL_SPEED)
-                    .map(wheel_rpm)
-                    .collect();
+                let wheels = wheels_of(f);
                 let hit = wheels.contains(&[100, -100, -100, 100]);
                 let stopped = wheels.last() == Some(&[0; 4]);
                 (
@@ -980,7 +1080,39 @@ mod fake {
             }
         );
         item!(
-            "F1 s1ctl follow gimbal_lead",
+            "deadman: a twist left stale zeroes the wheels",
+            "one robot.move and nothing after it: the wheels run, then stop by themselves within the deadman (500 ms)",
+            {
+                let r = client
+                    .call("robot.move", json!({"vx": 0.2, "vy": 0.0, "vyaw": 0.0}))
+                    .map_err(|e| e.to_string())?;
+                if !accepted(&r) {
+                    return Err(r.to_string());
+                }
+                std::thread::sleep(Duration::from_millis(900));
+                Ok(String::new())
+            },
+            |f: &[Frame]| {
+                let wheels = wheels_of(f);
+                let first_moving = wheels.iter().position(|w| *w != [0; 4]);
+                let last_moving = wheels.iter().rposition(|w| *w != [0; 4]);
+                let tail_zero = wheels.iter().rev().take(20).all(|w| *w == [0; 4]);
+                // ~100 frames a second: the move must last under the deadman and then stop,
+                // with no robot.stop sent.
+                let span = match (first_moving, last_moving) {
+                    (Some(a), Some(b)) => b - a + 1,
+                    _ => 0,
+                };
+                (
+                    span > 20 && span < 70 && tail_zero,
+                    format!(
+                        "{span} moving wheel frames (deadman 500 ms at 100 Hz), then zero: {tail_zero}"
+                    ),
+                )
+            }
+        );
+        item!(
+            "F1 follow gimbal_lead",
             "chassis follows the gimbal: a forward twist leaves as the follow command, not wheel speeds",
             {
                 let (ok, out) = s1ctl(&d, &["follow", "gimbal_lead"]);
@@ -999,12 +1131,7 @@ mod fake {
                 let (a, pa) = find_hex(f, &wire_hex(&cmd::gimbal_workmode(0, 0)));
                 let (b, pb) = find_hex(f, &wire_hex(&cmd::chassis_stick_overlay(0, 1)));
                 let follows = count(f, id::CHASSIS_FOLLOW);
-                let moving_wheels = f
-                    .iter()
-                    .filter(|x| (x.cmd_set, x.cmd_id) == id::CHASSIS_WHEEL_SPEED)
-                    .map(wheel_rpm)
-                    .filter(|w| *w != [0; 4])
-                    .count();
+                let moving_wheels = wheels_of(f).iter().filter(|w| **w != [0; 4]).count();
                 (
                     a && b && follows >= 5 && moving_wheels == 0,
                     format!(
@@ -1014,7 +1141,7 @@ mod fake {
             }
         );
         item!(
-            "F1 s1ctl follow chassis_lead",
+            "F1 follow chassis_lead",
             "gimbal follows the chassis (gimbal work mode 2)",
             {
                 let (ok, out) = s1ctl(&d, &["follow", "chassis_lead"]);
@@ -1023,7 +1150,7 @@ mod fake {
             |f: &[Frame]| find_hex(f, &wire_hex(&cmd::gimbal_workmode(0, 2)))
         );
         item!(
-            "F7 s1ctl follow free --velocity-frame gimbal",
+            "F7 follow free --velocity-frame gimbal",
             "velocities read in the gimbal's heading (stick overlay 2)",
             {
                 let (ok, out) = s1ctl(&d, &["follow", "free", "--velocity-frame", "gimbal"]);
@@ -1032,7 +1159,7 @@ mod fake {
             |f: &[Frame]| find_hex(f, &wire_hex(&cmd::chassis_stick_overlay(0, 2)))
         );
         item!(
-            "F4 s1ctl follow free --gimbal-fpv",
+            "F4 follow free --gimbal-fpv",
             "gimbal holds its heading relative to the body (work mode 1)",
             {
                 let (ok, out) = s1ctl(&d, &["follow", "free", "--gimbal-fpv"]);
@@ -1041,7 +1168,7 @@ mod fake {
             |f: &[Frame]| find_hex(f, &wire_hex(&cmd::gimbal_workmode(0, 1)))
         );
         item!(
-            "F1 s1ctl follow free",
+            "F1 follow free",
             "chassis and gimbal independent again",
             {
                 let (ok, out) = s1ctl(&d, &["follow", "free"]);
@@ -1050,7 +1177,7 @@ mod fake {
             |f: &[Frame]| find_hex(f, &wire_hex(&cmd::gimbal_workmode(0, 0)))
         );
         item!(
-            "F2 s1ctl gimbal recenter",
+            "F2 gimbal recenter",
             "the gimbal recentres at 100 °/s",
             {
                 let (ok, out) = s1ctl(&d, &["gimbal", "recenter"]);
@@ -1059,7 +1186,7 @@ mod fake {
             |f: &[Frame]| find_hex(f, "551604fcc9040000403fb2070805640000006400bfa0")
         );
         item!(
-            "F3 s1ctl gimbal speed 30 -15, then stop",
+            "F3 gimbal speed 30 -15, then stop",
             "the gimbal sweeps yaw right at 30 °/s and pitch down at 15 °/s, then stops",
             {
                 let (ok, out) = s1ctl(&d, &["gimbal", "speed", "30", "-15"]);
@@ -1077,7 +1204,7 @@ mod fake {
             }
         );
         item!(
-            "F5 s1ctl gimbal sleep, wake",
+            "F5 gimbal sleep, wake",
             "the gimbal folds down, then levels again",
             {
                 let (ok, out) = s1ctl(&d, &["gimbal", "sleep"]);
@@ -1095,7 +1222,7 @@ mod fake {
             }
         );
         item!(
-            "F6 s1ctl goto 1 -0.5 -90, then --stop",
+            "F6 goto 1 -0.5 -90, then --stop",
             "the chassis runs 1 m forward, 0.5 m right, turns 90° clockwise and stops on its own; --stop abandons it",
             {
                 let (ok, out) = s1ctl(&d, &["goto", "1", "-0.5", "-90"]);
@@ -1113,7 +1240,35 @@ mod fake {
             }
         );
         item!(
-            "F10 s1ctl lights: solid red, breath blue, flash green, marquee white, off",
+            "F15 chassis work mode 2, then 1 (raw frames)",
+            "no visible change; the work-mode frames reach the controller (mode 1 is what arming sends)",
+            {
+                for mode in [2u8, 1] {
+                    let (ok, out) = s1ctl(
+                        &d,
+                        &[
+                            "frame",
+                            &hex(&cmd::chassis_workmode(0, mode).encode().unwrap()),
+                        ],
+                    );
+                    if !ok {
+                        return Err(out);
+                    }
+                    std::thread::sleep(Duration::from_millis(60));
+                }
+                Ok(String::new())
+            },
+            |f: &[Frame]| {
+                let modes: Vec<u8> = f
+                    .iter()
+                    .filter(|x| (x.cmd_set, x.cmd_id) == id::CHASSIS_WORKMODE)
+                    .map(|x| x.data[0])
+                    .collect();
+                (modes == [2, 1], format!("work modes on the wire {modes:?}"))
+            }
+        );
+        item!(
+            "F10 lights: solid red, breath blue, flash green, marquee white, off",
             "every LED solid red, then breathing blue, flashing green, a white marquee, then off",
             {
                 for args in [
@@ -1138,8 +1293,16 @@ mod fake {
                 Ok(String::new())
             },
             |f: &[Frame]| {
+                // Solid red is the oracle's rebuild of the captured layout; breath blue is the
+                // same layout at the captured white breath's times (`led_stock_breath_real.bin`).
                 let (a, pa) = find_hex(f, "551a04b109180000003f3201ff00ff000000000000003f0084d3");
-                let (b, pb) = find_hex(f, "551a04b109180000003f3202ff000000ff00f401f4013f00bc8b");
+                let (b, pb) = find_hex(
+                    f,
+                    &wire_hex(&cmd::system_led(
+                        0,
+                        &cmd::SystemLed::breath(0, 0, 255, 500, 500),
+                    )),
+                );
                 let effects: Vec<u8> = f
                     .iter()
                     .filter(|x| (x.cmd_set, x.cmd_id) == id::SYSTEM_LED)
@@ -1152,7 +1315,7 @@ mod fake {
             }
         );
         item!(
-            "F9 s1ctl lights --blaster solid white",
+            "F9 lights --blaster solid white",
             "the blaster's own LED lights white",
             {
                 let (ok, out) = s1ctl(
@@ -1175,7 +1338,7 @@ mod fake {
             |f: &[Frame]| find_hex(f, "551604fcc9170000403f5510ffffff0164006400767c")
         );
         item!(
-            "robotctl flashlight on red, off",
+            "flashlight red, off (duck route)",
             "every LED solid red through the duck's own command, then off",
             {
                 let (ok, out) = robotctl(&d, &["flashlight", "on", "--color", "red"]);
@@ -1184,7 +1347,11 @@ mod fake {
                 }
                 std::thread::sleep(Duration::from_millis(60));
                 let (ok, out) = robotctl(&d, &["flashlight", "off"]);
-                if ok { Ok(String::new()) } else { Err(out) }
+                if ok {
+                    Ok("robotctl flashlight".to_owned())
+                } else {
+                    Err(out)
+                }
             },
             |f: &[Frame]| {
                 let (a, pa) = find_hex(f, "551a04b109180000003f3201ff00ff000000000000003f0084d3");
@@ -1195,7 +1362,7 @@ mod fake {
             }
         );
         item!(
-            "F11 s1ctl armor 1.0",
+            "F11 armor 1.0",
             "hit thresholds at the factory values (no visible change; the armour host answers)",
             {
                 let (ok, out) = s1ctl(&d, &["armor", "1.0"]);
@@ -1218,7 +1385,7 @@ mod fake {
             }
         );
         item!(
-            "F12 s1ctl pwm --duty 500 --hz 1000",
+            "F12 pwm --duty 500 --hz 1000",
             "the six PWM ports at 1 kHz, 50 % (a scope would show it)",
             {
                 let (ok, out) = s1ctl(&d, &["pwm", "--duty", "500", "--hz", "1000"]);
@@ -1231,7 +1398,7 @@ mod fake {
             }
         );
         item!(
-            "F17 s1ctl blaster (infrared), --gel refused",
+            "F17 blaster (infrared), --gel refused",
             "the infrared emitter fires once; gel is refused without the key",
             {
                 let (ok, out) = s1ctl(&d, &["blaster"]);
@@ -1260,29 +1427,28 @@ mod fake {
             }
         );
         item!(
-            "s1ctl volume 50",
+            "volume 50",
             "the speaker's mixer control set to 50 %",
             {
+                let from = tools_len(&d);
                 let (ok, out) = s1ctl(&d, &["volume", "50"]);
                 if !ok {
                     return Err(out);
                 }
-                let log = std::fs::read_to_string(&d.tool_log).unwrap_or_default();
+                let log = tools_since(&d, from);
                 if log.contains("amixer -q -c 0 sset Speaker 50%") {
                     Ok("amixer -q -c 0 sset Speaker 50%".to_owned())
                 } else {
                     Err(format!("amixer not run as expected: {log:?}"))
                 }
             },
-            |_| (true, String::new())
+            judged_true
         );
         item!(
-            "robot.sound greet (socket), robotctl quack",
+            "sound greet, chirp (duck route)",
             "the speaker plays the greeting, then the chirp",
             {
-                let before = std::fs::read_to_string(&d.tool_log)
-                    .unwrap_or_default()
-                    .len();
+                let from = tools_len(&d);
                 let r = client
                     .call("robot.sound", json!({"tag": "greet"}))
                     .map_err(|e| e.to_string())?;
@@ -1297,20 +1463,22 @@ mod fake {
                     return Err(out);
                 }
                 settle();
-                let log = std::fs::read_to_string(&d.tool_log).unwrap_or_default();
-                let log = &log[before.min(log.len())..];
+                let log = tools_since(&d, from);
                 let greet = log.contains("greet.wav");
                 let chirp = log.contains("chirp.wav");
                 if greet && chirp {
-                    Ok("aplay ran greet.wav and chirp.wav".to_owned())
+                    Ok(
+                        "robot.sound then robotctl quack: aplay ran greet.wav and chirp.wav"
+                            .to_owned(),
+                    )
                 } else {
                     Err(format!("aplay log: {log:?}"))
                 }
             },
-            |_| (true, String::new())
+            judged_true
         );
         item!(
-            "s1ctl frame (raw)",
+            "frame (raw)",
             "one raw frame reaches the wire as given",
             {
                 let (ok, out) = s1ctl(&d, &["frame", "550f04a2c904000040044c0200cf21"]);
@@ -1350,8 +1518,8 @@ mod fake {
             }
         );
         item!(
-            "F18 telemetry push decoded and acked",
-            "a push of ours lands in s1.telemetry (battery 77 %, gimbal 90/−15, picked up) and is acked like the stock does",
+            "F18 telemetry",
+            "a push of ours lands in s1.telemetry (battery 77 %, gimbal 90/−15, picked up) and is acked like the stock does, sequence included",
             {
                 feed(&d, &[dds_answer(1, vec![0x00, 0x03]), our_push(0x1234)])
                     .map_err(|e| e.to_string())?;
@@ -1365,7 +1533,7 @@ mod fake {
                     && r["status"]["picked_up"] == json!(true)
                     && r["position_m"][0] == json!(1.5)
                     && r["wheels_rpm"][0] == json!(123);
-                if !(ok || r.is_object()) || !good {
+                if !ok || !good {
                     return Err(out);
                 }
                 let log = plain(&std::fs::read_to_string(&d.s1d_log).unwrap_or_default());
@@ -1374,11 +1542,16 @@ mod fake {
                 }
                 Ok("telemetry = battery 77, gimbal [90,-15], picked_up, x 1.5, wheel 123; answer logged accepted".to_owned())
             },
-            |f: &[Frame]| find_hex(f, &wire_hex(&dds::push_ack(0x1234)))
+            |f: &[Frame]| {
+                // The ack with the push's own sequence, byte for byte — not zeroed.
+                let want = hex(&dds::push_ack(0x1234).encode().unwrap());
+                let hit = f.iter().any(|x| hex(&x.encode().unwrap()) == want);
+                (hit, format!("wire has the ack {want}: {hit}"))
+            }
         );
         item!(
-            "robot.state carries the gimbal from telemetry (robotctl monitor)",
-            "robot.state head = the gimbal's reported angle, odometry x 1.5, picked_up",
+            "robot.state (subscribe)",
+            "robot.state head = the gimbal's reported angle, odometry x 1.5, picked_up (robotctl monitor --json)",
             {
                 let err_path = d.dir.join("monitor.err");
                 let mut child = Command::new(d.bin.join("robotctl"))
@@ -1436,16 +1609,18 @@ mod fake {
                 let x = v["odom"]["position"][0].as_f64().unwrap_or(0.0);
                 let picked = v["safety"]["picked_up"] == json!(true);
                 if (yaw - 90f64.to_radians()).abs() < 1e-3 && (x - 1.5).abs() < 1e-6 && picked {
-                    Ok(format!("head yaw {yaw:.4} rad, odom x {x}, picked_up"))
+                    Ok(format!(
+                        "robotctl monitor: head yaw {yaw:.4} rad, odom x {x}, picked_up"
+                    ))
                 } else {
                     Err(format!("state: {v}"))
                 }
             },
-            |_| (true, String::new())
+            judged_true
         );
         item!(
-            "events: armour hit, infrared hit, button (s1ctl events)",
-            "a tap on plate 3, an infrared hit and the controller button each arrive as s1.event",
+            "events: armour hit, infrared hit, button",
+            "a tap on plate 3, an infrared hit and the controller button each arrive as s1.event (s1ctl events)",
             {
                 let mut child = Command::new(d.bin.join("s1ctl"))
                     .args(["--socket", d.socket.to_str().unwrap(), "events"])
@@ -1506,7 +1681,7 @@ mod fake {
                     Err(format!("events seen: {kinds:?}"))
                 }
             },
-            |_| (true, String::new())
+            judged_true
         );
         item!(
             "robot.enable off disarms (socket)",
@@ -1541,10 +1716,11 @@ mod fake {
                     Err(format!("{} bytes dropped by the decoder", dec.dropped()))
                 }
             },
-            |_| (true, String::new())
+            judged_true
         );
 
         let all = print_table(&rows);
+        println!("{}", client.rtt_summary());
         let report = d.dir.join("report.txt");
         let mut text = String::new();
         for r in &rows {
@@ -1556,6 +1732,7 @@ mod fake {
                 r.expected
             ));
         }
+        text.push_str(&format!("{}\n", client.rtt_summary()));
         let _ = std::fs::write(&report, text);
         println!("report: {}", report.display());
         drop(client);
@@ -1577,24 +1754,27 @@ mod fake {
 mod robot {
     use super::*;
 
-    fn witness(log: &mut std::fs::File, item: &str, expected: &str) -> String {
+    /// Ask the person at the robot. Enter or `y`/`yes`/`s`/`sim`/`ok` is "as expected"; anything
+    /// else is what they saw, recorded, and the item fails. Without a terminal nobody answered,
+    /// and the item is recorded as unwitnessed — not as passed.
+    fn witness(log: &mut std::fs::File, item: &str, expected: &str) -> (bool, String) {
         println!("\n[{item}] expected: {expected}");
-        let seen = if atty_stdin() {
-            print!("  what happened? (enter = as expected) ");
+        let (ok, seen) = if atty_stdin() {
+            print!("  as expected? [Enter/y = yes · anything else = what you saw] ");
             let _ = std::io::stdout().flush();
             let mut line = String::new();
             let _ = std::io::stdin().read_line(&mut line);
-            let t = line.trim();
-            if t.is_empty() {
-                "as expected".to_owned()
+            let t = line.trim().to_lowercase();
+            if t.is_empty() || ["y", "yes", "s", "sim", "ok"].contains(&t.as_str()) {
+                (true, "as expected".to_owned())
             } else {
-                t.to_owned()
+                (false, line.trim().to_owned())
             }
         } else {
-            "(no terminal: witness asked in the chat)".to_owned()
+            (false, "unwitnessed (no terminal)".to_owned())
         };
         let _ = writeln!(log, "{} WITNESS {item}: {seen}", stamp());
-        seen
+        (ok, seen)
     }
 
     fn atty_stdin() -> bool {
@@ -1617,21 +1797,36 @@ mod robot {
         let mut client = Client::tcp(tcp).map_err(|e| format!("robot socket {tcp}: {e}"))?;
         client.log = Some(log.try_clone().map_err(|e| e.to_string())?);
         let mut pad = Pad::new(udp).map_err(|e| format!("pad to {udp}: {e}"))?;
+        let bin = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(Path::to_path_buf))
+            .ok_or("cannot locate s1ctl beside this binary")?;
+        if !bin.join("s1ctl").is_file() {
+            return Err(format!(
+                "{} is missing: cargo build -p s1d",
+                bin.join("s1ctl").display()
+            ));
+        }
         let mut rows: Vec<Row> = Vec::new();
+        println!(
+            "not run against the robot (wire only): {}",
+            WIRE_ONLY.join(", ")
+        );
 
+        // Name, what the person must see, the act; the witness closes the item.
         macro_rules! item {
             ($name:expr, $expected:expr, $act:block) => {
                 if wanted(only, $name) {
                     #[allow(clippy::redundant_closure_call)]
                     let r: Result<String, String> = (|| -> Result<String, String> { $act })();
-                    let seen = witness(&mut log, $name, $expected);
                     let (ok, proof) = match r {
-                        Ok(p) => (
-                            !seen.to_lowercase().contains("no") || seen == "as expected",
-                            format!("{p}; witness: {seen}"),
-                        ),
+                        Ok(p) => {
+                            let (seen_ok, seen) = witness(&mut log, $name, $expected);
+                            (seen_ok, format!("{p}; witness: {seen}"))
+                        }
                         Err(e) => (false, e),
                     };
+                    println!("[{}] {}", if ok { "OK" } else { "FAIL" }, $name);
                     rows.push(Row {
                         item: $name.to_owned(),
                         expected: $expected.to_owned(),
@@ -1648,16 +1843,30 @@ mod robot {
             }
             Ok(r)
         };
+        let s1ctl = |args: &[&str]| -> Result<String, String> {
+            let (ok, out) = s1ctl_at(&bin, &["--tcp", tcp], args);
+            let _ = writeln!(
+                std::fs::OpenOptions::new()
+                    .append(true)
+                    .open(log_path)
+                    .map_err(|e| e.to_string())?,
+                "{} s1ctl {} -> {out}",
+                stamp(),
+                args.join(" ")
+            );
+            if ok {
+                Ok(out)
+            } else {
+                Err(format!("s1ctl {}: {out}", args.join(" ")))
+            }
+        };
 
-        item!("health", "the daemon reports the loop healthy at 100 Hz", {
+        item!("health", "the loop reports healthy (robot.health)", {
             let r = call(&mut client, "robot.health", json!({}))?;
             if r["healthy"] != json!(true) {
                 return Err(format!("not healthy: {r}"));
             }
-            Ok(format!(
-                "healthy at {} Hz",
-                r["control_loop"]["achieved_hz"]
-            ))
+            Ok(format!("healthy, loop {}", r["control_loop"]))
         });
         println!("\nWHEELS OFF THE GROUND from here on.");
         item!(
@@ -1691,19 +1900,33 @@ mod robot {
             "left stick left: the strafe pattern for 2 s",
             {
                 pad.hold([1.0, 0.0, 0.0, 0.0], [0.0; 2], Buttons::NONE, 2000);
-                pad.hold([0.0; 4], [0.0; 2], Buttons::NONE, 300);
                 Ok("stick held 2 s".to_owned())
             }
         );
         item!(
+            "pad sticks released",
+            "sticks centred: every wheel stops",
+            {
+                pad.hold([0.0; 4], [0.0; 2], Buttons::NONE, 500);
+                Ok("sticks centred 0.5 s".to_owned())
+            }
+        );
+        item!(
             "pad D-pad right + right stick moves the gimbal",
-            "D-pad right, then right stick: the gimbal yaws right and pitches up, then returns",
+            "D-pad right, then right stick: the gimbal yaws right and pitches up for 1.5 s",
             {
                 pad.tap(Buttons::RIGHT);
                 pad.hold([0.0, 0.0, 1.0, 0.5], [0.0; 2], Buttons::NONE, 1500);
+                Ok("stick held 1.5 s".to_owned())
+            }
+        );
+        item!(
+            "pad right stick centred, back to drive mode",
+            "the gimbal returns to centre; D-pad left",
+            {
                 pad.hold([0.0; 4], [0.0; 2], Buttons::NONE, 1000);
                 pad.tap(Buttons::LEFT);
-                Ok("stick held 1.5 s, D-pad left".to_owned())
+                Ok("stick centred 1 s, D-pad left".to_owned())
             }
         );
         item!(
@@ -1718,11 +1941,11 @@ mod robot {
         );
         item!(
             "pad RT quacks, LT rides",
-            "right trigger: a sound; left trigger: another",
+            "right trigger: the chirp once; left trigger held 2 s: one wheee, not a stutter, and silence on release",
             {
                 pad.hold([0.0; 4], [0.0, 1.0], Buttons::NONE, 200);
                 pad.hold([0.0; 4], [0.0, 0.0], Buttons::NONE, 800);
-                pad.hold([0.0; 4], [1.0, 0.0], Buttons::NONE, 200);
+                pad.hold([0.0; 4], [1.0, 0.0], Buttons::NONE, 2000);
                 pad.hold([0.0; 4], [0.0, 0.0], Buttons::NONE, 300);
                 Ok("triggers pulled".to_owned())
             }
@@ -1736,9 +1959,13 @@ mod robot {
             }
         );
 
-        item!("s1 version", "the list's version answers", {
-            let r = call(&mut client, "s1.version", json!({}))?;
-            Ok(r.to_string())
+        item!("s1ctl version", "the list's version answers", {
+            let out = s1ctl(&["version"])?;
+            let v: Value = serde_json::from_str(&out).map_err(|e| e.to_string())?;
+            if v["result"]["s1_api_version"] != json!(s1d::api::S1_API_VERSION) {
+                return Err(out);
+            }
+            Ok(out)
         });
         item!("robot.enable arms (socket)", "armed; nothing moves", {
             call(
@@ -1749,42 +1976,52 @@ mod robot {
             Ok("armed".to_owned())
         });
         item!(
-            "F16 wheels 100 rpm",
-            "all four wheels forward at 100 rpm for 2 s",
+            "F16 s1ctl wheels",
+            "all four wheels forward at 100 rpm for 2 s, then robot.stop",
             {
                 for _ in 0..20 {
-                    call(
-                        &mut client,
-                        "s1.wheels",
-                        json!({"rpm": [100, 100, 100, 100]}),
-                    )?;
+                    s1ctl(&["wheels", "100", "100", "100", "100"])?;
                     std::thread::sleep(Duration::from_millis(100));
                 }
                 call(&mut client, "robot.stop", json!({}))?;
-                Ok("20 wheel calls".to_owned())
+                Ok("20 wheel calls, robot.stop".to_owned())
+            }
+        );
+        item!(
+            "deadman: a twist left stale zeroes the wheels",
+            "one robot.move and nothing after it: the wheels run for about half a second, then stop by themselves",
+            {
+                call(
+                    &mut client,
+                    "robot.move",
+                    json!({"vx": 0.2, "vy": 0.0, "vyaw": 0.0}),
+                )?;
+                std::thread::sleep(Duration::from_millis(1500));
+                Ok("one robot.move, no stop sent".to_owned())
             }
         );
         item!(
             "F1 follow gimbal_lead",
-            "turn the gimbal by hand 45°: the chassis turns after it; then free",
+            "chassis follows the gimbal: with a forward twist the chassis drives after the gimbal's heading (turn the gimbal by hand 45°)",
             {
-                call(&mut client, "s1.follow", json!({"mode": "gimbal_lead"}))?;
+                s1ctl(&["follow", "gimbal_lead"])?;
                 for _ in 0..30 {
                     call(
                         &mut client,
                         "robot.move",
-                        json!({"vx": 0.0, "vy": 0.0, "vyaw": 0.0}),
+                        json!({"vx": 0.2, "vy": 0.0, "vyaw": 0.0}),
                     )?;
                     std::thread::sleep(Duration::from_millis(100));
                 }
-                Ok("gimbal_lead held 3 s".to_owned())
+                call(&mut client, "robot.stop", json!({}))?;
+                Ok("gimbal_lead, vx 0.2 for 3 s".to_owned())
             }
         );
         item!(
             "F1 follow chassis_lead",
-            "the gimbal follows the chassis as it turns (turn by vyaw 2 s)",
+            "the gimbal follows the chassis as it turns (vyaw 2 s)",
             {
-                call(&mut client, "s1.follow", json!({"mode": "chassis_lead"}))?;
+                s1ctl(&["follow", "chassis_lead"])?;
                 for _ in 0..20 {
                     call(
                         &mut client,
@@ -1794,64 +2031,43 @@ mod robot {
                     std::thread::sleep(Duration::from_millis(100));
                 }
                 call(&mut client, "robot.stop", json!({}))?;
-                call(&mut client, "s1.follow", json!({"mode": "free"}))?;
-                Ok("chassis_lead, turned 2 s, free".to_owned())
+                Ok("chassis_lead, turned 2 s".to_owned())
             }
         );
         item!(
-            "F7 velocity frame gimbal",
-            "no visible change; answers only",
+            "F7 follow free --velocity-frame gimbal",
+            "no visible change; the answer",
             {
-                call(
-                    &mut client,
-                    "s1.follow",
-                    json!({"mode": "free", "velocity_frame": "gimbal"}),
-                )?;
-                call(&mut client, "s1.follow", json!({"mode": "free"}))?;
+                s1ctl(&["follow", "free", "--velocity-frame", "gimbal"])?;
                 Ok("accepted".to_owned())
             }
         );
         item!(
-            "F4 gimbal FPV",
+            "F4 follow free --gimbal-fpv",
             "the gimbal holds its heading relative to the body",
             {
-                call(
-                    &mut client,
-                    "s1.follow",
-                    json!({"mode": "free", "gimbal_fpv": true}),
-                )?;
+                s1ctl(&["follow", "free", "--gimbal-fpv"])?;
                 std::thread::sleep(Duration::from_secs(1));
-                call(&mut client, "s1.follow", json!({"mode": "free"}))?;
                 Ok("accepted".to_owned())
             }
         );
+        item!("F1 follow free", "chassis and gimbal independent again", {
+            s1ctl(&["follow", "free"])?;
+            Ok("accepted".to_owned())
+        });
         item!("F2 gimbal recenter", "the gimbal recentres", {
-            call(
-                &mut client,
-                "s1.gimbal",
-                json!({"action": "recenter", "yaw_speed": 100, "pitch_speed": 100}),
-            )?;
+            s1ctl(&["gimbal", "recenter"])?;
             std::thread::sleep(Duration::from_secs(2));
             Ok("accepted".to_owned())
         });
         item!(
-            "F3 gimbal speed",
-            "the gimbal sweeps yaw right at 30 °/s and pitch down 15 °/s for 1 s, stops, recentres",
+            "F3 gimbal speed 30 -15, then stop",
+            "the gimbal sweeps yaw right at 30 °/s and pitch down 15 °/s for 1 s, then stops",
             {
-                call(
-                    &mut client,
-                    "s1.gimbal",
-                    json!({"action": "speed", "yaw": 30.0, "pitch": -15.0}),
-                )?;
+                s1ctl(&["gimbal", "speed", "30", "-15"])?;
                 std::thread::sleep(Duration::from_secs(1));
-                call(&mut client, "s1.gimbal", json!({"action": "stop"}))?;
+                s1ctl(&["gimbal", "stop"])?;
                 std::thread::sleep(Duration::from_millis(500));
-                call(
-                    &mut client,
-                    "s1.gimbal",
-                    json!({"action": "recenter", "yaw_speed": 100, "pitch_speed": 100}),
-                )?;
-                std::thread::sleep(Duration::from_secs(2));
                 Ok("accepted".to_owned())
             }
         );
@@ -1859,24 +2075,34 @@ mod robot {
             "F5 gimbal sleep, wake",
             "the gimbal folds down for 3 s, then levels",
             {
-                call(&mut client, "s1.gimbal", json!({"action": "sleep"}))?;
+                s1ctl(&["gimbal", "sleep"])?;
                 std::thread::sleep(Duration::from_secs(3));
-                call(&mut client, "s1.gimbal", json!({"action": "wake"}))?;
+                s1ctl(&["gimbal", "wake"])?;
                 std::thread::sleep(Duration::from_secs(2));
                 Ok("accepted".to_owned())
             }
         );
         item!(
-            "F6 goto",
-            "wheels run the pattern of 1 m forward, 0.5 m right, 90° clockwise, then stop on their own",
+            "F6 goto 1 -0.5 -90, then --stop",
+            "wheels run the pattern of 1 m forward, 0.5 m right, 90° clockwise, then stop on their own; --stop after 6 s",
             {
-                call(
-                    &mut client,
-                    "s1.goto",
-                    json!({"x": 1.0, "y": -0.5, "yaw": -90.0, "speed": 0.5, "yaw_speed": 30.0}),
-                )?;
+                s1ctl(&["goto", "1", "-0.5", "-90"])?;
                 std::thread::sleep(Duration::from_secs(6));
-                call(&mut client, "s1.goto", json!({"stop": true}))?;
+                s1ctl(&["goto", "--stop"])?;
+                Ok("accepted".to_owned())
+            }
+        );
+        item!(
+            "F15 chassis work mode 2, then 1 (raw frames)",
+            "no visible change; the answers",
+            {
+                for mode in [2u8, 1] {
+                    s1ctl(&[
+                        "frame",
+                        &hex(&cmd::chassis_workmode(0, mode).encode().unwrap()),
+                    ])?;
+                    std::thread::sleep(Duration::from_millis(200));
+                }
                 Ok("accepted".to_owned())
             }
         );
@@ -1884,44 +2110,49 @@ mod robot {
             "F10 lights: solid red, breath blue, flash green, marquee white, off",
             "every LED solid red, then breathing blue, flashing green, a white marquee, then off (2.5 s each)",
             {
-                for (e, r, g, b, t1, t2) in [
-                    ("solid", 255, 0, 0, 0, 0),
-                    ("breath", 0, 0, 255, 500, 500),
-                    ("flash", 0, 255, 0, 250, 250),
-                    ("marquee", 255, 255, 255, 100, 100),
-                    ("off", 0, 0, 0, 0, 0),
+                for args in [
+                    vec!["lights", "solid", "255", "0", "0"],
+                    vec![
+                        "lights", "breath", "0", "0", "255", "--t1", "500", "--t2", "500",
+                    ],
+                    vec![
+                        "lights", "flash", "0", "255", "0", "--t1", "250", "--t2", "250",
+                    ],
+                    vec![
+                        "lights", "marquee", "255", "255", "255", "--t1", "100", "--t2", "100",
+                    ],
+                    vec!["lights", "off"],
                 ] {
-                    call(
-                        &mut client,
-                        "s1.lights",
-                        json!({"effect": e, "r": r, "g": g, "b": b, "t1": t1, "t2": t2}),
-                    )?;
+                    s1ctl(&args)?;
                     std::thread::sleep(Duration::from_millis(2500));
                 }
                 Ok("accepted".to_owned())
             }
         );
         item!(
-            "F9 blaster LED white",
-            "the blaster's LED lights white for 2 s",
+            "F9 lights --blaster solid white",
+            "the blaster's LED lights white for 2 s, then off",
             {
-                call(
-                    &mut client,
-                    "s1.lights",
-                    json!({"effect": "solid", "r": 255, "g": 255, "b": 255, "t1": 100, "t2": 100, "blaster": true}),
-                )?;
+                s1ctl(&[
+                    "lights",
+                    "solid",
+                    "255",
+                    "255",
+                    "255",
+                    "--t1",
+                    "100",
+                    "--t2",
+                    "100",
+                    "--blaster",
+                ])?;
                 std::thread::sleep(Duration::from_secs(2));
-                call(
-                    &mut client,
-                    "s1.lights",
-                    json!({"effect": "off", "blaster": true}),
-                )?;
+                s1ctl(&["lights", "off", "--blaster"])?;
                 Ok("accepted".to_owned())
             }
         );
         item!(
-            "robot.flashlight red, off",
-            "every LED red through the duck's command for 2 s, then off",
+            "flashlight red, off (duck route)",
+            "every LED red through the duck's command for 2 s, then off (robot.flashlight; bench.sh runs robotctl flashlight in the chroot)",
             {
                 call(
                     &mut client,
@@ -1934,59 +2165,62 @@ mod robot {
                     "robot.flashlight",
                     json!({"on": false, "toggle": false, "color": "red"}),
                 )?;
-                Ok("accepted".to_owned())
+                Ok("robot.flashlight accepted".to_owned())
             }
         );
         item!("F11 armor 1.0", "no visible change; the answer", {
-            call(&mut client, "s1.armor", json!({"k": 1.0}))?;
+            s1ctl(&["armor", "1.0"])?;
             Ok("accepted".to_owned())
         });
         item!(
-            "F12 pwm",
-            "a scope on a PWM port shows 1 kHz at 50 %; answers only here",
+            "F12 pwm --duty 500 --hz 1000",
+            "a scope on a PWM port shows 1 kHz at 50 %; the answer",
             {
-                call(&mut client, "s1.pwm", json!({"duty": 500, "hz": 1000}))?;
+                s1ctl(&["pwm", "--duty", "500", "--hz", "1000"])?;
                 Ok("accepted".to_owned())
             }
         );
         item!(
-            "F17 blaster infrared",
-            "the infrared emitter fires once (no gel: tank out)",
+            "F17 blaster (infrared), --gel refused",
+            "the infrared emitter fires once (no gel: tank out); gel refused",
             {
-                call(&mut client, "s1.blaster", json!({"times": 1}))?;
-                let r = client
-                    .call("s1.blaster", json!({"times": 1, "gel": true}))
-                    .map_err(|e| e.to_string())?;
-                if accepted(&r) {
+                s1ctl(&["blaster"])?;
+                if s1ctl(&["blaster", "--gel"]).is_ok() {
                     return Err("gel accepted without the key".to_owned());
                 }
                 Ok("infrared accepted, gel refused".to_owned())
             }
         );
         item!(
-            "s1 volume 50",
-            "the speaker at 50 % (needs --volume-control on the daemon)",
+            "volume 50",
+            "the speaker at 50 % (the daemon needs --volume-control, from stage 8's amixer dump)",
             {
-                let r = client
-                    .call("s1.volume", json!({"percent": 50}))
-                    .map_err(|e| e.to_string())?;
-                Ok(r.to_string())
+                let out = s1ctl(&["volume", "50"])?;
+                Ok(out)
             }
         );
         item!(
-            "robot.sound greet, chirp",
-            "the speaker plays two sounds",
+            "sound greet, chirp (duck route)",
+            "the speaker plays the greeting, then the chirp (robot.sound)",
             {
                 call(&mut client, "robot.sound", json!({"tag": "greet"}))?;
                 std::thread::sleep(Duration::from_secs(2));
                 call(&mut client, "robot.sound", json!({"tag": "chirp"}))?;
                 std::thread::sleep(Duration::from_secs(2));
+                Ok("robot.sound accepted twice".to_owned())
+            }
+        );
+        item!(
+            "frame (raw)",
+            "no visible change (gimbal work mode 2 as a raw frame); the answer",
+            {
+                s1ctl(&["frame", "550f04a2c904000040044c0200cf21"])?;
                 Ok("accepted".to_owned())
             }
         );
         item!(
             "F18 telemetry",
-            "pushes > 0 with a plausible battery %, attitude and gimbal angle",
+            "pushes > 0 with a plausible battery %, attitude and gimbal angle (the subscription is re-asked every 5 s, armed)",
             {
                 std::thread::sleep(Duration::from_secs(6));
                 let r = call(&mut client, "s1.telemetry", json!({}))?;
@@ -1998,7 +2232,7 @@ mod robot {
             }
         );
         item!(
-            "robot.state (subscribe once)",
+            "robot.state (subscribe)",
             "one state frame with the gimbal angle in head and odometry",
             {
                 let r = client
@@ -2012,7 +2246,7 @@ mod robot {
             }
         );
         item!(
-            "events: armour, infrared, button",
+            "events: armour hit, infrared hit, button",
             "tap each armour plate, aim an infrared source, press the button; each arrives as s1.event",
             {
                 call(&mut client, "s1.subscribe", json!({"events": true}))?;
@@ -2025,16 +2259,21 @@ mod robot {
                 Ok(format!("{} events: {events:?}", events.len()))
             }
         );
-        item!("robot.enable off", "disarmed; wheels zero", {
-            call(
-                &mut client,
-                "robot.enable",
-                json!({"on": false, "toggle": false}),
-            )?;
-            Ok("disarmed".to_owned())
-        });
+        item!(
+            "robot.enable off disarms (socket)",
+            "disarmed; wheels zero",
+            {
+                call(
+                    &mut client,
+                    "robot.enable",
+                    json!({"on": false, "toggle": false}),
+                )?;
+                Ok("disarmed".to_owned())
+            }
+        );
 
         let all = print_table(&rows);
+        println!("{}", client.rtt_summary());
         for r in &rows {
             let _ = writeln!(
                 log,
@@ -2045,6 +2284,48 @@ mod robot {
                 r.proof
             );
         }
+        let _ = writeln!(log, "{} {}", stamp(), client.rtt_summary());
         Ok(all)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::WIRE_ONLY;
+
+    /// The names of every `item!(` in one module of this file, in order.
+    fn item_names(module: &str) -> Vec<String> {
+        let src = include_str!("s1-e2e.rs");
+        let start = src.find(&format!("mod {module} {{")).expect("the module");
+        let end = src[start + 1..]
+            .find("\nmod ")
+            .map(|i| start + 1 + i)
+            .unwrap_or(src.len());
+        let body = &src[start..end];
+        let mut names = Vec::new();
+        let mut rest = body;
+        while let Some(i) = rest.find("item!(") {
+            rest = &rest[i + 6..];
+            let q = rest.find('"').expect("a name literal");
+            let after = &rest[q + 1..];
+            let end = after.find('"').expect("the literal's end");
+            names.push(after[..end].to_owned());
+        }
+        names
+    }
+
+    /// `robot` runs what `fake` proved, in its order, minus the two wire-only items — so the
+    /// robot session validates the program the pre-test ran, not another one.
+    #[test]
+    fn items_are_the_same_program() {
+        let fake = item_names("fake");
+        let robot = item_names("robot");
+        let expected: Vec<String> = fake
+            .iter()
+            .filter(|n| !WIRE_ONLY.contains(&n.as_str()))
+            .cloned()
+            .collect();
+        assert_eq!(robot, expected);
+        assert_eq!(fake.len(), 40, "{fake:?}");
     }
 }

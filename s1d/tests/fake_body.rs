@@ -153,6 +153,7 @@ fn only_our_pushes_become_telemetry() {
     );
     body.inbound.extend_from_slice(&frame.encode().unwrap());
 
+    let stock_seq = Frame::decode(STOCK_PUSH).unwrap().seq;
     let state = Arc::new(State::new(100));
     let intents = Arc::new(Intents::new());
     let (s, i) = (Arc::clone(&state), Arc::clone(&intents));
@@ -160,6 +161,7 @@ fn only_our_pushes_become_telemetry() {
     std::thread::sleep(Duration::from_millis(200));
     state.shutdown.store(true, Ordering::Relaxed);
     handle.join().unwrap();
+    let bytes = std::fs::read(&path).unwrap();
     let _ = std::fs::remove_file(&path);
 
     let t = state.telemetry.load();
@@ -167,6 +169,21 @@ fn only_our_pushes_become_telemetry() {
     assert_eq!(t.foreign_pushes, 1, "but it is seen and counted");
     assert_eq!(t.battery.map(|b| b.percent), Some(77));
     assert_eq!(t.sa_status.map(|s| s.is_pick_up), Some(false));
+    // Both pushes were acknowledged with the stock's frame, each echoing the push's own sequence.
+    let acks: Vec<Vec<u8>> = Decoder::new()
+        .push(&bytes)
+        .iter()
+        .filter(|f| f.is_ack && (f.cmd_set, f.cmd_id) == id::DDS_PUSH)
+        .map(|f| f.encode().unwrap())
+        .collect();
+    assert_eq!(
+        acks,
+        vec![
+            s1_duml::dds::push_ack(stock_seq).encode().unwrap(),
+            s1_duml::dds::push_ack(7).encode().unwrap()
+        ],
+        "one ack per push, the stock's then ours, with their sequences"
+    );
 }
 
 /// A frame queued over the socket reaches the wire with its own sequence number, and in gimbal

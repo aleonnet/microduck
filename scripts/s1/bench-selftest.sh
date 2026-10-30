@@ -41,7 +41,9 @@ esac
 SHIM
 chmod 755 "$WORK/bin/adb"
 export PATH="$WORK/bin:$PATH"
-export S1_HOST=shim:5555 S1_OUT="$WORK/out" S1_BAUD=921600 S1_UDP=127.0.0.1:1
+# The e2e driver is pointed at ports nothing answers on: port 1 is reserved and refuses, so even a
+# forward left by an earlier robot session on 9000 cannot make this self-test drive a robot.
+export S1_HOST=shim:5555 S1_OUT="$WORK/out" S1_BAUD=921600 S1_UDP=127.0.0.1:1 S1_TCP=127.0.0.1:1
 
 fail=0
 run() { # run <stage> [args]: the stage must exit 0
@@ -65,9 +67,9 @@ run exec
 asked exec "chroot /data/debian /bin/uname -a"
 run stop
 asked stop "stop dji_hdvt_uav"
-# `drive` reaches the robot's socket through an adb forward the shim does not make: s1-e2e refuses
-# to connect, the stage records that and goes on — which is the behaviour wanted on a bench, and
-# what lets the launch lines be checked here.
+# `drive` reaches the robot's socket through a forward the shim does not make, and S1_TCP points
+# at a port that refuses: s1-e2e cannot connect, the stage records that and goes on — the
+# behaviour wanted on a bench, and what lets the launch lines be checked here.
 run drive
 asked drive "chroot /data/debian /usr/bin/env PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin /opt/robot/bin/s1d --port /dev/ttyS3 --baud 921600 --sounds /opt/robot/sounds"
 asked drive "chroot /data/debian /usr/bin/env PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin /opt/robot/bin/netpadd"

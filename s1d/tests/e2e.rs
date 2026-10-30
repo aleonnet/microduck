@@ -43,7 +43,7 @@ fn every_item_of_phase_1_passes_through_the_ducks_mechanism() {
         .find(|l| l.contains("items passed"))
         .unwrap_or("");
     assert!(
-        line.starts_with("38 of 38"),
+        line.starts_with("40 of 40"),
         "every item must run and pass: {line:?}"
     );
 }
