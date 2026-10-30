@@ -105,6 +105,50 @@ Artefacts of the night (the bench adds its own lines per stage):
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/rootfs/rootfs-bookworm-armhf.tar sha256=19ff2018f22396f710e97fea7ef3c9c70f539c108cf8316e078628d30e3abdf8
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/rootfs/rootfs-bookworm-armhf.packages sha256=531c51d612a103205071fd663416f1f9995c808f097ad7c84fe960c8c1f660d4
 
+
+## Bench, 2026-10-30 morning — stage 1 (stock alive)
+
+Root adb opened through the app's Lab (`robomaster-s1-hacks`, `enable_root_adb.py` → `S1_ADB_READY`);
+`adb shell id` → `uid=0(root)`, `ro.product.model` → `L1860`, Android 4.4.4, **`getenforce` →
+`Disabled`** (the PoC's "SELinux blocks /data" belief was wrong; stage 3 says what does).
+
+Measured:
+
+- **Baud of `/dev/ttyS3`: 921600** (`busybox stty -F /dev/ttyS3 -a` → `speed 921600 baud`). `S1_BAUD=921600`.
+- **The LED command is `0x3f/0x32` to host `0x18`**, thirteen bytes `effect, led_mask u16, r g b,
+  repeat, t1 u16, t2 u16, comp_mask u16` — three frames captured while the app changed colours
+  (`hdvt_uav.strace`, `write(16, …)`): solid teal `01 ff00 00 7f 46 00 0000 0000 3f00` and white
+  breath `02 ff00 ff ff ff 00 f401 f401 3f00`. The SDK's `0x3f/0x33` never appears. `s1-duml`'s
+  `system_led` now reproduces both byte for byte (`tests/fixtures/led_stock_{solid,breath}_real.bin`).
+- Stock traffic in 70 s: `0x04/0x69` 6093 and heartbeat `0x3f/0x60` 6084 writes (~87 Hz each),
+  1849 acks of DDS pushes (`0x48/0x08`, attri `0xa0`, data `01` — **the controller acks every push**;
+  `s1d` does not yet), `0x0a/0x53` 672 (~10 Hz), `0x04/0x4c` 43, `0x03/0xd7` 27, `0x00/0x58` 14.
+  No `0x3f/0x02` armour, `0x3f/0x10` IR or `0x3f/0x51` blaster frames were written by the controller
+  in this window (they would be *reads*, and `strace -s 64` truncates reads mid-stream: 4324
+  truncated payloads).
+- **A microSD is in the robot**: `mmcblk1p1` 29.8 GB vfat at `/sdcard`. eMMC 3.8 GB: `system` 256 MB,
+  `userdata` 1.1 GB, `blackbox` 1.9 GB, `cache` 256 MB, `recovery`/`normal` 16 MB, `vendor`/`amt`
+  64 MB. `/data` 679 MB free, `ext4 rw` (no `noexec` flag in `/proc/mounts`).
+- 5 cores ARMv7 rev 5, NEON, VFPv4 (`/proc/cpuinfo`). `dji_camera` was streaming (`VIDIOC_DQBUF`).
+- Fixed on the way: the S1's busybox 1.25.1 `timeout` wants `-t SECS` (the bare form exits 127);
+  `bench.sh` uses it in stages 1, 5 and 6. Backup staging moved to `/sdcard/bk`.
+
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/capture/_system_xbin_busybox_stty_-F_dev_ttyS3_-a.txt sha256=10858ddaed015132b5902e90bd13f52a55d43175680d44c2cad112889dcb9a39
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/capture/cat_proc_cpuinfo.txt sha256=af48bb92b627987ced943faa95d05373aca6a0b91da966686308418459056a0a
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/capture/cat_proc_mounts.txt sha256=b6aa9da3e0ee0741c2c7486b1cffa51233166ff3ed5c1ad416c3bc0f8a9fc80d
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/capture/cat_proc_partitions.txt sha256=1607a47bfc9f7ac309218559e294106ea15462ac10e05a4ca9cd3a66384d628b
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/capture/cmd.txt sha256=70dcb6ca7bdb5eb9ea3559a92172baddd406f66da5a910162a15509a02f409f5
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/capture/df.txt sha256=926eef759f3f7b84a115f4484a202aa9b789ff19684df90e9a97b53962d9ce4c
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/capture/dji_camera.strace sha256=87fdfa49843e68d3d71c1f9bce8d3702d790ad3982a476506f7c040bbfb24f3b
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/capture/getenforce.txt sha256=1535895fea3509918515479905fb814e80657ea5db44bcd7bbdf6ffbde370de2
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/capture/getprop.txt sha256=9d9c50c6d93da4f3a40d1b9f75761bc8027e2d17091f2c97c9fa0471d38cdfb4
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/capture/hdvt_uav.strace sha256=f4af06fd573a4e37e849ca556443f1db2a6e65c9d567cc978a1f154b0fa924dc
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/capture/ls_-l_dev_block_platform_by-name.txt sha256=c7fbf3de2a68018357f375d2478d0ffe38dd26ef1af067f2f63494159ec7b04e
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/capture/ls_-l_dev_input_dev_video_dev_snd.txt sha256=d01c90f276822fd84c39c9bb2f720bb701b7d3023edc52959a29f1df710e484d
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/capture/ps.txt sha256=ba896e5a5f6f9f7cdc56ab5a13268d9db9814c99abdd1ceda37e0b76228a2acd
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/capture/top_before.txt sha256=cb3a80069c80834eeb59a86b52578e9880610295104c98bbc4d345644346da2b
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/capture/top_vision.txt sha256=abda4d6fb67b6d63551a1c42c119e8f08114ed0820f9f6fc633889d521ded8c7
+
 ## Two corrections to earlier notes
 
 The lab's capture parser read the command bytes at the wrong offset, so earlier notes name

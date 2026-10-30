@@ -29,6 +29,8 @@ pub mod host {
     pub const CHASSIS_SENDER: u8 = 0xC9;
     /// The gimbal.
     pub const GIMBAL: u8 = 0x04;
+    /// Where the stock app sends the LED command (`0x18`): captured, not named by the SDK.
+    pub const LED: u8 = 0x18;
 }
 
 /// `(cmd_set, cmd_id)` of each command this crate builds or reads.
@@ -38,7 +40,10 @@ pub mod id {
     pub const CHASSIS_SPEED: (u8, u8) = (0x3f, 0x21);
     pub const HEARTBEAT: (u8, u8) = (0x3f, 0x60);
     pub const GIMBAL_ROTATE: (u8, u8) = (0x3f, 0xb0);
-    pub const SYSTEM_LED: (u8, u8) = (0x3f, 0x33);
+    /// The system LEDs as the stock app drives them on this bus: `0x3f/0x32`, captured on
+    /// 2026-10-30 (stage 1, `hdvt_uav.strace`, three frames while the app changed colours).
+    /// The SDK's `ProtoSetSystemLed` is `0x3f/0x33` with another layout; it never appeared.
+    pub const SYSTEM_LED: (u8, u8) = (0x3f, 0x32);
     pub const ARMOR_HIT: (u8, u8) = (0x3f, 0x02);
     pub const IR_HIT: (u8, u8) = (0x3f, 0x10);
     pub const DDS_ADD_SUB: (u8, u8) = (0x48, 0x03);
@@ -180,42 +185,57 @@ pub fn gimbal_angles(seq: u16, yaw_ddeg: i16, pitch_ddeg: i16) -> Frame {
     )
 }
 
-/// What one LED effect asks for, as `ProtoSetSystemLed` lays it out (DJI's SDK, `protocol.py`).
+/// One LED effect, in the thirteen bytes the stock app writes (captured on the robot's UART,
+/// 2026-10-30, stage 1 of `docs/project/s1-bringup.md`; `tests/fixtures/led_stock_*_real.bin`):
+///
+/// ```text
+/// effect  led_mask(u16 LE)  r g b     repeat  t1(u16 LE)  t2(u16 LE)  comp_mask(u16 LE)
+/// 01      ff 00             00 7f 46  00      00 00       00 00       3f 00   solid teal, every group
+/// 02      ff 00             ff ff ff  00      f4 01       f4 01       3f 00   white breath, 500/500 ms
+/// ```
+///
+/// The field names follow the SDK's `led.py` (`set_led`: effect `0` off, `1` on, `2` breath,
+/// `3` flash, `4` scrolling; `comp_mask` `0x01` bottom back … `0x20` top right, `0x3f` all), the
+/// order and widths follow the wire. Which bit is which group is still the bench's (stage 6).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SystemLed {
-    /// Which LED groups, as the armour masks in `led.py`: `0x01` bottom back, `0x02` bottom front,
-    /// `0x04` bottom left, `0x08` bottom right, `0x10` top left, `0x20` top right, `0x3f` all.
-    /// `armor.py` numbers left and right the other way round; the bench says which is which.
-    pub comp_mask: u32,
-    /// Which LEDs within a group; `0xff` all, `0x0f` for the scrolling effect.
-    pub led_mask: i16,
-    /// `7` in every call the SDK makes.
-    pub ctrl_mode: u8,
-    /// `0` off, `1` on, `2` breath, `3` flash, `4` scrolling (`led.py` `set_led`).
     pub effect: u8,
+    /// Which LEDs within a group; the app sends `0xff`.
+    pub led_mask: u16,
     pub r: u8,
     pub g: u8,
     pub b: u8,
+    /// The SDK's `loop`; the app sends `0`.
     pub repeat: u8,
-    /// Effect timings, ms: breath 1000/1000, flash 500/freq, scrolling 30/40.
-    pub t1: i16,
-    pub t2: i16,
+    /// Effect timings, ms; the app sends 500/500 for breath and 0/0 for solid.
+    pub t1: u16,
+    pub t2: u16,
+    pub comp_mask: u16,
 }
 
 impl SystemLed {
     /// Every LED a solid colour: what `robot.flashlight` becomes on this body.
     pub fn solid(r: u8, g: u8, b: u8) -> Self {
         Self {
-            comp_mask: 0x3f,
-            led_mask: 0xff,
-            ctrl_mode: 7,
             effect: 1,
+            led_mask: 0xff,
             r,
             g,
             b,
             repeat: 0,
-            t1: 100,
-            t2: 100,
+            t1: 0,
+            t2: 0,
+            comp_mask: 0x3f,
+        }
+    }
+
+    /// Every LED breathing a colour, as the app's own breath frame has it.
+    pub fn breath(r: u8, g: u8, b: u8, t1: u16, t2: u16) -> Self {
+        Self {
+            effect: 2,
+            t1,
+            t2,
+            ..Self::solid(r, g, b)
         }
     }
 
@@ -227,23 +247,18 @@ impl SystemLed {
     }
 }
 
-/// `0x3f/0x33`: the system LEDs. Fifteen bytes, little-endian, exactly `ProtoSetSystemLed.pack_req`.
-///
-/// **Receiver still to confirm on this bus.** The SDK addresses this at host 9 — the controller we
-/// run on — so on the UART it may be relayed onward to the motion controller or handled locally;
-/// stage 1 of the bench (the app changing LED colours under `strace`) answers that. Until then it is
-/// sent to the motion controller like everything else.
+/// `0x3f/0x32` to host `0x18`: the system LEDs, byte for byte what the app writes.
 pub fn system_led(seq: u16, led: &SystemLed) -> Frame {
-    let mut data = Vec::with_capacity(15);
-    data.extend_from_slice(&led.comp_mask.to_le_bytes());
+    let mut data = Vec::with_capacity(13);
+    data.push(led.effect);
     data.extend_from_slice(&led.led_mask.to_le_bytes());
-    data.push((led.ctrl_mode << 4) | (led.effect & 0x0f));
     data.extend_from_slice(&[led.r, led.g, led.b, led.repeat]);
     data.extend_from_slice(&led.t1.to_le_bytes());
     data.extend_from_slice(&led.t2.to_le_bytes());
+    data.extend_from_slice(&led.comp_mask.to_le_bytes());
     Frame::request(
         host::BASE,
-        host::MOTION_CONTROLLER,
+        host::LED,
         seq,
         id::SYSTEM_LED.0,
         id::SYSTEM_LED.1,

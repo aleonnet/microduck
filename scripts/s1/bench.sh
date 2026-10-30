@@ -67,7 +67,7 @@ case "$stage" in
     sh_robot "top -n 1 -m 15" > "$D/top_before.txt" 2>&1 || true
     # Bounded: `strace -p` only ends with the traced process, so each gets a 70 s timeout and `wait`
     # returns; the top samples cover the same window.
-    sh_robot "$BB timeout 70 strace -f -tt -e trace=ioctl,write,read,open,openat -s 64 -o /data/hdvt.strace -p \$($BB pidof dji_hdvt_uav) & $BB timeout 70 strace -f -tt -e trace=ioctl,write,read,open,openat -s 64 -o /data/camera.strace -p \$($BB pidof dji_camera) & for i in 1 2 3 4 5 6 7; do top -n 1 -m 10 >> /data/top_vision.txt; $BB sleep 10; done; wait" || true
+    sh_robot "$BB timeout -t 70 strace -f -tt -e trace=ioctl,write,read,open,openat -s 64 -o /data/hdvt.strace -p \$($BB pidof dji_hdvt_uav) & $BB timeout -t 70 strace -f -tt -e trace=ioctl,write,read,open,openat -s 64 -o /data/camera.strace -p \$($BB pidof dji_camera) & for i in 1 2 3 4 5 6 7; do top -n 1 -m 10 >> /data/top_vision.txt; $BB sleep 10; done; wait" || true
     $A pull /data/hdvt.strace "$D/hdvt_uav.strace" >/dev/null; $A pull /data/camera.strace "$D/dji_camera.strace" >/dev/null; $A pull /data/top_vision.txt "$D/top_vision.txt" >/dev/null
     for f in "$D"/*.txt "$D"/*.strace; do art "$f"; done ;;
 
@@ -75,16 +75,26 @@ case "$stage" in
     need_robot; D=$(dir backup)
     sh_robot "ls -l /dev/block/platform/*/by-name" | tee "$D/by-name.txt"
     sh_robot "df /data" | tee "$D/df.txt"
-    say "dumping each by-name partition to /data/bk/ then pulling; sizes decide staging"
-    sh_robot "mkdir -p /data/bk; for p in /dev/block/platform/*/by-name/*; do n=\$($BB basename \$p); $BB dd if=\$p of=/data/bk/\$n.img bs=1M 2>/dev/null && $BB sha256sum /data/bk/\$n.img; done" | tee "$D/SHA256SUMS.robot"
-    $A pull /data/bk "$D/" >/dev/null
+    # Staging on the microSD (vfat, 29.8 GB free, measured at stage 1): /data has 679 MB free and the
+    # eMMC is 3.8 GB. The three big partitions (blackbox 1.9 GB, userdata 1.1 GB, cache 256 MB) are
+    # dumped and hashed on the robot but stay on the card by default: at the measured 1.4 MB/s adb
+    # pull they are 40 minutes; S1_PULL_SKIP="" pulls everything.
+    STAGE="${S1_STAGE:-/sdcard/bk}"; SKIP="${S1_PULL_SKIP-blackbox userdata cache}"
+    say "dumping each by-name partition to $STAGE on the robot, sha256 there, then pulling all but: ${SKIP:-nothing}"
+    sh_robot "mkdir -p $STAGE; for p in /dev/block/platform/*/by-name/*; do n=\$($BB basename \$p); $BB dd if=\$p of=$STAGE/\$n.img bs=1M 2>/dev/null && $BB sha256sum $STAGE/\$n.img; done" | tr -d '\r' | tee "$D/SHA256SUMS.robot"
+    mkdir -p "$D/bk"
+    for n in $(awk '{ sub(".*/", "", $2); sub(/\.img$/, "", $2); print $2 }' "$D/SHA256SUMS.robot"); do
+        case " $SKIP " in *" $n "*) say "left on the card: $n.img"; continue;; esac
+        $A pull "$STAGE/$n.img" "$D/bk/$n.img" >/dev/null
+    done
     ( cd "$D/bk" && shasum -a 256 *.img > ../SHA256SUMS )
     # Both sides reduced to `<sha> <name>`: busybox prints `/data/bk/<name>.img`, the Mac prints
     # `<name>.img` with two spaces, and comparing them raw never matched.
     # `tr -d '\r'`: adbd before the shell-v2 protocol (Android < 6) CRLFs its output.
     norm() { tr -d '\r' < "$1" | awk '{ sub(".*/", "", $2); print $1, $2 }' | sort; }
-    diff <(norm "$D/SHA256SUMS.robot") <(norm "$D/SHA256SUMS") && say "SHA robot == Mac" || say "SHA MISMATCH — see $D"
-    sh_robot "rm -rf /data/bk"
+    # Compared over what was pulled; the lines left on the card are the robot's own hashes.
+    diff <(norm "$D/SHA256SUMS.robot" | grep -F -f <(awk '{print $2}' "$D/SHA256SUMS")) <(norm "$D/SHA256SUMS") && say "SHA robot == Mac (pulled set)" || say "SHA MISMATCH — see $D"
+    say "images stay on the robot's card at $STAGE (remove by hand when the Mac copy is complete)"
     for f in "$D"/SHA256SUMS "$D"/bk/*.img; do art "$f"; done ;;
 
   exec)
@@ -116,7 +126,7 @@ case "$stage" in
     cat "$D/health.json"
     say "on the Mac now:  duckctl udp-pad ${HOST%%:*}    — Start arms the chassis; sticks drive; Ctrl-C when done"
     say "collecting robot.state for 60 s meanwhile"
-    sh_robot "$BB timeout 60 chroot $CHROOT /opt/robot/bin/robotctl monitor --json" > "$D/monitor.log" 2>&1 || true
+    sh_robot "$BB timeout -t 60 chroot $CHROOT /opt/robot/bin/robotctl monitor --json" > "$D/monitor.log" 2>&1 || true
     $A pull /data/s1d.log "$D/s1d.log" >/dev/null; $A pull /data/netpadd.log "$D/netpadd.log" >/dev/null
     for f in "$D"/health.json "$D"/monitor.log "$D"/s1d.log "$D"/netpadd.log; do art "$f"; done ;;
 
@@ -124,7 +134,7 @@ case "$stage" in
     need_robot; D=$(dir events)
     for c in "on --color red" "on --color green" "on --color blue" "off"; do sh_robot "chroot $CHROOT /opt/robot/bin/robotctl flashlight $c"; sleep 1; done | tee "$D/led_effects.txt"
     say "now TAP each armour plate, point an IR source if you have one, and PRESS the button; 30 s"
-    sh_robot "$BB timeout 30 $BB cat /dev/input/event0 | $BB xxd" > "$D/event0.hex" 2>&1 || true
+    sh_robot "$BB timeout -t 30 $BB cat /dev/input/event0 | $BB xxd" > "$D/event0.hex" 2>&1 || true
     $A pull /data/s1d.log "$D/s1d.log" >/dev/null
     grep -E "armour hit|infrared hit|button" "$D/s1d.log" | tee "$D/events_in_log.txt" || true
     for f in "$D"/led_effects.txt "$D"/event0.hex "$D"/s1d.log; do art "$f"; done ;;

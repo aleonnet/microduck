@@ -214,17 +214,32 @@ fn events_parse_as_the_sdk_unpacks_them() {
     assert!(ArmorHit::parse(&ir).is_none());
 }
 
-/// The LED command's fifteen bytes, in `ProtoSetSystemLed.pack_req` order.
+/// The LED command is what the stock app writes, byte for byte: two frames captured on the UART
+/// on 2026-10-30 while the app changed colours (solid teal, then white breathing), reproduced
+/// from the struct with the captured sequence numbers.
 #[test]
-fn system_led_matches_the_sdk_layout() {
-    let f = cmd::system_led(0, &SystemLed::solid(255, 0, 128));
-    assert_eq!(f.data.len(), 15);
-    assert_eq!(&f.data[0..4], &0x3fu32.to_le_bytes());
-    assert_eq!(&f.data[4..6], &0xffi16.to_le_bytes());
-    assert_eq!(f.data[6], 0x71, "ctrl 7 << 4 | effect on");
-    assert_eq!(&f.data[7..11], &[255, 0, 128, 0]);
-    assert_eq!(&f.data[11..15], &[100, 0, 100, 0]);
-    assert_eq!(cmd::system_led(0, &SystemLed::off()).data[6], 0x70);
+fn system_led_reproduces_the_apps_frames_byte_for_byte() {
+    let solid: &[u8] = include_bytes!("fixtures/led_stock_solid_real.bin");
+    let breath: &[u8] = include_bytes!("fixtures/led_stock_breath_real.bin");
+    let decoded = Frame::decode(solid).expect("a real frame decodes");
+    assert_eq!((decoded.cmd_set, decoded.cmd_id), cmd::id::SYSTEM_LED);
+    assert_eq!(
+        (decoded.sender, decoded.receiver),
+        (cmd::host::BASE, cmd::host::LED)
+    );
+    assert_eq!(
+        cmd::system_led(0x001b, &SystemLed::solid(0x00, 0x7f, 0x46))
+            .encode()
+            .unwrap(),
+        solid
+    );
+    assert_eq!(
+        cmd::system_led(0x001c, &SystemLed::breath(255, 255, 255, 500, 500))
+            .encode()
+            .unwrap(),
+        breath
+    );
+    assert_eq!(cmd::system_led(0, &SystemLed::off()).data[0], 0);
 }
 
 /// `chassis_speed` is three little-endian floats, as `drive_speed` packs them.
