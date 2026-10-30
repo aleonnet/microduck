@@ -30,6 +30,10 @@ mkdir -p "$OUT"
 echo "[ort] building onnxruntime $TAG for armv7hf in an arm64 bookworm container (jobs=$JOBS)"
 echo "[ort] log: $OUT/build.log"
 
+# `--compile-no-warning-as-error` (a cmake flag) is what ONNX Runtime's own build.py hands to cmake
+# when asked `--compile_no_warning_as_error` (tools/ci_build/build.py, use_dev_mode). Without it
+# the armv7 build dies on -Werror=restrict, a GCC 12 false positive in libstdc++ char_traits on
+# 32-bit targets. -Wno-psabi silences a hundred "parameter passing changed in GCC 7.1" notes.
 set +e
 docker run --platform linux/arm64 --name "$NAME" -e TAG="$TAG" -e JOBS="$JOBS" debian:bookworm sh -c '
 set -e
@@ -53,8 +57,9 @@ SET(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
 SET(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
 TC
 mkdir -p /build && cd /build
-cmake /src/cmake -G Ninja \
+cmake /src/cmake -G Ninja --compile-no-warning-as-error \
     -DCMAKE_TOOLCHAIN_FILE=/tool.cmake \
+    -DCMAKE_CXX_FLAGS=-Wno-psabi -DCMAKE_C_FLAGS=-Wno-psabi \
     -DCMAKE_BUILD_TYPE=Release \
     -Donnxruntime_BUILD_SHARED_LIB=ON \
     -Donnxruntime_BUILD_UNIT_TESTS=OFF \
