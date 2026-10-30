@@ -233,9 +233,9 @@ heartbeat streams), `events`, `camera`, `audio`, `frames`, `infer`, `restore` â€
 with the stock alive for the button-press power-off (`dji_sys`, the frame behind `s1.power`) and the
 speaker-volume device. The Coral stays phase 2's (owner's decision, 2026-10-30).
 
-- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/e2e/e2e_fake.txt sha256=521e79ecef012f133288b276af3c7528ae2ad06012258c93298a385bb45b12a8
-- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/e2e/work/report.txt sha256=a6c9a7ba6cd55d93b25e9a785f5201f026ca48e1cac98ef4ff0381ae1bf739c5
-- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/e2e/work/wire.bin sha256=f3c8887d6035284966f079ff84ce4985c136a0606015e016b6f1e6aba7b95bd2
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/e2e/e2e_fake.txt sha256=fcc5df8a73ea32ccf839e8474a55ee29eb2988ff66bd8fa7e66b1e3aaaf003a7
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/e2e/work/report.txt sha256=1db1dbfba84c9dadc6c5bc26dc044ce26b19f0476777a166999c471bf84f4ed5
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/e2e/work/wire.bin sha256=e5f1897546550f1c36b64425a82c00821081562b6c8c919a09fcc73d3a37ce75
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/e2e/refute.txt sha256=f0e510cff90677fa6a8b47cebe5dd5c0357b5da1aab9247e6a42a8b42ba022f9
 
 ## Bench, 2026-10-30 morning â€” stage 1 (stock alive)
