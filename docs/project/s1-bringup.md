@@ -471,8 +471,12 @@ record keeps for the modes: "chassis follows gimbal" → gimbal work mode **0** 
 twice; the chassis side had gone at app connect: `0x3f/0x19 00` to the motion controller and
 `0x3f/0x66 02 00` to the chassis, sender `0x02`, 17:05:55); "gimbal follows chassis" → gimbal work
 mode **2** (`0x04/0x4c 02 00`) repeated at 8 Hz for as long as the mode is on (122 in 15 s). Both
-values are the library's own (`gimbal_free_mode`, `gimbal_yaw_follow_mode`). FPV fell outside the
-window; the mic and the volume do not pass the UART (camera and ALSA processes) and are stage 8's.
+values are the library's own (`gimbal_free_mode`, `gimbal_yaw_follow_mode`). There is no separate
+"FPV" toggle in the app (owner, 2026-10-30: the piloting screen *is* FPV): what the library calls
+`chassis_fpv_mode` is the app's default driving, and the frames the app sends at connect are its
+whole setup (`0x3f/0x19 00` to the motion controller, `0x3f/0x66 02 00` to the chassis, both from
+sender `0x02`); F4 needs no further capture. The mic and the volume do not pass the UART (camera
+and ALSA processes) and are stage 8's.
 The power-off trace of `dji_sys` (`/data/sys_poweroff.strace`, 17:15) stays on the robot for the
 next boot. Stage 7 started after the owner closed the app: formats listed (YUYV, NV12, NV21, two
 10-bit Bayer), then `VIDIOC_S_FMT` 1280×720 NV12 "Invalid argument" **while the robot was going
