@@ -1,3 +1,12 @@
+# `s1d` — the RoboMaster S1's body service: the `robot.*` half of the microduck contract that a
+# mecanum chassis and a two-axis gimbal can honour, served on `/run/robotd.sock` exactly where
+# `robotd` would be, so `netpadd`, `robotctl` and `mediad` drive it unchanged.
+#
+# Below the contract it speaks DUML (`s1-duml`) on `/dev/ttyS3`. It is deliberately not a port of
+# `robotd`: that daemon is fifteen servos and a policy; this one is a twist, two angles, twenty LEDs
+# and the telemetry the motion controller pushes back. What it copies from `robotd` is the shape
+# that made the contract honest — stamped intent slots, a loop that never waits on a client, health
+# computed from atomics the loop publishes — and the IPC server around the socket.
 [package]
 name = "s1d"
 version.workspace = true
@@ -7,3 +16,20 @@ license.workspace = true
 description = "The RoboMaster S1 body service: robot.* over the microduck contract, DUML on /dev/ttyS3"
 
 [dependencies]
+duck-ipc-proto = { path = "../duck-ipc-proto" }
+s1-duml = { path = "../s1-duml" }
+arc-swap = "1"
+clap = { workspace = true, features = ["derive"] }
+serde.workspace = true
+serde_json.workspace = true
+# `default-features = false` drops `libudev`, for the reason `duck-control/Cargo.toml` gives: the
+# port is opened by path, never enumerated, and libudev-sys has no sysroot in a cross-build.
+serialport = { version = "4.8", default-features = false }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "time", "io-util", "signal", "sync"] }
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+
+[dev-dependencies]
+# Only to prove `deploy/s1/robotd.toml` loads with the validation `netpadd` applies to it.
+robotd-params = { path = "../robotd-params" }

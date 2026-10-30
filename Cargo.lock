@@ -4276,6 +4276,20 @@ dependencies = [
 [[package]]
 name = "s1d"
 version = "0.17.8"
+dependencies = [
+ "arc-swap",
+ "clap",
+ "duck-ipc-proto",
+ "robotd-params",
+ "s1-duml",
+ "serde",
+ "serde_json",
+ "serialport",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
 
 [[package]]
 name = "safe_arch"
