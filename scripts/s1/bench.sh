@@ -127,7 +127,7 @@ case "$stage" in
     # `setsid` + `nohup` + stdin from /dev/null: measured on 2026-10-30, `nohup … &` alone left an
     # empty log — the daemon died with the adb shell that started it. `setsid` alone still lost the
     # race with the pty closing (netpadd, same day); the `sleep 1` inside the shell is what settles it.
-    sh_robot "($BB setsid $BB nohup $BB chroot $CHROOT /opt/robot/bin/s1d --port /dev/ttyS3 --baud $S1_BAUD ${S1_ARGS:-} </dev/null >/data/s1d.log 2>&1 &); $BB sleep 1"
+    sh_robot "($BB setsid $BB nohup $BB chroot $CHROOT /opt/robot/bin/s1d --port /dev/ttyS3 --baud $S1_BAUD --sounds /opt/robot/sounds ${S1_ARGS:-} </dev/null >/data/s1d.log 2>&1 &); $BB sleep 1"
     sleep 2
     sh_robot "($BB setsid $BB nohup $BB chroot $CHROOT /opt/robot/bin/netpadd </dev/null >/data/netpadd.log 2>&1 &); $BB sleep 1"; sleep 1
     # `robotctl health` exits non-zero on an unhealthy verdict; that is a result to record, not a

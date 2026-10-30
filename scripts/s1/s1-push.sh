@@ -43,8 +43,11 @@ for b in s1d netpadd robotctl; do
 done
 $A push deploy/s1/robotd.toml "$CHROOT/etc/robot/robotd.toml" >/dev/null
 $A shell "chmod 755 $CHROOT/opt/robot/bin/*"
+# A sound bank for `robot.sound`: the stock firmware's own wavs (`/system`, bind-mounted read-only
+# into the chroot by `bench.sh exec`) under the duck's tags, until phase 2 gives the S1 a voice.
+$A shell "mkdir -p $CHROOT/opt/robot/sounds && cd $CHROOT/opt/robot/sounds && for pair in chirp:media_sound_demo_recognize_success greet:power_on alarm:media_sound_demo_attacked inquire:media_sound_demo_scanning peck:sleeping coo:media_sound_demo_gimbal_rotate wheee:engine_start; do ln -sf /mnt/system/audio/sound/\${pair#*:}.wav \${pair%%:*}.wav; done; ls -l"
 echo "[s1-push] installed into $HOST:$CHROOT/opt/robot/bin"
 echo "[s1-push] run (stock stopped, baud from bench.sh capture):"
-echo "  adb -s $HOST shell /system/xbin/busybox chroot $CHROOT /opt/robot/bin/s1d --port /dev/ttyS3 --baud <BAUD>"
+echo "  adb -s $HOST shell /system/xbin/busybox chroot $CHROOT /opt/robot/bin/s1d --port /dev/ttyS3 --baud <BAUD> --sounds /opt/robot/sounds"
 echo "  adb -s $HOST shell /system/xbin/busybox chroot $CHROOT /opt/robot/bin/netpadd"
 echo "  adb -s $HOST shell /system/xbin/busybox chroot $CHROOT /opt/robot/bin/robotctl health"

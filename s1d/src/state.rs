@@ -54,6 +54,8 @@ pub struct State {
     pub shutdown: AtomicBool,
     /// Whether the last `robot.flashlight` left the LEDs on, for `toggle`.
     pub flashlight_on: AtomicBool,
+    /// The speaker, when `main` gave this daemon a sound bank; `None` on a fake body.
+    pub sound: std::sync::Mutex<Option<crate::sound::Sound>>,
 }
 
 /// Consecutive write failures that make the body unhealthy. One is a hiccup; this many in a row
@@ -87,6 +89,7 @@ impl State {
             state_tx,
             shutdown: AtomicBool::new(false),
             flashlight_on: AtomicBool::new(false),
+            sound: std::sync::Mutex::new(None),
         }
     }
 

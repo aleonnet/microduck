@@ -9,6 +9,7 @@ pub mod body;
 pub mod button;
 pub mod intents;
 pub mod ipc;
+pub mod sound;
 pub mod state;
 pub mod tick;
 

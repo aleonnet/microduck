@@ -444,10 +444,18 @@ pub fn dispatch(
         ),
         proto::Call::RobotPose(_) => refused(id, "this body has no legs to pose"),
         proto::Call::RobotMouth(_) => refused(id, "this body has no mouth"),
-        proto::Call::RobotSound(_) => refused(
-            id,
-            "no voice on this body yet (phase 2: aplay on the S1 speaker)",
-        ),
+        // The S1's own speaker through `aplay`, from a bank of wavs named by tag. Refused with the
+        // file's name when the bank lacks it, so a bench without a bank says so.
+        proto::Call::RobotSound(p) => match state.sound.lock() {
+            Ok(mut slot) => match slot.as_mut() {
+                None => refused(id, "no sound bank on this daemon (--sounds)"),
+                Some(sound) => match sound.play(p.tag) {
+                    Ok(_) => accepted(id),
+                    Err(why) => refused(id, &why),
+                },
+            },
+            Err(_) => refused(id, "the speaker is poisoned"),
+        },
         proto::Call::RobotRest | proto::Call::RobotShutdown => refused(
             id,
             "this body neither sits nor powers itself off; use robot.relax",

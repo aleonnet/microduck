@@ -53,6 +53,12 @@ struct Args {
     /// Telemetry rate asked of the motion controller, Hz: 1, 5, 10, 20 or 50.
     #[arg(long, default_value_t = 20)]
     dds_hz: u16,
+    /// Directory of `<tag>.wav` files for `robot.sound`; none means the route is refused.
+    #[arg(long)]
+    sounds: Option<PathBuf>,
+    /// ALSA device of the speaker.
+    #[arg(long, default_value = "hw:0,0")]
+    audio_device: String,
 }
 
 #[tokio::main]
@@ -115,6 +121,15 @@ async fn main() -> ExitCode {
     };
 
     let state = Arc::new(State::new(args.hz));
+    if let Some(bank) = &args.sounds {
+        if let Ok(mut slot) = state.sound.lock() {
+            *slot = Some(s1d::sound::Sound::new(
+                bank.clone(),
+                args.audio_device.clone(),
+            ));
+        }
+        tracing::info!(bank = %bank.display(), device = %args.audio_device, "sound bank");
+    }
     let intents = Arc::new(Intents::new());
 
     let (lock, listener) = match s1d::ipc::claim_socket(&args.socket).await {
