@@ -64,13 +64,18 @@ case "$stage" in
     for c in "cat /proc/cpuinfo" "cat /proc/partitions" "ls -l /dev/block/platform/*/by-name" "cat /proc/mounts" "df" "getenforce" "ps" "getprop" "$BB stty -F /dev/ttyS3 -a" "ls -l /dev/input /dev/video* /dev/snd"; do
         n=$(echo "$c" | tr ' /*' '___' | tr -s '_'); sh_robot "$c" > "$D/$n.txt" 2>&1 || true
     done
-    say "static capture done; now the strace. USE THE APP: camera, a sound, hit each armour plate,"
-    say "change the LED colour and effect, press the controller button, person recognition. 70 s."
+    # The mixer as the stock leaves it (the mic route lives there: dji_camera sets four controls by
+    # id) — through the chroot's amixer when stage 3 has run, which it can with the stock alive.
+    $A shell "test -x $CHROOT/usr/bin/amixer" 2>/dev/null && sh_robot "$BB chroot $CHROOT /usr/bin/amixer -c 0 contents" > "$D/mixer_stock_alive.txt" 2>&1 || true
+    say "static capture done; now the strace. USE THE APP, one thing at a time, 3 s apart:"
+    say "  camera on · a sound · each armour plate · LED colour, then each effect · the controller button"
+    say "  follow toggle (chassis follows gimbal / gimbal follows chassis) · recentre gimbal · drag the gimbal"
+    say "  change the speaker volume · speak into the mic · person recognition · at the very END: power off by the button. 90 s."
     sh_robot "top -n 1 -m 15" > "$D/top_before.txt" 2>&1 || true
     # Bounded: `strace -p` only ends with the traced process, so each gets a 70 s timeout and `wait`
     # returns; the top samples cover the same window.
-    sh_robot "$BB timeout -t 70 strace -f -tt -e trace=ioctl,write,read,open,openat -s 64 -o /data/hdvt.strace -p \$($BB pidof dji_hdvt_uav) & $BB timeout -t 70 strace -f -tt -e trace=ioctl,write,read,open,openat -s 64 -o /data/camera.strace -p \$($BB pidof dji_camera) & for i in 1 2 3 4 5 6 7; do top -n 1 -m 10 >> /data/top_vision.txt; $BB sleep 10; done; wait" || true
-    $A pull /data/hdvt.strace "$D/hdvt_uav.strace" >/dev/null; $A pull /data/camera.strace "$D/dji_camera.strace" >/dev/null; $A pull /data/top_vision.txt "$D/top_vision.txt" >/dev/null
+    sh_robot "$BB timeout -t 90 strace -f -tt -e trace=ioctl,write,read,open,openat -s 256 -o /data/hdvt.strace -p \$($BB pidof dji_hdvt_uav) & $BB timeout -t 90 strace -f -tt -e trace=ioctl,write,read,open,openat -s 256 -o /data/sys.strace -p \$($BB pidof dji_sys) & $BB timeout -t 90 strace -f -tt -e trace=ioctl,write,read,open,openat -s 256 -o /data/camera.strace -p \$($BB pidof dji_camera) & for i in 1 2 3 4 5 6 7; do top -n 1 -m 10 >> /data/top_vision.txt; $BB sleep 10; done; wait" || true
+    $A pull /data/hdvt.strace "$D/hdvt_uav.strace" >/dev/null; $A pull /data/camera.strace "$D/dji_camera.strace" >/dev/null; $A pull /data/sys.strace "$D/dji_sys.strace" >/dev/null 2>&1 || true; $A pull /data/top_vision.txt "$D/top_vision.txt" >/dev/null
     for f in "$D"/*.txt "$D"/*.strace; do art "$f"; done ;;
 
   backup)

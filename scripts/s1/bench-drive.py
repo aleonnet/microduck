@@ -8,10 +8,13 @@ Usage: scripts/s1/bench-drive.py <log file>
 import socket, json, time, sys
 log = open(sys.argv[1], "w")
 s = socket.create_connection(("127.0.0.1", 9000), timeout=5); f = s.makefile("rw"); n = 0
+rtts = []
 def call(method, params, quiet=False):
     global n; n += 1
+    t0 = time.perf_counter()
     f.write(json.dumps({"jsonrpc":"2.0","id":n,"method":method,"params":params}) + "\n"); f.flush()
-    r = f.readline().strip(); log.write(f"{time.strftime('%H:%M:%S')} {method} {json.dumps(params)} -> {r}\n")
+    r = f.readline().strip(); rtts.append((time.perf_counter() - t0) * 1e3)
+    log.write(f"{time.strftime('%H:%M:%S')} {method} {json.dumps(params)} -> {r} rtt_ms={rtts[-1]:.1f}\n")
     if not quiet: print(method, json.dumps(params), "->", r[:160])
     return r
 def hold(method, params, secs, hz=10):
@@ -33,3 +36,6 @@ hold("robot.head", {"neck_pitch":0,"head_pitch":0.3,"head_yaw":-0.5,"head_roll":
 hold("robot.head", {"neck_pitch":0,"head_pitch":0.0,"head_yaw":0.0,"head_roll":0}, 1)
 call("robot.enable", {"on": False, "toggle": False})
 call("robot.health", {})
+rtts.sort()
+summary = f"socket round trip over {len(rtts)} calls: min {rtts[0]:.1f} ms · p50 {rtts[len(rtts)//2]:.1f} ms · max {rtts[-1]:.1f} ms (Mac → adb forward → chroot socket → s1d → back)"
+print(summary); log.write(summary + "\n")

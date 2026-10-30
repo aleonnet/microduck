@@ -349,6 +349,19 @@ not guessed:
   pressed", a long press triggers Wi-Fi pairing — "Wifi Pairing is triggered") and a few GPIOs
   (`hu_gpio.c`: AMT test pins, "paring_gpio"). `s1d` already reads the same device; press and long
   press are the two events `s1.event` reports.
+- **Audio.** The microphone is `dji_camera`'s: it opens the capture PCM with tinyalsa and sets
+  four mixer controls by numeric id (`adc_gain`, `adc_reg`, `mic_boost`, `mic_pga`) before encoding
+  AAC for the app. The `/system/audio/*.apu` files are not mixer tables but profiles for DJI's audio
+  algorithms (`testAPUmodeName1`, 48000 Hz, floats). So the mic route for `arecord` is the mixer
+  state the stock leaves behind: the capture stage dumps every control while the stock runs
+  (`amixer -c 0 contents` through the chroot) and stage 8 replays it. The speaker's volume is not a
+  mixer control: `dji_hdvt_uav` sets it through a kernel device, `/dev/speaker0`
+  (`duss_hal_speaker_set_volume`); the capture stage traces that ioctl while the owner changes the
+  volume in the app, and `s1.volume` follows what it shows.
+- **Power.** DJI's common command set has `0x00/0x45` sleep control, `0x00/0x46` shutdown
+  notification, `0x00/0x47` power state and `0x00/0x0b` device reboot, and the battery its own set
+  (`0x0d`). Which one `dji_sys` sends on the button is what the capture stage records (`strace` on
+  `dji_sys` while the owner powers the robot off at the end).
 - **The vision coprocessor (MA2100)** is where DJI's detectors run (`dji_vision`); it is hardware
   phase 2 may drive, and it is listed here so it is not forgotten.
 
