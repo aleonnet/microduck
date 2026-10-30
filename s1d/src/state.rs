@@ -22,8 +22,13 @@ pub struct Telemetry {
     pub imu: Option<s1_duml::dds::Imu>,
     pub esc: Option<s1_duml::dds::Esc>,
     pub sa_status: Option<s1_duml::dds::SaStatus>,
+    pub gimbal_pos: Option<s1_duml::dds::GimbalPos>,
+    pub stick: Option<s1_duml::dds::Stick>,
     /// Pushes decoded so far, so health can say whether the subscription took.
     pub pushes: u64,
+    /// Pushes that were not ours — another msg id, or ours with the wrong length. The stock
+    /// firmware's subscription keeps pushing after it is stopped; this is where those go.
+    pub foreign_pushes: u64,
 }
 
 pub struct State {
@@ -164,10 +169,14 @@ impl State {
 
     /// The `robot.state` frame for this tick. Joints and targets are empty: this body has no
     /// joint vector in the duck's sense, and every client reads them with `get`. The gimbal travels
-    /// in `head` as `[0, pitch, yaw, 0]`, the order `HeadParams` uses.
+    /// in `head` as `[0, pitch, yaw, 0]`, the order `HeadParams` uses — the angle the motion
+    /// controller reports when telemetry flows, the last commanded one until then.
     pub fn frame(&self, requested: [f64; 3], limited_by: Vec<String>) -> proto::RobotState {
         let t = self.telemetry.load();
-        let (yaw_ddeg, pitch_ddeg) = **self.gimbal_ddeg.load();
+        let (yaw_ddeg, pitch_ddeg) = match t.gimbal_pos {
+            Some(g) => (g.yaw_ddeg, g.pitch_ddeg),
+            None => **self.gimbal_ddeg.load(),
+        };
         let hz = f64::from_bits(self.achieved_hz.load(Ordering::Relaxed));
         let odom = t
             .position

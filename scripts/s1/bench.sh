@@ -9,7 +9,7 @@
 # that every artefact a record cites exists with the sha256 it claims.
 #
 # Usage: scripts/s1/bench.sh <stage> [args]      stages: help | capture | backup | exec | stop | drive |
-#        events | camera | audio | app | restore | frames | infer | verify-record <record.md>
+#        items | events | camera | audio | app | restore | frames | infer | verify-record <record.md>
 # Env:   S1_HOST (default 192.168.1.236:5555) · S1_OUT (default ~/Development/RoboMaster-S1/out/<date>-poc2)
 #        S1_CHROOT (default /data/debian) · S1_BAUD (from capture) · S1_ROOTFS (tar from build-rootfs.sh)
 set -euo pipefail
@@ -30,8 +30,10 @@ stages() {
  2 backup    dd every partition → staging → pull → sha256 on the Mac (SHA256SUMS)
  3 exec      can our binaries run? busybox copied to /data; chroot into the rootfs; uname, ldd
  4 stop      stop dji_hdvt_uav + dji_monitor; list who still holds ttyS3
- 5 drive     s1d + netpadd + robotctl health in the chroot; you drive with `duckctl udp-pad <ip>`
- 6 events    LEDs via robotctl flashlight and the full 0x3f/0x33; armour hits, IR, button in the log
+ 5 drive     s1d + netpadd + robotctl health in the chroot; the Mac drives the socket (bench-drive.py)
+   items     every other body command (follow modes, recentre, gimbal by rate, sleep, distance, PWM,
+             blaster LED, LED effects…) with DJI's own frames (bench-items.py); `items F1 F5` for some
+ 6 events    LEDs via robotctl flashlight and every effect of the real 0x3f/0x32; armour hits, IR, button in the log
  7 camera    stop dji_camera; v4l2-ctl formats; one frame to a file; PNG on the Mac
  8 audio     amixer route; arecord 60 s stream; aplay while driving, top alongside
  9 app       observe what the app does with the stock stopped (notes)
@@ -99,12 +101,18 @@ case "$stage" in
 
   exec)
     need_robot; D=$(dir exec); ROOTFS="${S1_ROOTFS:-$HOME/Development/RoboMaster-S1/out/rootfs/rootfs-bookworm-armhf.tar}"
-    { sh_robot "getenforce; cp /system/xbin/busybox /data/bb && chmod 755 /data/bb && /data/bb true && echo EXEC_IN_DATA_OK || echo EXEC_IN_DATA_DENIED"; } | tee "$D/exec.txt"
+    { sh_robot "getenforce; cp /system/xbin/busybox /data/busybox && chmod 755 /data/busybox && /data/busybox true && echo EXEC_IN_DATA_OK || echo EXEC_IN_DATA_DENIED"; } | tee "$D/exec.txt"
     if grep -q DENIED "$D/exec.txt"; then say "execution in /data denied: the OWNER runs 'setenforce 0' (or we try the microSD); re-run this stage"; exit 2; fi
-    [ -f "$ROOTFS" ] || { say "no rootfs at $ROOTFS; run scripts/s1/build-rootfs.sh"; exit 1; }
-    say "pushing rootfs ($(du -h "$ROOTFS" | cut -f1)) and extracting into $CHROOT"
-    $A push "$ROOTFS" /data/rootfs.tar >/dev/null
-    { sh_robot "mkdir -p $CHROOT && cd $CHROOT && $BB tar -xf /data/rootfs.tar && rm /data/rootfs.tar && mount -o bind /dev $CHROOT/dev; mount -t proc proc $CHROOT/proc; mount -t sysfs sys $CHROOT/sys; chroot $CHROOT /bin/true && echo CHROOT_OK; chroot $CHROOT /bin/uname -a; chroot $CHROOT /usr/bin/ldd --version | head -1"; } | tee -a "$D/exec.txt"
+    if $A shell "test -f $CHROOT/bin/sh" 2>/dev/null; then
+        say "rootfs already at $CHROOT (its /bin/sh exists); not pushing again"
+    else
+        [ -f "$ROOTFS" ] || { say "no rootfs at $ROOTFS; run scripts/s1/build-rootfs.sh"; exit 1; }
+        say "pushing rootfs ($(du -h "$ROOTFS" | cut -f1)) and extracting into $CHROOT"
+        $A push "$ROOTFS" /data/rootfs.tar >/dev/null
+        sh_robot "mkdir -p $CHROOT && cd $CHROOT && $BB tar -xf /data/rootfs.tar && rm /data/rootfs.tar" | tee -a "$D/exec.txt"
+    fi
+    # the Android shell has no chroot or head: both are busybox applets here; mounts are guarded so the stage re-runs
+    { sh_robot "$BB grep -q ' $CHROOT/dev ' /proc/mounts || mount -o bind /dev $CHROOT/dev; $BB grep -q ' $CHROOT/proc ' /proc/mounts || mount -t proc proc $CHROOT/proc; $BB grep -q ' $CHROOT/sys ' /proc/mounts || mount -t sysfs sys $CHROOT/sys; mkdir -p $CHROOT/mnt/system; $BB grep -q ' $CHROOT/mnt/system ' /proc/mounts || mount -o bind,ro /system $CHROOT/mnt/system; $BB chroot $CHROOT /bin/true && echo CHROOT_OK; $BB chroot $CHROOT /bin/uname -a; $BB chroot $CHROOT /usr/bin/ldd --version | $BB head -1; $BB chroot $CHROOT /bin/cat /etc/debian_version"; } | tee -a "$D/exec.txt"
     art "$D/exec.txt" ;;
 
   stop)
@@ -116,23 +124,39 @@ case "$stage" in
   drive)
     need_robot; D=$(dir drive); : "${S1_BAUD:?S1_BAUD is the baud the capture stage measured with stty}"
     say "starting s1d (baud $S1_BAUD) and netpadd in the chroot; WHEELS OFF THE GROUND"
-    # `nohup`, so the daemons outlive the adb shell that started them.
-    sh_robot "$BB nohup chroot $CHROOT /opt/robot/bin/s1d --port /dev/ttyS3 --baud $S1_BAUD ${S1_ARGS:-} > /data/s1d.log 2>&1 &"
+    # `setsid` + `nohup` + stdin from /dev/null: measured on 2026-10-30, `nohup … &` alone left an
+    # empty log — the daemon died with the adb shell that started it. `setsid` alone still lost the
+    # race with the pty closing (netpadd, same day); the `sleep 1` inside the shell is what settles it.
+    sh_robot "($BB setsid $BB nohup $BB chroot $CHROOT /opt/robot/bin/s1d --port /dev/ttyS3 --baud $S1_BAUD ${S1_ARGS:-} </dev/null >/data/s1d.log 2>&1 &); $BB sleep 1"
     sleep 2
-    sh_robot "$BB nohup chroot $CHROOT /opt/robot/bin/netpadd > /data/netpadd.log 2>&1 &"; sleep 1
+    sh_robot "($BB setsid $BB nohup $BB chroot $CHROOT /opt/robot/bin/netpadd </dev/null >/data/netpadd.log 2>&1 &); $BB sleep 1"; sleep 1
     # `robotctl health` exits non-zero on an unhealthy verdict; that is a result to record, not a
     # reason to stop the stage before the logs are pulled.
-    sh_robot "chroot $CHROOT /opt/robot/bin/robotctl health --json" > "$D/health.json" 2>&1 || say "robotctl health rc=$? — the verdict is in health.json"
+    sh_robot "$BB chroot $CHROOT /opt/robot/bin/robotctl health --json" > "$D/health.json" 2>&1 || say "robotctl health rc=$? — the verdict is in health.json"
     cat "$D/health.json"
-    say "on the Mac now:  duckctl udp-pad ${HOST%%:*}    — Start arms the chassis; sticks drive; Ctrl-C when done"
-    say "collecting robot.state for 60 s meanwhile"
-    sh_robot "$BB timeout -t 60 chroot $CHROOT /opt/robot/bin/robotctl monitor --json" > "$D/monitor.log" 2>&1 || true
+    # No gamepad on this bench: the Mac drives the socket through an adb forward (measured
+    # 2026-10-30: `localfilesystem:` forwards to the chroot's unix socket).
+    $A forward tcp:9000 localfilesystem:$CHROOT/run/robotd.sock >/dev/null
+    say "WHEELS OFF THE GROUND: arming and driving now (forward, turn, strafe, gimbal), 15 s"
+    python3 scripts/s1/bench-drive.py "$D/move.log" | tee "$D/move_console.txt"
+    say "collecting robot.state for 10 s"
+    sh_robot "$BB timeout -t 10 $BB chroot $CHROOT /opt/robot/bin/robotctl monitor --json" > "$D/monitor.log" 2>&1 || true
     $A pull /data/s1d.log "$D/s1d.log" >/dev/null; $A pull /data/netpadd.log "$D/netpadd.log" >/dev/null
-    for f in "$D"/health.json "$D"/monitor.log "$D"/s1d.log "$D"/netpadd.log; do art "$f"; done ;;
+    for f in "$D"/health.json "$D"/move.log "$D"/monitor.log "$D"/s1d.log "$D"/netpadd.log; do art "$f"; done ;;
+
+  items)
+    need_robot; D=$(dir items)
+    $A forward tcp:9000 localfilesystem:$CHROOT/run/robotd.sock >/dev/null
+    say "the body's items, one by one, each with DJI's own frame; WHEELS OFF THE GROUND; answer each prompt"
+    python3 scripts/s1/bench-items.py "$D/items.log" "$@"
+    $A pull /data/s1d.log "$D/s1d.log" >/dev/null
+    for f in "$D"/items.log "$D"/s1d.log; do art "$f"; done ;;
 
   events)
     need_robot; D=$(dir events)
-    for c in "on --color red" "on --color green" "on --color blue" "off"; do sh_robot "chroot $CHROOT /opt/robot/bin/robotctl flashlight $c"; sleep 1; done | tee "$D/led_effects.txt"
+    for c in "on --color red" "on --color green" "on --color blue" "off"; do sh_robot "$BB chroot $CHROOT /opt/robot/bin/robotctl flashlight $c"; sleep 1; done | tee "$D/led_effects.txt"
+    $A forward tcp:9000 localfilesystem:$CHROOT/run/robotd.sock >/dev/null
+    python3 scripts/s1/bench-items.py "$D/led_effects.log" F10 | tee -a "$D/led_effects.txt"
     say "now TAP each armour plate, point an IR source if you have one, and PRESS the button; 30 s"
     sh_robot "$BB timeout -t 30 $BB cat /dev/input/event0 | $BB xxd" > "$D/event0.hex" 2>&1 || true
     $A pull /data/s1d.log "$D/s1d.log" >/dev/null
@@ -141,23 +165,25 @@ case "$stage" in
 
   camera)
     need_robot; D=$(dir camera)
-    sh_robot "stop dji_camera; setprop ctl.stop dji_camera; $BB sleep 1; chroot $CHROOT /usr/bin/v4l2-ctl -d /dev/video0 --all" | tee "$D/v4l2_all.txt" || true
-    sh_robot "chroot $CHROOT /usr/bin/v4l2-ctl -d /dev/video0 --list-formats-ext" | tee "$D/formats.txt" || true
-    sh_robot "chroot $CHROOT /usr/bin/v4l2-ctl -d /dev/video0 --set-fmt-video=width=1280,height=720,pixelformat=NV12 --stream-mmap --stream-count=1 --stream-to=/data/frame.nv12 && ls -l /data/frame.nv12" | tee -a "$D/formats.txt" || true
+    sh_robot "stop dji_camera; setprop ctl.stop dji_camera; $BB sleep 1; $BB chroot $CHROOT /usr/bin/v4l2-ctl -d /dev/video0 --all" | tee "$D/v4l2_all.txt" || true
+    sh_robot "$BB chroot $CHROOT /usr/bin/v4l2-ctl -d /dev/video0 --list-formats-ext" | tee "$D/formats.txt" || true
+    sh_robot "$BB chroot $CHROOT /usr/bin/v4l2-ctl -d /dev/video0 --set-fmt-video=width=1280,height=720,pixelformat=NV12 --stream-mmap --stream-count=1 --stream-to=/data/frame.nv12 && ls -l /data/frame.nv12" | tee -a "$D/formats.txt" || true
     $A pull /data/frame.nv12 "$D/frame.nv12" >/dev/null || true
     [ -f "$D/frame.nv12" ] && ffmpeg -loglevel error -y -f rawvideo -pix_fmt nv12 -s 1280x720 -i "$D/frame.nv12" "$D/frame.png" && say "open $D/frame.png"
     for f in "$D"/formats.txt "$D"/frame.nv12 "$D"/frame.png; do [ -f "$f" ] && art "$f"; done ;;
 
   audio)
     need_robot; D=$(dir audio)
-    sh_robot "chroot $CHROOT /usr/bin/amixer -c 0 contents" > "$D/amixer_contents.txt" 2>&1 || true
+    sh_robot "$BB chroot $CHROOT /usr/bin/amixer -c 0 contents" > "$D/amixer_contents.txt" 2>&1 || true
+    say "the stock's own sounds (F8): engine_start then the note 2C through aplay — LISTEN"
+    sh_robot "$BB chroot $CHROOT /usr/bin/aplay -D hw:0,0 /mnt/system/audio/sound/engine_start.wav; $BB chroot $CHROOT /usr/bin/aplay -D hw:0,0 /mnt/system/audio/sound/media_sound_solmization_2C.wav" 2>&1 | tee "$D/aplay_stock_sounds.txt" || true
     say "route per the hdvt_uav strace (tinymix/amixer values) goes in $D/route.sh before this runs; PLAY MUSIC NOW"
     [ -f "$D/route.sh" ] && sh_robot "$(cat "$D/route.sh")"
-    sh_robot "chroot $CHROOT /usr/bin/arecord -D hw:0,1 -f S16_LE -r 16000 -c 1 -d 60 /data/mic.wav 2>&1 | $BB tee /data/stream_60s.txt" || true
+    sh_robot "$BB chroot $CHROOT /usr/bin/arecord -D hw:0,1 -f S16_LE -r 16000 -c 1 -d 60 /data/mic.wav 2>&1 | $BB tee /data/stream_60s.txt" || true
     $A pull /data/mic.wav "$D/mic.wav" >/dev/null || true; $A pull /data/stream_60s.txt "$D/stream_60s.txt" >/dev/null || true
     say "aplay while driving: run stage drive in another terminal, then this plays 20 s and samples top"
-    sh_robot "chroot $CHROOT /usr/bin/aplay -D hw:0,0 /data/mic.wav & for i in 1 2 3 4; do top -n 1 -m 8; $BB sleep 5; done" > "$D/cpu_play_drive.txt" 2>&1 || true
-    for f in "$D"/mic.wav "$D"/stream_60s.txt "$D"/cpu_play_drive.txt; do [ -f "$f" ] && art "$f"; done ;;
+    sh_robot "$BB chroot $CHROOT /usr/bin/aplay -D hw:0,0 /data/mic.wav & for i in 1 2 3 4; do top -n 1 -m 8; $BB sleep 5; done" > "$D/cpu_play_drive.txt" 2>&1 || true
+    for f in "$D"/aplay_stock_sounds.txt "$D"/mic.wav "$D"/stream_60s.txt "$D"/cpu_play_drive.txt; do [ -f "$f" ] && art "$f"; done ;;
 
   app)
     D=$(dir app); say "with hdvt_uav/monitor stopped: open the app, note connect/video/control. Type notes, Ctrl-D:"; cat > "$D/obs.txt"; art "$D/obs.txt" ;;
@@ -170,9 +196,9 @@ case "$stage" in
   frames)
     need_robot; D=$(dir frames)
     for geo in 1280,720 640,360; do w=${geo%,*}; h=${geo#*,}
-        sh_robot "chroot $CHROOT /usr/bin/gst-launch-1.0 -v v4l2src device=/dev/video0 num-buffers=300 ! video/x-raw,width=$w,height=$h ! fpsdisplaysink video-sink=fakesink text-overlay=false signal-fps-measurements=true 2>&1 | $BB grep -E 'fps|rendered|dropped' | $BB tail -5 & for i in 1 2 3; do top -n 1 -m 5; $BB sleep 4; done; wait" > "$D/fps_${h}p.txt" 2>&1 || true
+        sh_robot "$BB chroot $CHROOT /usr/bin/gst-launch-1.0 -v v4l2src device=/dev/video0 num-buffers=300 ! video/x-raw,width=$w,height=$h ! fpsdisplaysink video-sink=fakesink text-overlay=false signal-fps-measurements=true 2>&1 | $BB grep -E 'fps|rendered|dropped' | $BB tail -5 & for i in 1 2 3; do top -n 1 -m 5; $BB sleep 4; done; wait" > "$D/fps_${h}p.txt" 2>&1 || true
     done
-    sh_robot "chroot $CHROOT /usr/bin/gst-launch-1.0 v4l2src device=/dev/video0 num-buffers=1 ! video/x-raw,width=640,height=360 ! pngenc ! filesink location=/data/sample.png" >/dev/null 2>&1 || true
+    sh_robot "$BB chroot $CHROOT /usr/bin/gst-launch-1.0 v4l2src device=/dev/video0 num-buffers=1 ! video/x-raw,width=640,height=360 ! pngenc ! filesink location=/data/sample.png" >/dev/null 2>&1 || true
     $A pull /data/sample.png "$D/sample.png" >/dev/null 2>&1 || true
     for f in "$D"/fps_720p.txt "$D"/fps_360p.txt "$D"/sample.png; do [ -f "$f" ] && art "$f"; done ;;
 
@@ -192,7 +218,7 @@ case "$stage" in
         $A push "$ORT/libonnxruntime.so.$ORT_VER" "$CHROOT/usr/lib/" >/dev/null; $A push "$MODEL" "$CHROOT/opt/robot/duck_detect.onnx" >/dev/null
         sh_robot "mkdir -p $CHROOT/opt/robot/frames"
         for f in "$FRAMES"/*.png "$FRAMES"/*.jpg; do [ -f "$f" ] && $A push "$f" "$CHROOT/opt/robot/frames/" >/dev/null; done
-        sh_robot "ORT_DYLIB_PATH=/usr/lib/libonnxruntime.so.$ORT_VER chroot $CHROOT /opt/robot/bin/s1-infer --model /opt/robot/duck_detect.onnx --frames /opt/robot/frames --hz 0" > "$D/onboard.txt" 2>&1 || true
+        sh_robot "ORT_DYLIB_PATH=/usr/lib/libonnxruntime.so.$ORT_VER $BB chroot $CHROOT /opt/robot/bin/s1-infer --model /opt/robot/duck_detect.onnx --frames /opt/robot/frames --hz 0" > "$D/onboard.txt" 2>&1 || true
     elif [ ! -f "$ORT/libonnxruntime.so.$ORT_VER" ]; then
         cp "$ORT/build.log" "$D/ort_build_failed.txt" 2>/dev/null || echo "no libonnxruntime armv7 and no build log" > "$D/ort_build_failed.txt"
     else

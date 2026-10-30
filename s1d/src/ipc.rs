@@ -16,7 +16,7 @@ use s1_duml::cmd::SystemLed;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 
-use crate::intents::Intents;
+use crate::intents::{FollowMode, Intents};
 use crate::state::State;
 use crate::{MAX_LINE, MODEL_API, SOCKET_MODE};
 
@@ -177,6 +177,21 @@ pub async fn handle(
                 continue;
             }
         };
+        // `s1.*`: this body's own maintenance routes, outside the duck contract — the bench's
+        // way to put any frame on the wire and to choose who leads whom. Never reached over a
+        // remote transport (robotd-design.md §3.5); phase 2 maps what survives into the contract.
+        if request.method.starts_with("s1.") {
+            if let Some(id) = request.id.clone() {
+                let response = bench(
+                    intents.as_ref(),
+                    id,
+                    &request.method,
+                    request.params.as_ref(),
+                );
+                write_line(&mut write_half, &response).await?;
+            }
+            continue;
+        }
         let call = request.as_call();
         // Notifications get no reply; continuous intents arrive this way at up to 100 Hz.
         let Some(id) = request.id.clone() else {
@@ -199,6 +214,68 @@ pub async fn handle(
             Err(e) => proto::Response::err(Some(id), e),
         };
         write_line(&mut write_half, &response).await?;
+    }
+}
+
+/// The `s1.*` routes. `s1.frame {hex}`: one DUML frame, re-sequenced by the loop, on the wire —
+/// what the bench sends straight out of `scripts/s1/dji-oracle.py`. `s1.mode {mode}`: `free`,
+/// `gimbal_lead` or `chassis_lead`, as the app's follow button; the gimbal's work mode goes out at
+/// once, the chassis side is how the twist is sent from here on.
+pub fn bench(
+    intents: &Intents,
+    id: proto::Id,
+    method: &str,
+    params: Option<&serde_json::Value>,
+) -> proto::Response {
+    let accepted = |id| proto::Response::ok(Some(id), &proto::IntentResult::accepted());
+    let refused =
+        |id, why: String| proto::Response::ok(Some(id), &proto::IntentResult::refused(&why));
+    let field = |name: &str| params.and_then(|p| p.get(name)).and_then(|v| v.as_str());
+    match method {
+        "s1.frame" => {
+            let Some(hex) = field("hex") else {
+                return refused(id, "s1.frame wants {\"hex\": \"55…\"}".to_owned());
+            };
+            let bytes: Result<Vec<u8>, _> = (0..hex.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(hex.get(i..i + 2).unwrap_or("zz"), 16))
+                .collect();
+            let Ok(bytes) = bytes else {
+                return refused(id, "hex is not hex".to_owned());
+            };
+            match s1_duml::Frame::decode(&bytes) {
+                Ok(frame) => {
+                    intents.request_frame(frame);
+                    accepted(id)
+                }
+                Err(e) => refused(id, format!("not a frame: {e}")),
+            }
+        }
+        "s1.mode" => {
+            let Some(mode) = field("mode").and_then(FollowMode::parse) else {
+                return refused(
+                    id,
+                    "s1.mode wants free, gimbal_lead or chassis_lead".to_owned(),
+                );
+            };
+            intents.set_follow(mode);
+            // Gimbal work mode 2 follows the chassis; 0 is free. Chassis work mode 1 is what
+            // every twist form needs and what arming already sends.
+            let gimbal_mode = if mode == FollowMode::ChassisLead {
+                2
+            } else {
+                0
+            };
+            intents.request_frame(s1_duml::cmd::gimbal_workmode(0, gimbal_mode));
+            accepted(id)
+        }
+        other => proto::Response::err(
+            Some(id),
+            proto::Error::new(
+                proto::code::METHOD_NOT_FOUND,
+                format!("{other} is not an s1 route (s1.frame, s1.mode)"),
+            ),
+        ),
     }
 }
 

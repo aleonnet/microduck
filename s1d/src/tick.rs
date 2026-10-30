@@ -23,7 +23,7 @@ use s1_duml::events::{ArmorHit, IrHit};
 use s1_duml::{Decoder, Frame};
 
 use crate::body::S1Body;
-use crate::intents::{Intents, PowerRequest};
+use crate::intents::{FollowMode, Intents, PowerRequest};
 use crate::state::{State, Telemetry};
 
 /// Which heartbeat bytes to send. The proroklab one armed the chassis on the bench; the stock one
@@ -80,20 +80,46 @@ pub const YAW_DDEG_MAX: i16 = 2500;
 pub const PITCH_DDEG_MIN: i16 = -200;
 pub const PITCH_DDEG_MAX: i16 = 350;
 /// Our subscription's id in the motion controller, and how often it is re-asked until it answers.
-const DDS_MSG_ID: u8 = 1;
+/// Our subscription's msg id. **Not 1**: that is the stock firmware's, and its pushes outlive
+/// `dji_hdvt_uav` — measured 2026-10-30, the controller kept pushing msg id 1 after the stock was
+/// stopped, and `s1d` decoded its subjects with our layout (gyro in the 10³² range). Any other
+/// value avoids that collision; `DDS_PUSH_LEN` is what makes a collision harmless.
+pub const DDS_MSG_ID: u8 = 0x5d;
+/// The subscription's flags, proroklab's `0x3`: a time stamp in front of every push and stop
+/// pushing when the subscriber goes away. Without them (flags 0, 2026-10-30) the motion controller
+/// neither answered the subscription nor pushed under our id.
+pub const DDS_TIMESTAMP: bool = true;
+pub const DDS_STOP_WHEN_DISCONNECT: bool = true;
+/// Bytes in one push of ours: the time stamp, then the nine of `SUBJECTS` concatenated, in the
+/// order DJI's own library asks for them and slices the push (`RobotCtrl.init` and
+/// `gimbal_and_chassis_push_info_process`, pulled from the robot). A push under our id with any
+/// other length is not ours.
+pub const DDS_PUSH_LEN: usize = dds::PUSH_TIMESTAMP_LEN
+    + dds::Esc::SIZE
+    + dds::Position::SIZE
+    + dds::Velocity::SIZE
+    + dds::Imu::SIZE
+    + dds::Attitude::SIZE
+    + dds::SaStatus::SIZE
+    + dds::GimbalPos::SIZE
+    + dds::Stick::SIZE
+    + dds::Battery::SIZE;
 const DDS_RETRY: Duration = Duration::from_secs(5);
 /// The gimbal command is an action; it is re-sent at this rate while the target is unchanged, and
 /// at once when it changes. The PoC sent it at 20 Hz.
 const GIMBAL_HOLD_PERIOD: Duration = Duration::from_millis(100);
-/// Subjects we subscribe to, in the order they come back concatenated.
-pub const SUBJECTS: [u64; 7] = [
-    dds::uid::BATTERY,
-    dds::uid::ATTITUDE,
+/// Subjects we subscribe to, in the order they come back concatenated — DJI's own order, minus
+/// the servo subject an S1 has no servos for.
+pub const SUBJECTS: [u64; 9] = [
+    dds::uid::ESC,
     dds::uid::POSITION,
     dds::uid::VELOCITY,
     dds::uid::IMU,
-    dds::uid::ESC,
+    dds::uid::ATTITUDE,
     dds::uid::SA_STATUS,
+    dds::uid::GIMBAL_POS,
+    dds::uid::STICK,
+    dds::uid::BATTERY,
 ];
 
 /// Whether to (re)ask the motion controller for telemetry now.
@@ -150,49 +176,34 @@ pub fn gimbal_ddeg(head: [f64; 4]) -> (i16, i16) {
     (yaw, pitch)
 }
 
-/// Decode one of our pushes into telemetry, in `SUBJECTS` order. Subjects after a short push are
-/// left as they were — the bench has yet to confirm the controller sends every subject every time.
-fn decode_push(data: &[u8], t: &mut Telemetry) {
-    let mut rest = data;
-    if let Some((v, r)) = dds::Battery::parse(rest) {
-        t.battery = Some(v);
-        rest = r;
-    } else {
-        return;
+/// Decode a push into telemetry when it is ours — `DDS_MSG_ID` and exactly `DDS_PUSH_LEN` bytes,
+/// in `SUBJECTS` order — and say so. Anything else (the stock's subscription, a truncated push) is
+/// left alone: the telemetry keeps its last good values.
+fn decode_push(msg_id: u8, data: &[u8], t: &mut Telemetry) -> bool {
+    if msg_id != DDS_MSG_ID || data.len() != DDS_PUSH_LEN {
+        return false;
     }
-    if let Some((v, r)) = dds::Attitude::parse(rest) {
-        t.attitude = Some(v);
-        rest = r;
-    } else {
-        return;
-    }
-    if let Some((v, r)) = dds::Position::parse(rest) {
-        t.position = Some(v);
-        rest = r;
-    } else {
-        return;
-    }
-    if let Some((v, r)) = dds::Velocity::parse(rest) {
-        t.velocity = Some(v);
-        rest = r;
-    } else {
-        return;
-    }
-    if let Some((v, r)) = dds::Imu::parse(rest) {
-        t.imu = Some(v);
-        rest = r;
-    } else {
-        return;
-    }
-    if let Some((v, r)) = dds::Esc::parse(rest) {
-        t.esc = Some(v);
-        rest = r;
-    } else {
-        return;
-    }
-    if let Some((v, _)) = dds::SaStatus::parse(rest) {
-        t.sa_status = Some(v);
-    }
+    // The length was checked, so every parse below has its bytes.
+    let subjects = &data[dds::PUSH_TIMESTAMP_LEN..];
+    let (esc, rest) = dds::Esc::parse(subjects).expect("length checked");
+    let (position, rest) = dds::Position::parse(rest).expect("length checked");
+    let (velocity, rest) = dds::Velocity::parse(rest).expect("length checked");
+    let (imu, rest) = dds::Imu::parse(rest).expect("length checked");
+    let (attitude, rest) = dds::Attitude::parse(rest).expect("length checked");
+    let (sa_status, rest) = dds::SaStatus::parse(rest).expect("length checked");
+    let (gimbal_pos, rest) = dds::GimbalPos::parse(rest).expect("length checked");
+    let (stick, rest) = dds::Stick::parse(rest).expect("length checked");
+    let (battery, _) = dds::Battery::parse(rest).expect("length checked");
+    t.esc = Some(esc);
+    t.position = Some(position);
+    t.velocity = Some(velocity);
+    t.imu = Some(imu);
+    t.attitude = Some(attitude);
+    t.sa_status = Some(sa_status);
+    t.gimbal_pos = Some(gimbal_pos);
+    t.stick = Some(stick);
+    t.battery = Some(battery);
+    true
 }
 
 struct Writer<'a> {
@@ -269,7 +280,6 @@ pub fn run(body: &mut dyn S1Body, state: Arc<State>, intents: Arc<Intents>, cfg:
                     w.send(cmd::chassis_workmode(s, 1));
                 }
                 state.armed.store(true, Ordering::Relaxed);
-                last_sub = None;
                 tracing::info!("armed: heartbeat on, chassis in work mode 1");
             }
             Some(PowerRequest::Disarm) => {
@@ -298,14 +308,25 @@ pub fn run(body: &mut dyn S1Body, state: Arc<State>, intents: Arc<Intents>, cfg:
             } else {
                 snap.twist
             };
-            match cfg.twist_mode {
-                TwistMode::Wheels => {
+            match (snap.follow, cfg.twist_mode) {
+                // Gimbal lead: the controller steers the chassis after the gimbal; the twist's
+                // yaw rate has no say and goes as a zero offset (`Chassis.set_follow_speed`).
+                (FollowMode::GimbalLead, _) => {
+                    let s = w.seq(cmd::id::CHASSIS_FOLLOW);
+                    w.send(cmd::chassis_follow(
+                        s,
+                        twist[0] as f32,
+                        twist[1] as f32,
+                        0.0,
+                    ));
+                }
+                (_, TwistMode::Wheels) => {
                     let [fr, fl, bl, br] =
                         mecanum_rpm(twist, cfg.wheel_radius_m, cfg.half_sum_lw_m);
                     let s = w.seq(cmd::id::CHASSIS_WHEEL_SPEED);
                     w.send(cmd::chassis_wheel_speed(s, fr, fl, bl, br));
                 }
-                TwistMode::Speed => {
+                (_, TwistMode::Speed) => {
                     let s = w.seq(cmd::id::CHASSIS_SPEED);
                     w.send(cmd::chassis_speed(
                         s,
@@ -328,24 +349,39 @@ pub fn run(body: &mut dyn S1Body, state: Arc<State>, intents: Arc<Intents>, cfg:
                 state.gimbal_ddeg.store(Arc::new(target));
                 last_gimbal = Some((target, Instant::now()));
             }
+        }
 
-            if dds_due(last_sub, last_push, DDS_RETRY, Instant::now()) {
-                let s = w.seq(cmd::id::DDS_ADD_SUB);
-                w.send(dds::add_sub(
-                    s,
-                    cmd::host::BASE,
-                    DDS_MSG_ID,
-                    &SUBJECTS,
-                    cfg.dds_hz,
-                    false,
-                ));
-                last_sub = Some(Instant::now());
-            }
+        // Telemetry is asked for armed or not: battery and pick-up matter before anything moves,
+        // and a subscription moves nothing.
+        if dds_due(last_sub, last_push, DDS_RETRY, Instant::now()) {
+            // Forget what node 9 subscribed (the stock firmware's two subscriptions outlive it on
+            // the controller — 2026-10-30, registering over them was refused with 0x02/0x21), then
+            // register the node as the stock does on start-up, then subscribe.
+            let s = w.seq(cmd::id::DDS_RESET_NODE);
+            w.send(dds::reset_node(s, cmd::host::BASE));
+            let s = w.seq(cmd::id::DDS_ADD_NODE);
+            w.send(dds::add_node(s, cmd::host::BASE));
+            let s = w.seq(cmd::id::DDS_ADD_SUB);
+            w.send(dds::add_sub(
+                s,
+                cmd::host::BASE,
+                DDS_MSG_ID,
+                &SUBJECTS,
+                cfg.dds_hz,
+                DDS_TIMESTAMP,
+                DDS_STOP_WHEN_DISCONNECT,
+            ));
+            last_sub = Some(Instant::now());
         }
 
         if let Some(led) = intents.take_led() {
             let s = w.seq(cmd::id::SYSTEM_LED);
             w.send(cmd::system_led(s, &led));
+        }
+        // One-shots from the socket, each with a fresh sequence for its command.
+        for mut frame in intents.take_frames() {
+            frame.seq = w.seq((frame.cmd_set, frame.cmd_id));
+            w.send(frame);
         }
 
         // Whatever the body pushed: telemetry, hits, acks.
@@ -355,12 +391,15 @@ pub fn run(body: &mut dyn S1Body, state: Arc<State>, intents: Arc<Intents>, cfg:
                 let mut changed = false;
                 for frame in decoder.push(&inbox[..n]) {
                     if let Some(push) = dds::PushPeriod::parse(&frame) {
-                        if push.msg_id == DDS_MSG_ID {
-                            decode_push(push.data, &mut telemetry);
+                        let ours = decode_push(push.msg_id, push.data, &mut telemetry);
+                        tracing::trace!(msg_id = push.msg_id, len = push.data.len(), ours, "push");
+                        if ours {
                             telemetry.pushes += 1;
                             last_push = Some(Instant::now());
-                            changed = true;
+                        } else {
+                            telemetry.foreign_pushes += 1;
                         }
+                        changed = true;
                     } else if let Some(hit) = ArmorHit::parse(&frame) {
                         state.armor_hits.fetch_add(1, Ordering::Relaxed);
                         tracing::warn!(
@@ -377,6 +416,14 @@ pub fn run(body: &mut dyn S1Body, state: Arc<State>, intents: Arc<Intents>, cfg:
                             dev = ir.recv_dev,
                             pin = ir.recv_ir_pin,
                             "infrared hit"
+                        );
+                    } else if frame.cmd_set == cmd::id::DDS_ADD_SUB.0 {
+                        // The controller's answers to our DDS requests: retcode first. Rare, and
+                        // the bench reads them (2026-10-30: a silent controller was the symptom).
+                        tracing::info!(
+                            cmd_id = frame.cmd_id,
+                            data = %hex(&frame.data),
+                            "dds answer"
                         );
                     } else {
                         tracing::trace!(
@@ -431,6 +478,14 @@ pub fn run(body: &mut dyn S1Body, state: Arc<State>, intents: Arc<Intents>, cfg:
     tracing::info!("control loop stopped; wheels zeroed");
 }
 
+fn hex(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn zero_wheels(w: &mut Writer<'_>, times: usize) {
     for _ in 0..times {
         let s = w.seq(cmd::id::CHASSIS_WHEEL_SPEED);
@@ -476,6 +531,28 @@ mod tests {
         assert!(
             dds_due(Some(t0), Some(at(3)), retry, at(8)),
             "silent for the retry"
+        );
+    }
+
+    /// Msg id 1 is the stock's; a push of ours must be exactly the subjects we asked for. Either
+    /// mismatch leaves the telemetry as it was and says so.
+    #[test]
+    fn a_push_is_decoded_only_under_our_id_and_length() {
+        let mut t = Telemetry::default();
+        let stock = vec![0u8; 161];
+        assert!(!decode_push(1, &stock, &mut t), "the stock's id");
+        assert!(
+            !decode_push(DDS_MSG_ID, &stock, &mut t),
+            "our id, their length"
+        );
+        assert!(t.battery.is_none());
+        let mut ours = vec![0u8; DDS_PUSH_LEN];
+        ours[DDS_PUSH_LEN - dds::Battery::SIZE + 8] = 77;
+        assert!(decode_push(DDS_MSG_ID, &ours, &mut t));
+        assert_eq!(t.battery.map(|b| b.percent), Some(77));
+        assert!(
+            t.esc.is_some() && t.sa_status.is_some() && t.gimbal_pos.is_some(),
+            "every subject lands in one push"
         );
     }
 

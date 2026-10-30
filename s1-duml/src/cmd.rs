@@ -15,7 +15,7 @@
 
 use std::collections::HashMap;
 
-use crate::frame::Frame;
+use crate::frame::{Ack, Frame};
 
 /// Who is who on the bus (`index * 32 + host`, `protocol.host2byte`).
 pub mod host {
@@ -29,8 +29,11 @@ pub mod host {
     pub const CHASSIS_SENDER: u8 = 0xC9;
     /// The gimbal.
     pub const GIMBAL: u8 = 0x04;
-    /// Where the stock app sends the LED command (`0x18`): captured, not named by the SDK.
+    /// Where the stock app sends the LED command (`0x18`): captured, not named by the SDK. DJI's
+    /// on-board library names it: `armor_id = 2400` → `hostid2packid` → `0x18`.
     pub const LED: u8 = 0x18;
+    /// The blaster (`gun_id = 2300` → `0x17`).
+    pub const GUN: u8 = 0x17;
 }
 
 /// `(cmd_set, cmd_id)` of each command this crate builds or reads.
@@ -46,6 +49,25 @@ pub mod id {
     pub const SYSTEM_LED: (u8, u8) = (0x3f, 0x32);
     pub const ARMOR_HIT: (u8, u8) = (0x3f, 0x02);
     pub const IR_HIT: (u8, u8) = (0x3f, 0x10);
+    /// The rest of what DJI's on-board library (`rm_module.py`, `duml_cmdset.py`, pulled from the
+    /// robot 2026-10-30) sends to the chassis, the gimbal and the blaster over this bus.
+    pub const CHASSIS_FOLLOW: (u8, u8) = (0x3f, 0x22);
+    pub const CHASSIS_STICK_OVERLAY: (u8, u8) = (0x3f, 0x28);
+    pub const CHASSIS_POSITION: (u8, u8) = (0x3f, 0x25);
+    pub const CHASSIS_POSITION_PUSH: (u8, u8) = (0x3f, 0x2a);
+    pub const CHASSIS_PWM_VALUE: (u8, u8) = (0x3f, 0x3c);
+    pub const CHASSIS_PWM_FREQ: (u8, u8) = (0x3f, 0x2b);
+    pub const GIMBAL_WORKMODE: (u8, u8) = (0x04, 0x4c);
+    pub const GIMBAL_RECENTER: (u8, u8) = (0x3f, 0xb2);
+    pub const GIMBAL_ACTION_PUSH: (u8, u8) = (0x3f, 0xb1);
+    pub const GIMBAL_SPEED: (u8, u8) = (0x04, 0x0c);
+    pub const GIMBAL_SUSPEND_RESUME: (u8, u8) = (0x04, 0x0d);
+    pub const GIMBAL_SUBSCRIBE_POSITION: (u8, u8) = (0x04, 0x1e);
+    pub const GIMBAL_POSITION_PUSH: (u8, u8) = (0x04, 0x05);
+    pub const GUN_LED: (u8, u8) = (0x3f, 0x55);
+    pub const ARMOR_SENSITIVITY: (u8, u8) = (0x3f, 0x07);
+    pub const DDS_ADD_NODE: (u8, u8) = (0x48, 0x01);
+    pub const DDS_RESET_NODE: (u8, u8) = (0x48, 0x02);
     pub const DDS_ADD_SUB: (u8, u8) = (0x48, 0x03);
     pub const DDS_DEL_SUB: (u8, u8) = (0x48, 0x04);
     pub const DDS_PUSH: (u8, u8) = (0x48, 0x08);
@@ -264,4 +286,278 @@ pub fn system_led(seq: u16, led: &SystemLed) -> Frame {
         id::SYSTEM_LED.1,
         data,
     )
+}
+
+// ---------------------------------------------------------------------------------------------
+// What DJI's own on-board library sends. Every builder below reproduces `rm_module.py` byte for
+// byte (`tests/dji_oracle.rs`: the library's packer, run on the Mac with the same arguments, is
+// the expected value), with its sender (`scratch_script_id` → `0xC9`), its receiver and its ack
+// request (`NEED_ACK_TYPE` 0x40 unless the library says `NO_ACK_TYPE`).
+// ---------------------------------------------------------------------------------------------
+
+/// Task header the library puts in front of every "task" command: task id, then
+/// `TASK_FREQ_10Hz << 2 | TASK_CTRL_START`.
+const TASK_START_10HZ: u8 = 0x08;
+const TASK_STOP: u8 = 0x01;
+
+/// `0x3f/0x22`, no ack: the twist in **follow mode** — `vx`, `vy` in m/s and the yaw *offset*
+/// between chassis and gimbal in degrees. In this mode the motion controller turns the chassis to
+/// keep the gimbal's heading plus `angle_deg` (`Chassis.set_follow_speed`; the library's
+/// `chassis_sdk_follow_mode` is "gimbal lead", the app's "chassis follows the gimbal").
+pub fn chassis_follow(seq: u16, vx: f32, vy: f32, angle_deg: f32) -> Frame {
+    let mut data = Vec::with_capacity(12);
+    for v in [vx, vy, angle_deg] {
+        data.extend_from_slice(&v.to_le_bytes());
+    }
+    Frame::request(
+        host::CHASSIS_SENDER,
+        host::CHASSIS,
+        seq,
+        id::CHASSIS_FOLLOW.0,
+        id::CHASSIS_FOLLOW.1,
+        data,
+    )
+}
+
+/// `0x3f/0x28`: the frame a velocity is read in. `0` off, `1` body axes, `2` the gimbal's heading
+/// (`stick_overlay_and_axes_enable`).
+pub fn chassis_stick_overlay(seq: u16, mode: u8) -> Frame {
+    Frame::request(
+        host::CHASSIS_SENDER,
+        host::CHASSIS,
+        seq,
+        id::CHASSIS_STICK_OVERLAY.0,
+        id::CHASSIS_STICK_OVERLAY.1,
+        vec![mode],
+    )
+    .with_ack(Ack::WhenDone)
+}
+
+/// `0x3f/0x25`: move a distance and stop, the loop closed by the motion controller. `x`, `y` in
+/// cm (±500), `yaw` in tenths of a degree (±18000), `vel_xy` in cm/s (10..250), `omega` in tenths
+/// of a degree per second (100..5400). `axis_mode` 0 = from where the chassis is, 1 = from the
+/// power-on origin. Progress comes back as `0x3f/0x2a` pushes with this `task_id`.
+#[allow(clippy::too_many_arguments)]
+pub fn chassis_position(
+    seq: u16,
+    task_id: u8,
+    axis_mode: u8,
+    x_cm: i16,
+    y_cm: i16,
+    yaw_ddeg: i16,
+    vel_xy_cm_s: u8,
+    omega_ddeg_s: u16,
+) -> Frame {
+    let mut data = vec![task_id, TASK_START_10HZ, 0, axis_mode];
+    for v in [x_cm, y_cm, yaw_ddeg] {
+        data.extend_from_slice(&v.to_le_bytes());
+    }
+    data.push(vel_xy_cm_s);
+    data.extend_from_slice(&omega_ddeg_s.to_le_bytes());
+    Frame::request(
+        host::CHASSIS_SENDER,
+        host::CHASSIS,
+        seq,
+        id::CHASSIS_POSITION.0,
+        id::CHASSIS_POSITION.1,
+        data,
+    )
+    .with_ack(Ack::WhenDone)
+}
+
+/// `0x3f/0x25` with `TASK_CTRL_STOP`: abandon the position task `task_id`.
+pub fn chassis_position_stop(seq: u16, task_id: u8) -> Frame {
+    let mut data = vec![task_id, TASK_STOP, 0, 0];
+    data.extend_from_slice(&[0u8; 6]);
+    Frame::request(
+        host::CHASSIS_SENDER,
+        host::CHASSIS,
+        seq,
+        id::CHASSIS_POSITION.0,
+        id::CHASSIS_POSITION.1,
+        data,
+    )
+    .with_ack(Ack::WhenDone)
+}
+
+fn chassis_pwm(seq: u16, cmd: (u8, u8), mask: u8, values: [u16; 6]) -> Frame {
+    let mut data = vec![mask];
+    for v in values {
+        data.extend_from_slice(&v.to_le_bytes());
+    }
+    Frame::request(host::CHASSIS_SENDER, host::CHASSIS, seq, cmd.0, cmd.1, data)
+        .with_ack(Ack::WhenDone)
+}
+
+/// `0x3f/0x3c`: duty of the six PWM ports, 0..1000 per mille, for the ports in `mask`.
+pub fn chassis_pwm_value(seq: u16, mask: u8, per_mille: [u16; 6]) -> Frame {
+    chassis_pwm(seq, id::CHASSIS_PWM_VALUE, mask, per_mille)
+}
+
+/// `0x3f/0x2b`: frequency of the six PWM ports, Hz (0..50000), for the ports in `mask`.
+pub fn chassis_pwm_freq(seq: u16, mask: u8, hz: [u16; 6]) -> Frame {
+    chassis_pwm(seq, id::CHASSIS_PWM_FREQ, mask, hz)
+}
+
+/// `0x04/0x4c`: gimbal work mode — `0` free, `1` FPV, `2` yaw follows the chassis
+/// (`gimbal_yaw_follow_mode`, the app's "gimbal follows the chassis").
+pub fn gimbal_workmode(seq: u16, mode: u8) -> Frame {
+    Frame::request(
+        host::CHASSIS_SENDER,
+        host::GIMBAL,
+        seq,
+        id::GIMBAL_WORKMODE.0,
+        id::GIMBAL_WORKMODE.1,
+        vec![mode, 0],
+    )
+    .with_ack(Ack::WhenDone)
+}
+
+/// `0x3f/0xb2`: recentre yaw and pitch at the given speeds (°/s, 5..540), as a task.
+pub fn gimbal_recenter(seq: u16, task_id: u8, yaw_speed: u16, pitch_speed: u16) -> Frame {
+    const YAW_AND_PITCH: u8 = 0x05;
+    let mut data = vec![task_id, TASK_START_10HZ, YAW_AND_PITCH];
+    for v in [yaw_speed, 0, pitch_speed] {
+        data.extend_from_slice(&v.to_le_bytes());
+    }
+    Frame::request(
+        host::CHASSIS_SENDER,
+        host::GIMBAL,
+        seq,
+        id::GIMBAL_RECENTER.0,
+        id::GIMBAL_RECENTER.1,
+        data,
+    )
+    .with_ack(Ack::WhenDone)
+}
+
+/// `0x3f/0xb0` as the library sends it, a task: `coordinate` (0 NED, 1 relative to where the
+/// gimbal is, 2 the chassis, 3 pitch NED, 4 yaw chassis + pitch NED, 5 yaw chassis + pitch offset),
+/// which axes (`0x01` yaw, `0x04` pitch, `0x05` both), targets in tenths of a degree, speeds in
+/// °/s (0..540). [`gimbal_angles`] is the same command with the PoC's fixed header.
+#[allow(clippy::too_many_arguments)]
+pub fn gimbal_degree(
+    seq: u16,
+    task_id: u8,
+    coordinate: u8,
+    axes: u8,
+    yaw_ddeg: i16,
+    pitch_ddeg: i16,
+    yaw_speed: u16,
+    pitch_speed: u16,
+) -> Frame {
+    let ctrl = ((coordinate & 0x07) << 3) | axes;
+    let mut data = vec![task_id, TASK_START_10HZ, ctrl];
+    for v in [yaw_ddeg, 0, pitch_ddeg, 0] {
+        data.extend_from_slice(&v.to_le_bytes());
+    }
+    for v in [yaw_speed, 0, pitch_speed] {
+        data.extend_from_slice(&v.to_le_bytes());
+    }
+    Frame::request(
+        host::CHASSIS_SENDER,
+        host::GIMBAL,
+        seq,
+        id::GIMBAL_ROTATE.0,
+        id::GIMBAL_ROTATE.1,
+        data,
+    )
+    .with_ack(Ack::WhenDone)
+}
+
+/// `0x04/0x0c`, no ack: gimbal by rate, yaw and pitch in tenths of a degree per second (±5400),
+/// `ctrl` the library's `accel_contral_flag` (`0xdc`; bit 6 cleared when the sticks overlay).
+pub fn gimbal_speed(seq: u16, yaw_ddeg_s: i16, pitch_ddeg_s: i16, ctrl: u8) -> Frame {
+    let mut data = Vec::with_capacity(7);
+    for v in [yaw_ddeg_s, 0, pitch_ddeg_s] {
+        data.extend_from_slice(&v.to_le_bytes());
+    }
+    data.push(ctrl);
+    Frame::request(
+        host::CHASSIS_SENDER,
+        host::GIMBAL,
+        seq,
+        id::GIMBAL_SPEED.0,
+        id::GIMBAL_SPEED.1,
+        data,
+    )
+}
+
+/// `0x04/0x0d`, ack now: the gimbal goes limp and folds (`0x2ab5`) or wakes (`0x7ef2`).
+pub fn gimbal_suspend_resume(seq: u16, suspend: bool) -> Frame {
+    let code: u16 = if suspend { 0x2ab5 } else { 0x7ef2 };
+    Frame::request(
+        host::CHASSIS_SENDER,
+        host::GIMBAL,
+        seq,
+        id::GIMBAL_SUSPEND_RESUME.0,
+        id::GIMBAL_SUSPEND_RESUME.1,
+        code.to_le_bytes().to_vec(),
+    )
+    .with_ack(Ack::Now)
+}
+
+/// `0x04/0x1e`: ask the gimbal to push its position (`0x04/0x05`) — `0xff` on, `0` off.
+pub fn gimbal_subscribe_position(seq: u16, on: bool) -> Frame {
+    Frame::request(
+        host::CHASSIS_SENDER,
+        host::GIMBAL,
+        seq,
+        id::GIMBAL_SUBSCRIBE_POSITION.0,
+        id::GIMBAL_SUBSCRIBE_POSITION.1,
+        vec![id::GIMBAL_POSITION_PUSH.1, if on { 0xff } else { 0 }],
+    )
+    .with_ack(Ack::WhenDone)
+}
+
+/// `0x3f/0x55` to the blaster: its LED. `ctrl` in the high nibble, `mode` (effect) in the low
+/// one, colour, repeat count and the two effect times in ms.
+#[allow(clippy::too_many_arguments)]
+pub fn gun_led(
+    seq: u16,
+    ctrl: u8,
+    mode: u8,
+    r: u8,
+    g: u8,
+    b: u8,
+    times: u8,
+    t1: u16,
+    t2: u16,
+) -> Frame {
+    let mut data = vec![((ctrl << 4) & 0xf0) | (mode & 0x0f), r, g, b, times];
+    data.extend_from_slice(&t1.to_le_bytes());
+    data.extend_from_slice(&t2.to_le_bytes());
+    Frame::request(
+        host::CHASSIS_SENDER,
+        host::GUN,
+        seq,
+        id::GUN_LED.0,
+        id::GUN_LED.1,
+        data,
+    )
+    .with_ack(Ack::WhenDone)
+}
+
+/// `0x3f/0x07`: the armour's hit detector thresholds, scaled by `k` as `Armor.set_hit_sensitivity`
+/// scales them (`k = 1.0` is the library's default; the peak thresholds are `160 k`, `180 k`,
+/// `200 k`). The library addresses it to the stock controller (`0x09`), which the bench has yet to
+/// see forward it — hence `receiver` is the caller's.
+pub fn armor_sensitivity(seq: u16, receiver: u8, k: f32) -> Frame {
+    let scaled = |v: f32| ((v * k) as u16).to_le_bytes();
+    let mut data = vec![0x3f];
+    for v in [500u16, 300, 50, 13, 6, 1] {
+        data.extend_from_slice(&v.to_le_bytes());
+    }
+    for v in [160.0, 180.0, 200.0] {
+        data.extend_from_slice(&scaled(v));
+    }
+    Frame::request(
+        host::CHASSIS_SENDER,
+        receiver,
+        seq,
+        id::ARMOR_SENSITIVITY.0,
+        id::ARMOR_SENSITIVITY.1,
+        data,
+    )
+    .with_ack(Ack::WhenDone)
 }

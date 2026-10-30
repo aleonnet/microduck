@@ -6,7 +6,8 @@
 //! ```
 //!
 //! `len` is the whole frame including both CRCs; `ver` carries the two high bits of the length in
-//! its low bits and `0x4` above them; `attri` is `is_ack << 7 | need_ack << 5`. This is `Msg.pack` in
+//! its low bits and `0x4` above them; `attri` is `is_ack << 7 | need_ack << 5` with `need_ack` two bits
+//! wide ([`Ack`]). This is `Msg.pack` in
 //! DJI's `protocol.py` and `write_to()` in proroklab's `robomaster_sdk_can`, and it is what
 //! `tests/fixtures/heartbeat_real.bin` — read off the robot's UART — decodes as.
 
@@ -21,13 +22,37 @@ pub const DATA_OFFSET: usize = 11;
 /// The longest frame the two length bits allow.
 pub const MAX_LEN: usize = 0x3ff;
 
+/// The two "need ack" bits of the attribute byte, as `Msg.pack` writes them (`need_ack << 5`):
+/// `0 for no need, 1 for ack now, 2 for need when finish` — the SDK's own words, and `2` is its
+/// default for every command. The stock controller sends `2` on its DDS requests (measured
+/// 2026-10-30, `dds_add_{node,sub}_stock_real.bin`); without it the motion controller stayed silent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Ack {
+    #[default]
+    None = 0,
+    Now = 1,
+    WhenDone = 2,
+}
+
+impl Ack {
+    fn from_attri(attri: u8) -> Result<Self, DecodeError> {
+        match (attri >> 5) & 0x3 {
+            0 => Ok(Self::None),
+            1 => Ok(Self::Now),
+            2 => Ok(Self::WhenDone),
+            _ => Err(DecodeError::BadAttri(attri)),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Frame {
     pub sender: u8,
     pub receiver: u8,
     pub seq: u16,
     pub is_ack: bool,
-    pub need_ack: bool,
+    /// What the sender wants back; the stock asks `WhenDone` on every command it expects answered.
+    pub ack: Ack,
     pub cmd_set: u8,
     pub cmd_id: u8,
     pub data: Vec<u8>,
@@ -47,6 +72,8 @@ pub enum DecodeError {
     TooLong(usize),
     #[error("header declares {declared} bytes, a frame is at least {OVERHEAD}")]
     BadLength { declared: usize },
+    #[error("attribute byte 0x{0:02x} has both ack bits set, which the SDK never writes")]
+    BadAttri(u8),
 }
 
 impl Frame {
@@ -64,11 +91,17 @@ impl Frame {
             receiver,
             seq,
             is_ack: false,
-            need_ack: false,
+            ack: Ack::None,
             cmd_set,
             cmd_id,
             data,
         }
+    }
+
+    /// The same frame asking for `ack`.
+    pub fn with_ack(mut self, ack: Ack) -> Self {
+        self.ack = ack;
+        self
     }
 
     /// How many bytes this frame takes on the wire.
@@ -92,7 +125,7 @@ impl Frame {
         buf[5] = self.receiver;
         buf[6] = (self.seq & 0xff) as u8;
         buf[7] = (self.seq >> 8) as u8;
-        buf[8] = (u8::from(self.is_ack) << 7) | (u8::from(self.need_ack) << 5);
+        buf[8] = (u8::from(self.is_ack) << 7) | ((self.ack as u8) << 5);
         buf[9] = self.cmd_set;
         buf[10] = self.cmd_id;
         buf[DATA_OFFSET..DATA_OFFSET + self.data.len()].copy_from_slice(&self.data);
@@ -154,7 +187,7 @@ impl Frame {
             receiver: bytes[5],
             seq: u16::from(bytes[6]) | (u16::from(bytes[7]) << 8),
             is_ack: bytes[8] & 0x80 != 0,
-            need_ack: bytes[8] & 0x20 != 0,
+            ack: Ack::from_attri(bytes[8])?,
             cmd_set: bytes[9],
             cmd_id: bytes[10],
             data: bytes[DATA_OFFSET..size - 2].to_vec(),

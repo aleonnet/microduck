@@ -10,7 +10,7 @@
 //! — which is the order they were asked for, by both sources.
 
 use crate::cmd::{host, id};
-use crate::frame::Frame;
+use crate::frame::{Ack, Frame};
 
 /// Subject ids, from `dds.py`.
 pub mod uid {
@@ -24,17 +24,50 @@ pub mod uid {
     pub const SA_STATUS: u64 = 0x0002_0009_4a2c_6d55;
     pub const CHASSIS_MODE: u64 = 0x0002_0009_4fcb_1146;
     pub const GIMBAL_POS: u64 = 0x0002_0009_f79b_3c97;
+    /// Whether the app's sticks are live (DJI's `stick_flag`, one byte).
+    pub const STICK: u64 = 0x0002_0009_55e9_a0fa;
 }
 
 /// Rates the SDK accepts for a subscription, Hz.
 pub const FREQUENCIES: [u16; 5] = [1, 5, 10, 20, 50];
 
+/// `0x48/0x01`: register `node_id` with the controller's DDS before subscribing — what the stock
+/// sends first when it starts (`ProtoSubscribeAddNode`: node id, then `sub_vision = 0x03000000`
+/// little-endian; a reply of `0x50` means "already there" and the SDK accepts it).
+pub fn add_node(seq: u16, node_id: u8) -> Frame {
+    let mut data = vec![node_id];
+    data.extend_from_slice(&0x0300_0000u32.to_le_bytes());
+    Frame::request(
+        host::BASE,
+        host::MOTION_CONTROLLER,
+        seq,
+        id::DDS_ADD_NODE.0,
+        id::DDS_ADD_NODE.1,
+        data,
+    )
+    .with_ack(Ack::WhenDone)
+}
+
+/// `0x48/0x02`: forget everything `node_id` subscribed (`ProtoSubNodeReset`, one byte).
+pub fn reset_node(seq: u16, node_id: u8) -> Frame {
+    Frame::request(
+        host::BASE,
+        host::MOTION_CONTROLLER,
+        seq,
+        id::DDS_RESET_NODE.0,
+        id::DDS_RESET_NODE.1,
+        vec![node_id],
+    )
+    .with_ack(Ack::WhenDone)
+}
+
 /// `0x48/0x03`: subscribe `uids` at `freq` Hz under `msg_id`.
 ///
 /// Byte layout per `ProtoAddSubMsg.pack_req`: node id, msg id, flags (`timestamp & 1 |
 /// stop_when_disconnect & 2`), sub mode, count, then each UID as 8 bytes little-endian, then the
-/// frequency as 2 bytes little-endian. `timestamp = false` keeps the pushes as the SDK expects
-/// them — `sub_mode, msg_id, subjects…` — with no time fields in front.
+/// frequency as 2 bytes little-endian. With `timestamp` the pushes carry `time_ms, time_ns` (two
+/// `u32`, [`PUSH_TIMESTAMP_LEN`] bytes) in front of the subjects — proroklab's `metadata`, and
+/// proroklab asks for both flags (`0x3`) on the motion controller's own bus.
 pub fn add_sub(
     seq: u16,
     node_id: u8,
@@ -42,11 +75,12 @@ pub fn add_sub(
     uids: &[u64],
     freq: u16,
     timestamp: bool,
+    stop_when_disconnect: bool,
 ) -> Frame {
     let mut data = Vec::with_capacity(7 + 8 * uids.len());
     data.push(node_id);
     data.push(msg_id);
-    data.push(u8::from(timestamp));
+    data.push(u8::from(timestamp) | (u8::from(stop_when_disconnect) << 1));
     data.push(0); // sub_mode
     data.push(uids.len() as u8);
     for uid in uids {
@@ -61,6 +95,7 @@ pub fn add_sub(
         id::DDS_ADD_SUB.1,
         data,
     )
+    .with_ack(Ack::WhenDone)
 }
 
 /// `0x48/0x04`: drop the subscription `msg_id` (`ProtoDelMsg`: sub mode, node id, msg id).
@@ -73,7 +108,11 @@ pub fn del_sub(seq: u16, node_id: u8, msg_id: u8) -> Frame {
         id::DDS_DEL_SUB.1,
         vec![0, node_id, msg_id],
     )
+    .with_ack(Ack::WhenDone)
 }
+
+/// Bytes of time stamp in front of the subjects when the subscription asked for one.
+pub const PUSH_TIMESTAMP_LEN: usize = 8;
 
 /// One `0x48/0x08` push, split as `ProtoPushPeriodMsg.unpack_req` splits it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -251,11 +290,10 @@ impl Esc {
     }
 }
 
-/// `SaStatusSubject`: the chassis's own judgement of its situation, as bits in two bytes.
-///
-/// Bit order as the SDK unpacks it (`static_flag, up_hill, down_hill, on_slope, is_pick_up,
-/// slip_flag, impact_x, impact_y` in the first byte; `roll_over, hill_static` in the second) —
-/// **to be confirmed on the bench by lifting the robot and watching `is_pick_up`.**
+/// The chassis's own judgement of its situation: **four bytes** (DJI's on-board library,
+/// `gimbal_and_chassis_push_info_process`: `ns_sa_status = data[108:112]`, read as a `uint32`),
+/// bits `static, uphill, downhill, on_slope, pick_up, slip, impact_x, impact_y, impact_z,
+/// roll_over, slp_output`. The desktop SDK's two-byte reading was wrong for this push.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SaStatus {
     pub static_flag: bool,
@@ -266,28 +304,76 @@ pub struct SaStatus {
     pub slip: bool,
     pub impact_x: bool,
     pub impact_y: bool,
+    pub impact_z: bool,
     pub roll_over: bool,
-    pub hill_static: bool,
+    pub slp_output: bool,
 }
 
 impl SaStatus {
-    pub const SIZE: usize = 2;
+    pub const SIZE: usize = 4;
 
     pub fn parse(b: &[u8]) -> Option<(Self, &[u8])> {
         let (me, rest) = b.split_at_checked(Self::SIZE)?;
-        let bit = |byte: u8, n: u8| (byte >> n) & 1 == 1;
+        let word = u32::from_le_bytes([me[0], me[1], me[2], me[3]]);
+        let bit = |n: u32| (word >> n) & 1 == 1;
         Some((
             Self {
-                static_flag: bit(me[0], 0),
-                up_hill: bit(me[0], 1),
-                down_hill: bit(me[0], 2),
-                on_slope: bit(me[0], 3),
-                is_pick_up: bit(me[0], 4),
-                slip: bit(me[0], 5),
-                impact_x: bit(me[0], 6),
-                impact_y: bit(me[0], 7),
-                roll_over: bit(me[1], 0),
-                hill_static: bit(me[1], 1),
+                static_flag: bit(0),
+                up_hill: bit(1),
+                down_hill: bit(2),
+                on_slope: bit(3),
+                is_pick_up: bit(4),
+                slip: bit(5),
+                impact_x: bit(6),
+                impact_y: bit(7),
+                impact_z: bit(8),
+                roll_over: bit(9),
+                slp_output: bit(10),
+            },
+            rest,
+        ))
+    }
+}
+
+/// The gimbal's angles as the library reads the `gimbal_pos` subject: nine bytes, pitch at 2..4
+/// and yaw at 4..6, tenths of a degree, little-endian signed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GimbalPos {
+    pub pitch_ddeg: i16,
+    pub yaw_ddeg: i16,
+}
+
+impl GimbalPos {
+    pub const SIZE: usize = 9;
+
+    pub fn parse(b: &[u8]) -> Option<(Self, &[u8])> {
+        let (me, rest) = b.split_at_checked(Self::SIZE)?;
+        Some((
+            Self {
+                pitch_ddeg: i16::from_le_bytes([me[2], me[3]]),
+                yaw_ddeg: i16::from_le_bytes([me[4], me[5]]),
+            },
+            rest,
+        ))
+    }
+}
+
+/// `stick_flag`: one byte, bit 0 the chassis stick live, bit 1 the gimbal stick live.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Stick {
+    pub chassis: bool,
+    pub gimbal: bool,
+}
+
+impl Stick {
+    pub const SIZE: usize = 1;
+
+    pub fn parse(b: &[u8]) -> Option<(Self, &[u8])> {
+        let (me, rest) = b.split_at_checked(Self::SIZE)?;
+        Some((
+            Self {
+                chassis: me[0] & 1 == 1,
+                gimbal: (me[0] >> 1) & 1 == 1,
             },
             rest,
         ))

@@ -9,6 +9,29 @@ The design — what of the microduck enters, what is rewritten, and where the bo
 place of `robotd` — is phase 2's page; this is the record phase 1 writes as it goes. The plan is
 the master plan "S1 ← microduck" (plans directory, 2026-10-29) and the night diary beside it.
 
+## Three words, three levels (fixed 2026-10-30)
+
+The owner lost the map when one word was used for three things, so the vocabulary is fixed here
+and every other page follows it:
+
+- **Phase** — only the six of the master plan, one front each: 1 body and senses (the software
+  takes the whole hardware), 2 intelligence, 3 media and blaster, 4 system, 5 twin, 6 Space.
+- **Stage** — only the twelve bench steps of phase 1 (the table below): 1 capture, 2 backup, 3 chroot,
+  4 stop the stock, 5 drive, 6 events and LEDs, 7 camera, 8 audio, 9 app, 10 restore, 11 frames,
+  12 inference.
+- **Item** — one physical command the body accepts, as `s1d` must send it. Every item belongs to
+  phase 1 (owner's rule: everything physical is phase 1) and is proven inside a stage; an item never
+  creates a stage or a phase. The inventory of items is the section "Inventory sweep" below.
+
+## What lives where
+
+Two trees, one rule (owner, 2026-10-30): **anything that reproduces a proof is in this repository**,
+under `scripts/s1/` — the bench (`bench.sh`), the build and push scripts, the strace decoder
+(`duml-strace.py`), the socket driver for stage 5 (`bench-drive.py`) and the oracle that runs DJI's
+own packer (`dji-oracle.py`). **The lab, `~/Development/RoboMaster-S1/`, holds only raw matter**:
+captures, partition images, the binaries and the Python library pulled from the robot (DJI's code,
+never committed), the ONNX Runtime and rootfs builds — each cited here by path and SHA.
+
 ## What this settles so far
 
 | | |
@@ -38,9 +61,9 @@ stages 5, 6 and 8.
 |---|---|---|---|
 | 1 | `capture` | cpuinfo, partitions, mounts, `getenforce`, the UART's baud (`stty`), and `strace` of `dji_hdvt_uav` and `dji_camera` while the app is used: LED effects, armour hits, button, audio and camera init, `top` during person recognition | **done 2026-10-30** (below) |
 | 2 | `backup` | every partition dumped, SHA on robot == SHA on Mac | **done 2026-10-30** (below): 14 on the card, 11 pulled, SHA equal |
-| 3 | `exec` | a binary of ours runs on the robot (`/data`, or `setenforce 0` by the owner, or the microSD); the chroot answers `uname -a` and `ldd --version` | pending — **gates the port** |
-| 4 | `stop` | `hdvt_uav` and `monitor` stopped; nobody holds `ttyS3` | pending |
-| 5 | `drive` | `s1d` + `netpadd` + `robotctl health` in the chroot; `duckctl udp-pad` on the Mac drives wheels and gimbal; DDS telemetry in `robotctl monitor` | pending — **gates the port** |
+| 3 | `exec` | a binary of ours runs on the robot (`/data`, or `setenforce 0` by the owner, or the microSD); the chroot answers `uname -a` and `ldd --version` | **done 2026-10-30** (below) — gate passed |
+| 4 | `stop` | `hdvt_uav` and `monitor` stopped; nobody holds `ttyS3` | **done 2026-10-30** (below) |
+| 5 | `drive` | `s1d` + `netpadd` + `robotctl health` in the chroot; `duckctl udp-pad` on the Mac drives wheels and gimbal; DDS telemetry in `robotctl monitor` | **wheels and gimbal done 2026-10-30** (below, owner's witness); telemetry still refused by the controller — open |
 | 6 | `events` | `robotctl flashlight` lights the LEDs; the full `0x3f/0x33` from the app's strace reproduced; armour hits, IR and the button in `s1d`'s log | pending |
 | 7 | `camera` | `v4l2-ctl` formats and one NV12 frame → PNG | pending |
 | 8 | `audio` | mic as a 60 s stream through `arecord`; `aplay` while driving, CPU sampled | pending |
@@ -178,6 +201,106 @@ snapshots of a running system, not a quiesced one.
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/backup/bk/recovery.img sha256=38737e740abb46ae49848aa6928957d69f14f0f41c3a6820b8735aa3180c952d
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/backup/bk/system.img sha256=10cc3cf264cc013d1c5bf2189a2aa86bfe3c58f522d97c4687480cb7232d5c02
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/backup/bk/vendor.img sha256=73faeae59cae04b3ab169a13e4110395ddc0cf20cc5fd42ad0003da84fbc7123
+
+## Bench, 2026-10-30 — stages 3, 4 and 5
+
+**Stage 3, execution and chroot — proven.** `busybox` copied to `/data` runs (`EXEC_IN_DATA_OK`; the
+first probe copied it as `bb` and busybox, a multi-call binary, answered `bb: applet not found` —
+that message *is* execution from `/data`, and the probe now copies it under its own name). The
+Debian bookworm armhf rootfs (177 MB tar, 171 MB extracted; `/data` had 658 MB free) was pushed at
+0.6 MB/s in 260 s and extracted to `/data/debian`; `/dev`, `/proc`, `/sys` bind-mounted; the Android
+shell has no `chroot` or `head`, both are busybox applets here. `busybox chroot /data/debian`:
+`CHROOT_OK`, `Linux localhost 3.10.62 #1 SMP PREEMPT Thu Oct 27 03:34:03 CST 2022 armv7l`,
+`ldd (Debian GLIBC 2.36-9+deb12u14) 2.36`, Debian `12.15`.
+
+**Stage 4, free the UART — proven.** `stop dji_hdvt_uav; stop dji_monitor` + kill →
+`hdvt_uav_stopped`; the scan of every `/proc/*/fd` found nobody on `ttyS3`. `dji_camera`,
+`dji_vision`, `dji_sys`, `dji_network`, `dji_sw_uav`, `dji_blackbox` keep running.
+
+**Stage 5, drive — wheels and gimbal proven, telemetry open.** `s1d` and `netpadd` run in the
+chroot (they only survive the adb shell as `(setsid nohup … </dev/null >log 2>&1 &); sleep 1` —
+measured: plain `nohup … &` left an empty log, and `setsid` without the sleep lost the race once).
+`robotctl health --json` in the chroot: `healthy: true`, 99.93 Hz, 0 missed, 0 bus errors;
+`robot.mode` → `roller`, `robot.modelApi` → 2. Without a gamepad the Mac drives the JSON-RPC
+socket through `adb forward tcp:9000 localfilesystem:/data/debian/run/robotd.sock` (`drive.py`):
+`robot.enable` → `armed`; 30 × `robot.move` forward 0.2 m/s, 20 × yaw 0.6 rad/s, 20 × strafe
+0.2 m/s, 50 × `robot.head`, every one `accepted`; `robot.enable off` → `disarmed`; the owner, wheels
+in the air: **"funcionou"** — wheels and gimbal obeyed. Health `healthy` before and after.
+
+Telemetry, three defects found and two fixed on the bench, one open:
+1. The motion controller keeps pushing the **stock firmware's** subscriptions after `dji_hdvt_uav`
+   is stopped — msg id 1 at 50 Hz (161 B of subjects) and msg id 0 at 1 Hz (54 B) — and `s1d` used
+   msg id 1 too, so it decoded the stock's subjects with our layout (gyro in the 10³² range,
+   `monitor_before_fix.log`). Fixed: own msg id `0x5d`, a push is ours only at exactly
+   `DDS_PUSH_LEN` bytes, foreign pushes counted; the subscription is sent armed or not.
+2. The controller then ignored our subscription outright. Running the stock `dji_hdvt_uav` under
+   `strace` for 10 s (`hdvt_boot.strace`) shows what it sends on start: `0x48/0x01` register node 9
+   (`09 00 00 00 03`), then `0x48/0x03` subscribe — both with attribute `0x40`, the SDK's
+   `need_ack = 2` ("ack when finished"), a two-bit field our frame modelled as one bit. Fixed:
+   `Ack::{None, Now, WhenDone}`, `dds::add_node`, both requests `WhenDone`; the two stock frames
+   are fixtures reproduced byte for byte. The controller now **answers** both requests.
+3. Open: the answers are refusals — add-node returns `02 03` (the SDK accepts only `0x00` and
+   `0x50`), subscribe returns `21 03 00 5d 00…`. Next: `0x48/0x02` node reset before registering,
+   as the SDK's `ProtoSubNodeReset` allows; measured on the next power-up.
+
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/exec/exec.txt sha256=3d38161894241b029aa2db218b42271da30344015b1e236c1e0f6cf1364d96a0
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/stop/stop.txt sha256=93993a72aca42aaa5d68f7f5908a965278cb4465616b8ad9b55f1e7cef566425
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/stop/owners.txt sha256=dfa3ab767dc85cd9b759818b95b1d7df1a7ec15dd211b83eb3ca97481c099705
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/drive/health.json sha256=d729d1d41ceb614d05f9d2c7ad0a5a8a4c7a8065de0335e53123935a52e031d9
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/drive/move.log sha256=3d3ef2f5bb7664844e21a33e67e6c1b789ef03bbceb0caf06aa49d65e16f1f6a
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/drive/drive.py sha256=543331d05db8d47ae0e3fdbf9235bcfe9d8a1e1f2a6634ec9fdbef36886a52da
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/drive/hdvt_boot.strace sha256=41ca4f9d1f03599dc419096895f1df7a2248240b82a49114c44bb6eb62b34ddb
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/drive/monitor_before_fix.log sha256=324ad59be5e3e6f11ef6036dd585230b2a5d077e77b0fcf5c53d475bcf263432
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/drive/s1d_trace_after_ack_fix.log sha256=390cfee9e4fa22963ed40ec86e75f0b533a13c37cb6bbab98c280c65543c86fa
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/backup/mirror-check-20261030T122913Z.txt sha256=b84188f7ca61a2eaaf4db2e1776d8a261d3c9caa69eabb411e032b9fd31e1797
+
+## Inventory sweep against the official SDK, 2026-10-30
+
+The master plan's body inventory was built from captures and proroklab, not from a whole reading
+of the primary sources; the owner found the hole (the app's "chassis follows gimbal" button) and
+ruled: **every physical command belongs to phase 1**, intelligence to phase 2. This section is the
+whole reading: `dji-sdk/RoboMaster-SDK` `src/robomaster/{protocol,robot,chassis,gimbal,led,blaster,
+armor,vision,battery,camera,dds}.py` — 61 `Proto*` classes, every public method of the body modules,
+18 DDS subjects. Proven already: wheels (`0x3f/0x20`, `0x21`), heartbeat `0x3f/0x60`, gimbal by
+angle `0x3f/0xb0`, system LED (real id `0x3f/0x32`), armour `0x3f/0x02`, IR `0x3f/0x10`, the button,
+DDS battery/attitude/odometry/IMU/esc/sa_status.
+
+Physical commands the inventory lacked — proposed for phase 1, awaiting the owner's ratification:
+
+| # | what the robot does | command (SDK name) | request layout | in the code |
+|---|---|---|---|---|
+| F1 | chassis follows the gimbal / gimbal follows the chassis / free — the "twist" | `set_robot_mode` `0x3f/0x46`; read `0x3f/0x47` | 1 byte: 0 free, 1 gimbal_lead, 2 chassis_lead (values to confirm on a capture) | absent |
+| F2 | recentre the gimbal | `gimbal.recenter` `0x3f/0xb2` | action_id, ctrl\|freq<<2, valid yaw/roll/pitch bits, 3× u16 speed | absent (listed in the plan, never built) |
+| F3 | gimbal by rate, °/s, continuous | `gimbal.drive_speed` `0x04/0x0c` | yaw, roll, pitch i16 + ctrl byte | absent; what phase 2's look/follow needs |
+| F4 | gimbal work mode | `0x04/0x4c` (the stock writes it 43× in 70 s) | workmode, recenter | absent; semantics to capture |
+| F5 | gimbal sleep / wake (folds at power-off) | `gimbal.suspend/resume` `0x04/0x0d` | u16 order code `0x2ab5` / `0x7ef2` | absent; needed at shutdown and boot |
+| F6 | move a distance and stop, loop closed by the controller | `chassis.move` `0x3f/0x25`; progress push `0x3f/0x2a` | action_id, ctrl\|freq, modes, x y z i16, vel_xy, omega_max i16 | absent; the base of choreography and patrol |
+| F7 | velocity frame: body or gimbal heading | `chassis.stick_overlay` `0x3f/0x28` | 1 byte: 0 off, 1 body, 2 gimbal | absent |
+| F8 | built-in sounds: attack, shoot, scanning, recognised, countdown, musical notes 1C…3B | `robot.play_sound` `0x3f/0xb3`; progress `0xb4` | action_id, ctrl\|freq, sound_id u32, play_ctrl, interval u16, times | absent; an instrument for the carnival; `aplay` covers files only |
+| F9 | blaster LED (trail light) | `blaster.set_led` `0x3f/0x55` | mode<<4\|effect, rgb, times, t1 t2 u16 | absent (listed, never built) |
+| F10 | remaining system-LED effects: flash, pulse, scrolling, per-component masks | `0x3f/0x32` (SDK says `0x33`) | comp_mask, led_mask, effect, rgb, loop, t1 t2 | only solid/breath/off proven |
+| F11 | hit sensitivity per plate | `armor.set_hit_sensitivity` `0x3f/0x07` | armor_mask + 9× u16 | absent |
+| F12 | chassis PWM ports (accessories) | `chassis.set_pwm_value/freq` `0x3f/0x3c`, `0x2b` | mask + 6× u16 | absent; whether the S1 exposes the ports is for the manual |
+| F13 | photo, digital zoom, white balance | `0x02/0x01`, `0x02/0x34`, `0x02/0x2c` — to the camera host, not the motion controller | type; zoom; temp/tint | absent; stage 7 covers V4L2 only |
+| F14 | DDS subjects not asked for: gimbal position, chassis mode, move mode, sticks | uids `GIMBAL_POS`, `GIMBAL_BASE`, `CHASSIS_MODE`, `MOVE_MODE`, `STICK` | 8 bytes each in the request | 7 subjects asked; the gimbal's real angle is what F1/F3 need |
+| F15 | chassis work mode (sent at arm: mode 1) | `0x3f/0x19` | 1 byte | done; other values unproven |
+
+Already assigned elsewhere by the owner (2026-10-29), kept: blaster fire `0x3f/0x51` (type<<4\|times;
+IR by default, gel only with the key and the tank removed) → phase 3; the stock's video stream control
+`0x3f/0xd2` → phase 3 (`mediad` replaces it); DJI's on-board detection `0x0a/0xa3…0xab` (person,
+gesture, line, marker, robot; marker colour) goes to the `dji_vision` process, not the motion
+controller → phase 2, where reusing `dji_vision` is an option against training our own; serial number
+and versions `0x00/0x51` → phase 4.
+
+Not on an S1 (EP only): servo `0x33/0x15–0x17`, gripper `0x33/0x11`, arm `0x33/0x13–0x14` and
+`0x3f/0xb5–0xb8`, sensor adaptor `0x3f/0xf0`, chassis UART `0x3f/0xc0–0xc1`, ToF and pinboard (DDS),
+UWB `0xdb`, AI module `0xe9/0xea`, the SDK gateway `0x3f/0xd1/0xd4/0xd5`.
+
+What the stage-1 capture must still catch, repeated after stage 10's reboot — the owner presses, one
+at a time with a 3 s pause: the follow toggle (F1, F7); recentre (F2); drag the gimbal slowly (F3, F4);
+each sound (F8); zoom and photo (F13); change the LED effect (F10); hit the armour at high and low
+sensitivity (F11); power off by the button with the strace alive (F5). Each becomes a real fixture and
+a byte-for-byte test.
 
 ## Two corrections to earlier notes
 

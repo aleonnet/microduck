@@ -9,7 +9,7 @@ use s1_duml::cmd::{self, SystemLed};
 use s1_duml::crc::{CRC8_SEED, CRC16_SEED, crc8, crc16};
 use s1_duml::dds::{self, PushPeriod};
 use s1_duml::events::{ArmorHit, IrHit};
-use s1_duml::{DecodeError, Decoder, Frame};
+use s1_duml::{Ack, DecodeError, Decoder, Frame};
 
 const HEARTBEAT_REAL: &[u8] = include_bytes!("fixtures/heartbeat_real.bin");
 const PUSH_REAL: &[u8] = include_bytes!("fixtures/dds_push_176_real.bin");
@@ -38,7 +38,7 @@ fn real_heartbeat_round_trips() {
     assert_eq!(frame.receiver, cmd::host::CHASSIS);
     assert_eq!((frame.cmd_set, frame.cmd_id), cmd::id::HEARTBEAT);
     assert!(
-        !frame.need_ack && !frame.is_ack,
+        frame.ack == Ack::None && !frame.is_ack,
         "the stock heartbeat asks for no ack (attri 0x00)"
     );
     assert_eq!(frame.encode().unwrap(), HEARTBEAT_REAL);
@@ -158,8 +158,33 @@ fn decoder_recovers_frames_from_the_raw_read_stream() {
 
 /// The subscription request as `ProtoAddSubMsg.pack_req` lays it out: two UIDs at 20 Hz.
 #[test]
+fn add_node_and_add_sub_reproduce_the_stocks_frames_byte_for_byte() {
+    // What `dji_hdvt_uav` wrote to the UART on start-up (strace, 2026-10-30): register node 9,
+    // then subscribe one subject under msg id 0 at 1 Hz with both flags — attri 0x40 on both.
+    const ADD_NODE_REAL: &[u8] = include_bytes!("fixtures/dds_add_node_stock_real.bin");
+    const ADD_SUB_REAL: &[u8] = include_bytes!("fixtures/dds_add_sub_stock_real.bin");
+    assert_eq!(dds::add_node(0, 9).encode().unwrap(), ADD_NODE_REAL);
+    let real = Frame::decode(ADD_SUB_REAL).unwrap();
+    assert_eq!(real.ack, Ack::WhenDone);
+    assert_eq!(
+        dds::add_sub(1, 9, 0, &[0x0002_0003_d7f5_dcfb], 1, true, true)
+            .encode()
+            .unwrap(),
+        ADD_SUB_REAL
+    );
+}
+
+#[test]
 fn add_sub_matches_the_sdk_layout() {
-    let f = dds::add_sub(0, 9, 1, &[dds::uid::BATTERY, dds::uid::ATTITUDE], 20, false);
+    let f = dds::add_sub(
+        0,
+        9,
+        1,
+        &[dds::uid::BATTERY, dds::uid::ATTITUDE],
+        20,
+        false,
+        false,
+    );
     assert_eq!((f.cmd_set, f.cmd_id), cmd::id::DDS_ADD_SUB);
     assert_eq!(f.data.len(), 7 + 16);
     assert_eq!(&f.data[0..5], &[9, 1, 0, 0, 2]);
@@ -181,7 +206,7 @@ fn subjects_parse_in_order_at_their_sizes() {
     for v in [90.0f32, -5.0, 1.5] {
         data.extend_from_slice(&v.to_le_bytes());
     }
-    data.extend_from_slice(&[0b0001_0000, 0b0000_0001]);
+    data.extend_from_slice(&[0b0001_0000, 0b0000_0010, 0, 0]);
     let (b, rest) = dds::Battery::parse(&data).unwrap();
     assert_eq!(
         (b.adc_value, b.temperature, b.current, b.percent),

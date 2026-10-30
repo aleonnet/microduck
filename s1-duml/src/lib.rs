@@ -17,4 +17,4 @@ pub mod dds;
 pub mod events;
 pub mod frame;
 
-pub use frame::{DecodeError, Decoder, Frame};
+pub use frame::{Ack, DecodeError, Decoder, Frame};
