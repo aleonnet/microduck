@@ -84,6 +84,7 @@ the daemons — one crate each, one unit each, all in the same release artifact
   mediad/         camera, mic, WebRTC, the remote gateway, and the console it serves
   tof/            tofd: the head's 8×8 depth sensor. Publishes frames, reads nothing
   nfc/            nfcd: the NFC reader. A touched tag names a gamepad, and configd pairs it
+  s1d/            the RoboMaster S1's body: robot.* on the same socket, DUML on its UART (docs/project/s1-bringup.md)
 
 the libraries they drive — no sockets, no systemd, nothing starts them
   duck-ipc-proto/ the wire contract
@@ -93,6 +94,7 @@ the libraries they drive — no sockets, no systemd, nothing starts them
   sounds/         synthesis, per-robot voice personality, the chorale's score
   pet-detect/     a small CNN that hears head scratches on the onboard mic
   robotd-params/  robotd's startup parameters: schema, defaults, validation
+  s1-duml/        DUML/V1: the frames, commands and telemetry of the S1's motion controller
 
 the tools
   robotctl/       the local CLI, including `monitor`
@@ -112,6 +114,7 @@ scripts/        provision-board.sh · dev-push.sh + dev-build.Dockerfile (from y
                 pad-link-test.sh · pad-stack-report.sh (gamepad radio, on the board) ·
                 board-test.sh · systemd-test.sh (CI) · cross-sysroot.sh (cross-builds) ·
                 bake-duck-mesh.py (the monitor's 3D model, run by hand)
+                s1/ (build-rootfs · build-onnxruntime · s1-push · bench: the S1 from this machine, by adb)
 docs/           robot/ (using one) · design/ (how it works) · project/ (roadmap, records) ·
                 ideas/ (not designed yet)
 ```
