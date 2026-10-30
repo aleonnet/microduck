@@ -89,18 +89,16 @@ asked events "robotctl flashlight on --color red"
 asked events "cat /dev/input/event0"
 run camera
 asked camera "v4l2-ctl -d /dev/video0 --list-formats-ext"
-# No S_FMT (the driver refuses it); the frame is streamed to the chroot's /tmp and pulled from there.
-asked camera "v4l2-ctl -d /dev/video0 --stream-mmap --stream-count=1 --stream-to=/tmp/frame.raw"
-grep -q -- "--set-fmt-video" "$ADB_SHIM_LOG" && { echo "selftest: camera still sets the format"; fail=1; } || echo "selftest: camera streams the device's own format"
+# Stage 7 must NOT stream with a generic tool (it rebooted the robot twice): no S_FMT, no mmap stream.
+grep -qE -- "--set-fmt-video|--stream-mmap" "$ADB_SHIM_LOG" && { echo "selftest: camera still streams with v4l2-ctl"; fail=1; } || echo "selftest: camera stops before the stream"
+[ -f "$S1_OUT/camera/blocked.txt" ] && echo "selftest: camera recorded the refusal" || { echo "selftest: camera did NOT record the refusal"; fail=1; }
 run audio
 asked audio "arecord -D hw:0,0 -f S16_LE -r 48000 -c 2 -d 60 /tmp/mic.wav"
 asked audio "aplay -D hw:0,0 /mnt/system/audio/sound/engine_start.wav"
 run frames
 asked frames "|| mount -o bind /dev /data/debian/dev"
-asked frames "gst-launch-1.0 v4l2src device=/dev/video0 num-buffers=300"
-# The shim answers every gst-launch with "Execution ended after 0:00:12.500000000": 300 buffers
-# in 12.5 s is 24.0 fps, and the stage must compute it.
-grep -q "fps 24.0 (300 buffers in 12.50 s)" "$S1_OUT/frames/fps_720p.txt" && echo "selftest: frames computed the rate" || { echo "selftest: frames did NOT compute the rate:"; cat "$S1_OUT/frames/fps_720p.txt"; fail=1; }
+grep -q "gst-launch-1.0 v4l2src" "$ADB_SHIM_LOG" && { echo "selftest: frames still streams with gst-launch"; fail=1; } || echo "selftest: frames stops before the stream"
+[ -f "$S1_OUT/frames/blocked.txt" ] && echo "selftest: frames recorded the refusal" || { echo "selftest: frames did NOT record the refusal"; fail=1; }
 # The verify step over what the stages wrote: every artefact line must resolve.
 grep -h "artefato:" "$WORK"/*.txt > "$WORK/record.md" || true
 if scripts/s1/bench.sh verify-record "$WORK/record.md" > "$WORK/verify.txt" 2>&1; then

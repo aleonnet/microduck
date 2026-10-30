@@ -236,10 +236,15 @@ case "$stage" in
     sh_robot "$BB chroot $CHROOT /usr/bin/v4l2-ctl -d /dev/video0 --get-fmt-video" | tee "$D/fmt.txt" || true
     geo=$(awk '/Width\/Height/ {gsub(/[^0-9\/]/, "", $NF); print $NF}' "$D/fmt.txt" | tr '/' 'x'); geo=${geo:-1280x720}
     pix=$(awk -F"'" '/Pixel Format/ {print tolower($2)}' "$D/fmt.txt"); pix=${pix:-nv12}
-    sh_robot "$BB chroot $CHROOT /usr/bin/v4l2-ctl -d /dev/video0 --stream-mmap --stream-count=1 --stream-to=/tmp/frame.raw && ls -l $CHROOT/tmp/frame.raw" | tee -a "$D/formats.txt" || true
-    $A pull "$CHROOT/tmp/frame.raw" "$D/frame.nv12" >/dev/null 2>&1 || true
-    [ -f "$D/frame.nv12" ] && ffmpeg -loglevel error -y -f rawvideo -pix_fmt "$pix" -s "$geo" -i "$D/frame.nv12" "$D/frame.png" && say "open $D/frame.png ($geo $pix)"
-    for f in "$D"/formats.txt "$D"/fmt.txt "$D"/frame.nv12 "$D"/frame.png; do [ -f "$f" ] && art "$f"; done ;;
+    # NO STREAM HERE. A generic stream request (`v4l2-ctl --stream-mmap`, 17:01 and 17:5x on 2026-10-30)
+    # rebooted the robot both times. The frame comes from `s1-cam`, which replays the stock camera
+    # process's own call sequence (`camera/dji_camera_v4l2_decoded.strace`); until that binary exists
+    # the stage records the refusal and stops here.
+    if $A shell "test -x $CHROOT/opt/robot/bin/s1-cam" 2>/dev/null; then
+        say "s1-cam present: its run is not wired into this stage yet — wire it, with the self-test, before trusting a frame"
+    fi
+    echo "stage 7 stops before the stream: a generic V4L2 stream rebooted the robot twice (2026-10-30); the frame waits for s1-cam" | tee "$D/blocked.txt"
+    for f in "$D"/formats.txt "$D"/fmt.txt "$D"/blocked.txt "$D"/frame.nv12 "$D"/frame.png; do [ -f "$f" ] && art "$f" || true; done ;;
 
   audio)
     D=$(dir audio); need_chroot
@@ -276,15 +281,12 @@ case "$stage" in
 
   frames)
     D=$(dir frames); need_chroot
-    # `fpsdisplaysink` is in gst-plugins-bad, which the rootfs does not carry (measured in the tar,
-    # 2026-10-30): the rate is 300 buffers over the "Execution ended after" time gst-launch prints.
-    for geo in 1280,720 640,360; do w=${geo%,*}; h=${geo#*,}
-        sh_robot "$BB chroot $CHROOT /usr/bin/gst-launch-1.0 v4l2src device=/dev/video0 num-buffers=300 ! video/x-raw,width=$w,height=$h ! fakesink 2>&1 | $BB grep -E 'Execution ended|ERROR|WARNING' & for i in 1 2 3; do top -n 1 -m 5; $BB sleep 4; done; wait" > "$D/fps_${h}p.txt" 2>&1 || true
-        awk '/Execution ended after/ { split($4, t, ":"); secs = t[1]*3600 + t[2]*60 + t[3]; if (secs > 0) printf "fps %.1f (300 buffers in %.2f s)\n", 300/secs, secs }' "$D/fps_${h}p.txt" | tee -a "$D/fps_${h}p.txt"
-    done
-    sh_robot "$BB chroot $CHROOT /usr/bin/gst-launch-1.0 v4l2src device=/dev/video0 num-buffers=1 ! video/x-raw,width=640,height=360 ! pngenc ! filesink location=/tmp/sample.png" >/dev/null 2>&1 || true
-    $A pull "$CHROOT/tmp/sample.png" "$D/sample.png" >/dev/null 2>&1 || true
-    for f in "$D"/fps_720p.txt "$D"/fps_360p.txt "$D"/sample.png; do [ -f "$f" ] && art "$f"; done ;;
+    # NO STREAM HERE either: `gst-launch v4l2src` is the same generic path that rebooted the robot
+    # in stage 7. The rate is measured by `s1-cam` over the stock's own sequence; until it exists
+    # the stage records the refusal. (`fpsdisplaysink` is absent from the rootfs anyway: the rate is
+    # 300 buffers over the time the grabber reports.)
+    echo "stage 11 stops before the stream: a generic V4L2 stream rebooted the robot twice (2026-10-30); fps waits for s1-cam" | tee "$D/blocked.txt"
+    for f in "$D"/blocked.txt "$D"/fps_720p.txt "$D"/fps_360p.txt "$D"/sample.png; do [ -f "$f" ] && art "$f" || true; done ;;
 
   infer)
     D=$(dir infer); ORT="${S1_ORT:-$HOME/Development/RoboMaster-S1/out/onnxruntime}"; ORT_VER="${S1_ORT_VERSION:-1.28.0}"; MODEL="$OUT/duck_detect.onnx"

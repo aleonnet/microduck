@@ -66,11 +66,11 @@ stages 5, 6 and 8.
 | 4 | `stop` | `hdvt_uav` and `monitor` stopped; nobody holds `ttyS3` | **done 2026-10-30** (below) |
 | 5 | `drive` + `items` | `s1d` + `netpadd` + `robotctl health` in the chroot; `s1-e2e robot` from the Mac: the pad over UDP into `netpadd` (wheels, turn, strafe, gimbal, lights, sounds, arm/disarm), the S1 list through `s1ctl --tcp`, telemetry | **wheels and gimbal done 2026-10-30** (below, owner's witness); **every item pre-tested on the Mac** (`s1-e2e fake`, 40 of 40, below); the robot session runs the same program minus the two wire-only items (a test holds the two lists equal); telemetry still refused by the controller — open |
 | 6 | `events` | `robotctl flashlight` lights the LEDs; every effect of the real `0x3f/0x32`; armour hits, IR and the button as `s1.event` | pre-tested on the Mac (events fed to the fake body reach `s1ctl events`; the button through a FIFO); pending on the robot |
-| 7 | `camera` | `v4l2-ctl` formats and one NV12 frame → PNG | pending |
-| 8 | `audio` | mic as a 60 s stream through `arecord`; `aplay` while driving, CPU sampled | pending |
+| 7 | `camera` | formats listed; the frame waits for `s1-cam` (a generic stream rebooted the robot twice, 2026-10-30) | **measured 2026-10-30**, frame pending |
+| 8 | `audio` | mic as a 60 s stream through `arecord`; `aplay` while driving, CPU sampled | speaker **proven** (owner, four times); mic: device `hw:0,0` right channel, no signal yet (2026-10-30) |
 | 9 | `app` | what the DJI app does with the stock stopped | pending (informative) |
-| 10 | `restore` | reboot brings the stock back; the app drives | pending |
-| 11 | `frames` | `gst-launch-1.0 v4l2src` — `mediad`'s element — at 720p and 360p: fps and CPU | pending — **gates the port** |
+| 10 | `restore` | reboot brings the stock back; the app drives | measured twice 2026-10-30 (stock back, app drove), artefact pending |
+| 11 | `frames` | frames at 720p and 360p: fps and CPU — by `s1-cam` over the stock's own call sequence (no `gst-launch v4l2src`: same generic path that rebooted the robot) | pending — **gates the port** (360p was never captured from the stock; a 360p `S_FMT` is a hypothesis and does not go to the robot) |
 | 12 | `infer` | `s1-infer` (the detector's ONNX path) on the S1 with `libonnxruntime` armv7 and on the Mac over the same frames: ms/frame on both tiers | pending on the robot; the Mac tier ran tonight on a synthetic frame (below) — **gates the port** (one tier suffices) |
 
 The `items` stage is `s1-e2e robot` alone, with the daemons already up; `e2e` is the same program
@@ -535,6 +535,52 @@ the speaker.
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/audio-20261030-180316/probe_48k_stereo.wav sha256=dfc182c67be71deb2645137678bb8b2202c5bb1c7a3d707a17138c1ac6311383
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/audio-20261030-180316/mixer_camera_stopped.txt sha256=696f8ebcd397693a532677ff2bdfa73f2df2c553c93e866ed6dc6ea2a9351a31
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/audio-20261030-180316/mixer_camera_running.txt sha256=696f8ebcd397693a532677ff2bdfa73f2df2c553c93e866ed6dc6ea2a9351a31
+
+## Corrections after the cold reader (2026-10-30 18:29 -0300) — this section supersedes the hand-off's open-items table
+
+A cold reader resumed from `docs/plans/2026-10-30-1905-handoff-s1-fase1-bateria2.md` alone and found
+the defects below. **That file's name and its "19:05" are wrong: it was written at 18:15 (commit
+5ad758c, `git log -1 --format=%ci`), and the stage 8 times "18:00–18:40" are 18:05–18:08 by the
+artefacts' mtimes.** The scope lock keeps this session from renaming it; the next session reads it
+for the list of errors and this section for the facts.
+
+**Do not believe what this session reports about code or progress. Read the code and the disk.**
+Every claim below carries its file and line; a claim without them is a hypothesis.
+
+1. **The camera sequence, complete this time** (`camera/dji_camera_v4l2_decoded.strace`, the
+   chroot's strace attached to a freshly started `dji_camera`; provenance command, run 2026-10-30:
+   `stop dji_camera; start dji_camera; chroot /data/debian /usr/bin/timeout 20 /usr/bin/strace -f -tt -v -s 64 -e trace=ioctl,openat,open -o /tmp/cam_v.strace -p <pid>`):
+   `open("/dev/video0", O_RDWR|O_NONBLOCK|O_LARGEFILE)` l.312 → `QUERYCAP` driver `comip`, capture +
+   streaming l.313 → `ENUMINPUT 0` = `ov5695` l.314 → `ENUMINPUT 1` EINVAL l.315 → `S_INPUT [0]` l.316 →
+   `CROPCAP` bounds 2592×1944 l.317 → `G_INPUT` → **[1]** l.318 → `S_CTRL` `V4L2_CTRL_CLASS_CAMERA`
+   (`0x009a0000`, UAPI `videodev2.h`) `+0x191b = 0`, `+0x1934 = 30`, `+0x1935 = 0` l.495–497 → `S_FMT`
+   1280×720 NV12, field ANY, colourspace JPEG, and the driver answers **field INTERLACED, bytesperline
+   1920, sizeimage 1382432** l.498 → `REQBUFS` MMAP count 5 l.499 → `QUERYBUF_TIME32` ×5 l.500–504
+   (pointers only: flags/field/memory NOT on disk) → `mmap2` ×5 of 1384448 bytes, `MAP_SHARED`, page
+   offsets 0, 0x152, 0x2a4, 0x3f6, 0x548 (`camera/dji_camera_start.strace` l.1056–1064) → `QBUF` ×5
+   l.505–509 → `STREAMON` l.510 → `DQBUF`/`QBUF` loop from l.996 (525 `DQBUF` in 17.34 s ≈ 30 fps; no
+   `EAGAIN`; `poll`/`select` were not traced, so whether the stock waits before `DQBUF` is unknown) →
+   `S_CTRL +0x1928` as **four values** (1073755392, 1073755393, 115056, 115057) repeated at 1 Hz on
+   another thread l.1746–1752. The driver exposes no named controls (`camera/v4l2_all.txt`), so
+   `v4l2-ctl --set-ctrl` cannot replay them; `s1-cam` must issue the ioctls with the ARM32 UAPI
+   layouts (`v4l2_buffer` with 32-bit timeval), which neither the repo nor the rootfs carries
+   (`mediad/src/exposure.rs:381` chose `v4l2-ctl` to avoid pinning those layouts by hand).
+2. **The bench no longer streams with a generic tool.** Stages 7 and 11 stop before the stream and
+   record `blocked.txt`; `bench-selftest.sh` asserts that neither `--stream-mmap` nor `gst-launch
+   v4l2src` is sent. Until `s1-cam` exists, no frame and no fps.
+3. **`hw:0,1` is not "untested"**: `arecord -D hw:0,1 -f S16_LE -r 16000 -c 1` answered "read error:
+   Invalid argument" (first run of stage 8); `--dump-hw-params` says it accepts S16_LE, 1–2 channels,
+   8–16 kHz. It was never recorded from. The stock's capture device is `pcmC0D0c` (= `hw:0,0`).
+4. **Hours**: every "19:05"/"18:40" in the hand-off and the memory for the evening blocks is about
+   50 min late; the commit times are the truth (`git log --format=%ci`).
+5. **Memory and index**: the live memory still holds revoked orders ("tentar reset de nó", "tentar nó
+   0xC9", "dono testemunha cada item") and old counts (40/71 OK) in earlier blocks; the later blocks
+   revoke them. The index line for the master plan says the front is closed; it is open (base
+   `4d9ca3c`). The next session trusts the latest block and the disk, not the earlier blocks.
+6. **Wheels in the air is a safety question, not a repeat**: before any stage that moves the wheels
+   the owner is asked once whether they are off the ground.
+
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/camera/v4l2_all.txt sha256=e6f155d453c71e2f124ce41494d2d89a3df78525d950548cfdd19308e4529334
 
 ## Before the next battery (written 2026-10-30, night, robot off)
 
