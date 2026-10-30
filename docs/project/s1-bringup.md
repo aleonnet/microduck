@@ -63,7 +63,7 @@ stages 5, 6 and 8.
 | 2 | `backup` | every partition dumped, SHA on robot == SHA on Mac | **done 2026-10-30** (below): 14 on the card, 11 pulled, SHA equal |
 | 3 | `exec` | a binary of ours runs on the robot (`/data`, or `setenforce 0` by the owner, or the microSD); the chroot answers `uname -a` and `ldd --version` | **done 2026-10-30** (below) — gate passed |
 | 4 | `stop` | `hdvt_uav` and `monitor` stopped; nobody holds `ttyS3` | **done 2026-10-30** (below) |
-| 5 | `drive` | `s1d` + `netpadd` + `robotctl health` in the chroot; `duckctl udp-pad` on the Mac drives wheels and gimbal; DDS telemetry in `robotctl monitor` | **wheels and gimbal done 2026-10-30** (below, owner's witness); telemetry still refused by the controller — open |
+| 5 | `drive` + `items` | `s1d` + `netpadd` + `robotctl health` in the chroot; `duckctl udp-pad` on the Mac drives wheels and gimbal; DDS telemetry in `robotctl monitor` | **wheels and gimbal done 2026-10-30** (below, owner's witness); telemetry still refused by the controller — open |
 | 6 | `events` | `robotctl flashlight` lights the LEDs; the full `0x3f/0x33` from the app's strace reproduced; armour hits, IR and the button in `s1d`'s log | pending |
 | 7 | `camera` | `v4l2-ctl` formats and one NV12 frame → PNG | pending |
 | 8 | `audio` | mic as a 60 s stream through `arecord`; `aplay` while driving, CPU sampled | pending |
@@ -71,6 +71,8 @@ stages 5, 6 and 8.
 | 10 | `restore` | reboot brings the stock back; the app drives | pending |
 | 11 | `frames` | `gst-launch-1.0 v4l2src` — `mediad`'s element — at 720p and 360p: fps and CPU | pending — **gates the port** |
 | 12 | `infer` | `s1-infer` (the detector's ONNX path) on the S1 with `libonnxruntime` armv7 and on the Mac over the same frames: ms/frame on both tiers | pending on the robot; the Mac tier ran tonight on a synthetic frame (below) — **gates the port** (one tier suffices) |
+
+The `items` stage (`bench-items.py`) runs every other body command with DJI's own frames and records the owner's witness per item.
 
 Viability of the port = stages 3, 5, 11 and 12 proven. 6, 7 and 8 are what phase 2 (intelligence)
 consumes; 9 informs; 2 is the prerequisite of phase 4's autostart, not of this phase.
@@ -269,19 +271,19 @@ Physical commands the inventory lacked — proposed for phase 1, awaiting the ow
 
 | # | what the robot does | command (SDK name) | request layout | in the code |
 |---|---|---|---|---|
-| F1 | chassis follows the gimbal / gimbal follows the chassis / free — the "twist" | `set_robot_mode` `0x3f/0x46`; read `0x3f/0x47` | 1 byte: 0 free, 1 gimbal_lead, 2 chassis_lead (values to confirm on a capture) | absent |
+| F1 | chassis follows the gimbal / gimbal follows the chassis / free — the "twist" | `0x3f/0x46` goes to the stock controller; on the bus the library does it with chassis work mode 1 + the follow twist `0x3f/0x22` (gimbal lead) or gimbal work mode 2 `0x04/0x4c` (chassis lead) | follow: vx, vy, yaw offset as floats | `s1.mode` + `chassis_follow` / `gimbal_workmode`, oracle-exact; bench proves the motion |
 | F2 | recentre the gimbal | `gimbal.recenter` `0x3f/0xb2` | action_id, ctrl\|freq<<2, valid yaw/roll/pitch bits, 3× u16 speed | absent (listed in the plan, never built) |
 | F3 | gimbal by rate, °/s, continuous | `gimbal.drive_speed` `0x04/0x0c` | yaw, roll, pitch i16 + ctrl byte | absent; what phase 2's look/follow needs |
 | F4 | gimbal work mode | `0x04/0x4c` (the stock writes it 43× in 70 s) | workmode, recenter | absent; semantics to capture |
 | F5 | gimbal sleep / wake (folds at power-off) | `gimbal.suspend/resume` `0x04/0x0d` | u16 order code `0x2ab5` / `0x7ef2` | absent; needed at shutdown and boot |
 | F6 | move a distance and stop, loop closed by the controller | `chassis.move` `0x3f/0x25`; progress push `0x3f/0x2a` | action_id, ctrl\|freq, modes, x y z i16, vel_xy, omega_max i16 | absent; the base of choreography and patrol |
 | F7 | velocity frame: body or gimbal heading | `chassis.stick_overlay` `0x3f/0x28` | 1 byte: 0 off, 1 body, 2 gimbal | absent |
-| F8 | built-in sounds: attack, shoot, scanning, recognised, countdown, musical notes 1C…3B | `robot.play_sound` `0x3f/0xb3`; progress `0xb4` | action_id, ctrl\|freq, sound_id u32, play_ctrl, interval u16, times | absent; an instrument for the carnival; `aplay` covers files only |
+| F8 | built-in sounds: attack, shoot, scanning, recognised, countdown, musical notes 1C…3B | **no bus command**: the library sends `0x3f/0x1a` to the stock controller, which plays `/system/audio/sound/*.wav` (100 files, 48 kHz stereo) on its own PCM | — | `robot.sound` plays the same files through `aplay` (`s1d --sounds`); the notes are an instrument for the carnival |
 | F9 | blaster LED (trail light) | `blaster.set_led` `0x3f/0x55` | mode<<4\|effect, rgb, times, t1 t2 u16 | absent (listed, never built) |
 | F10 | remaining system-LED effects: flash, pulse, scrolling, per-component masks | `0x3f/0x32` (SDK says `0x33`) | comp_mask, led_mask, effect, rgb, loop, t1 t2 | only solid/breath/off proven |
 | F11 | hit sensitivity per plate | `armor.set_hit_sensitivity` `0x3f/0x07` | armor_mask + 9× u16 | absent |
 | F12 | chassis PWM ports (accessories) | `chassis.set_pwm_value/freq` `0x3f/0x3c`, `0x2b` | mask + 6× u16 | absent; whether the S1 exposes the ports is for the manual |
-| F13 | photo, digital zoom, white balance | `0x02/0x01`, `0x02/0x34`, `0x02/0x2c` — to the camera host, not the motion controller | type; zoom; temp/tint | absent; stage 7 covers V4L2 only |
+| F13 | photo, digital zoom, white balance | `0x02/0x01`, `0x02/0x34`, `0x02/0x2c` — to the `dji_camera` process (host `0x01`), not the bus | type; zoom; temp/tint | ours is V4L2 (stage 7): a photo is a grabbed frame, zoom a crop; no bus command exists |
 | F14 | DDS subjects not asked for: gimbal position, chassis mode, move mode, sticks | uids `GIMBAL_POS`, `GIMBAL_BASE`, `CHASSIS_MODE`, `MOVE_MODE`, `STICK` | 8 bytes each in the request | 7 subjects asked; the gimbal's real angle is what F1/F3 need |
 | F15 | chassis work mode (sent at arm: mode 1) | `0x3f/0x19` | 1 byte | done; other values unproven |
 
