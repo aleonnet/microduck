@@ -207,6 +207,11 @@ restore` removes that forward. `bench.sh drive` passes `--volume-control` only w
 `S1_VOLUME_CONTROL` names the speaker's control (stage 8's dump), so the volume item is refused
 by name until then, not reported as passed.
 
+One choice the pre-test cannot settle: `s1.blaster` addresses the blaster host (`0x17`), while
+DJI's library sends the fire command to the stock controller (`0x09`), which is stopped under us.
+The frame's bytes are the library's; the receiver is the bench's to confirm, and the robot session's
+F17 item is where it is decided.
+
 Refutation, executable (`scripts/s1/e2e-refute.sh`, its output among the artefacts): one byte of
 F2's expected hex planted →
 `F2 gimbal recenter  FAIL   wire lacks 551604fcc9040000403fb2070805640000006400bfa1; had ["3f/b2"]`,
@@ -223,7 +228,7 @@ speaker-volume device. The Coral stays phase 2's (owner's decision, 2026-10-30).
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/e2e/e2e_fake.txt sha256=521e79ecef012f133288b276af3c7528ae2ad06012258c93298a385bb45b12a8
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/e2e/work/report.txt sha256=a6c9a7ba6cd55d93b25e9a785f5201f026ca48e1cac98ef4ff0381ae1bf739c5
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/e2e/work/wire.bin sha256=f3c8887d6035284966f079ff84ce4985c136a0606015e016b6f1e6aba7b95bd2
-- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/e2e/refute.txt sha256=3482a8790fadd759cf4fc707d27573b8c2177de15113ae7579ea7818cb3c38e9
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/e2e/refute.txt sha256=f0e510cff90677fa6a8b47cebe5dd5c0357b5da1aab9247e6a42a8b42ba022f9
 
 ## Bench, 2026-10-30 morning — stage 1 (stock alive)
 

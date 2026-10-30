@@ -796,7 +796,11 @@ mod fake {
             "the loop reports healthy (robotctl health --json)",
             {
                 let (_, out) = robotctl(&d, &["health", "--json"]);
-                let v: Value = serde_json::from_str(&out).map_err(|e| format!("{e}: {out}"))?;
+                // The report is the JSON object; anything robotctl says on stderr first (a
+                // daemon it could not reach) is not part of it.
+                let json_text = &out[out.find('{').unwrap_or(0)..];
+                let v: Value =
+                    serde_json::from_str(json_text).map_err(|e| format!("{e}: {out}"))?;
                 if v["robot"]["healthy"] != Value::Bool(true) {
                     return Err(format!("robot.healthy is not true: {}", v["robot"]));
                 }

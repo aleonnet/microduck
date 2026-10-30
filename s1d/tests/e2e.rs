@@ -12,15 +12,20 @@ use std::process::Command;
 fn every_item_of_phase_1_passes_through_the_ducks_mechanism() {
     let cargo = env!("CARGO");
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let e2e = PathBuf::from(env!("CARGO_BIN_EXE_s1-e2e"));
+    // The sibling binaries are built into the profile directory this test's binary sits in, so
+    // `cargo test --release` looks beside `target/release/s1-e2e` and not under `debug`.
+    let bin = e2e.parent().expect("the binary has a directory");
+    let mut build = vec!["build", "-p", "netpadd", "-p", "robotctl"];
+    if bin.file_name().is_some_and(|p| p == "release") {
+        build.push("--release");
+    }
     let status = Command::new(cargo)
-        .args(["build", "-p", "netpadd", "-p", "robotctl"])
+        .args(&build)
         .current_dir(manifest_dir.join(".."))
         .status()
         .expect("cargo runs");
     assert!(status.success(), "building netpadd and robotctl failed");
-    let e2e = PathBuf::from(env!("CARGO_BIN_EXE_s1-e2e"));
-    // The sibling binaries this test just built live beside the test's own profile directory.
-    let bin = e2e.parent().expect("the binary has a directory");
     for b in ["s1d", "s1ctl", "netpadd", "robotctl"] {
         assert!(
             bin.join(b).is_file(),
