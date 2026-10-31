@@ -755,6 +755,15 @@ by hand with the owner watching the gimbal, then a 25 s tilt window.
   what the S1 does with it is its own).
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-free/pickup_wheels.ndjson sha256=fbf2d5ddf571492af92ae1248cc2c9f09eba4899ddbefe7cdbaaa4e3d0011980
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-free/pickup_wheels_bits.txt sha256=351d7870d493a65cf6320882833835634372b237db3d827b3760c6eec371ecf4
+- **Safety rule to implement (owner, 2026-10-31 00:1x; not yet in code).** When the S1 is lifted
+  the wheels stop; head, sounds, lights and perception keep reacting. Detector in `s1d`, from the
+  measurements above: ESC rpm above an idle floor (idle jitter read ≤ 25 rpm tonight) while the
+  accelerometer shows no matching motion — never the controller's velocity estimate (it climbed
+  to 1.15 m/s with the wheels at 0 rpm while the robot was carried) and never DJI's `is_pick_up`
+  (off in all three conditions tried). Scope: a phase-1 item of the body (zero the wheels, set
+  `safety.picked_up`, keep the gimbal and the rest alive), tested on the fake body and proven on
+  the robot; the thresholds come from a capture with the wheels driven on the floor and in the
+  air, not from these numbers alone.
 - Refutations (`telemetry-refute.sh`, six plants, all refused, sources restored by hash): the
   battery offset; the head verdict without the duck/DJI sign; the attitude offset in the strace
   report; the plausibility window opened (49 mV would pass as a pack); the second order's ESC
