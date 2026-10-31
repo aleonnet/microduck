@@ -36,6 +36,9 @@ case "$1" in
       *getenforce*) echo Disabled; echo EXEC_IN_DATA_OK ;;
       *"test -"*) exit 0 ;;
       *"/opt/robot/bin/s1-cam "*) echo '{"streamed": true, "rate": {"fps": 29.9}, "frames_saved": [], "stalled": false}' ;;
+      # The recording: ARECORD_OK, or the exact text the robot gave on 2026-10-31 02:11 when the stock
+      # camera process still held the device — the stage must then stop without pulling anything.
+      *"/usr/bin/arecord "*) if [ -n "${SHIM_ARECORD_BUSY:-}" ]; then echo "arecord: main:831: audio open error: Device or resource busy"; echo ARECORD_FAILED; else echo ARECORD_OK; fi ;;
       *"echo s1d_already_up"*) ;;
       *"echo s1d_up"*) echo s1d_up ;;
       *gst-launch-1.0*num-buffers=300*) echo "Execution ended after 0:00:12.500000000" ;;
@@ -100,7 +103,15 @@ asked camera "/opt/robot/bin/s1-cam --device /dev/video0 --warmup 90 --frames 3 
 # Stage 7 must NOT stream with a generic tool (it rebooted the robot twice): no S_FMT, no mmap stream.
 grep -qE -- "--set-fmt-video|--stream-mmap" "$ADB_SHIM_LOG" && { echo "selftest: camera still streams with v4l2-ctl"; fail=1; } || echo "selftest: camera stops before the stream"
 [ -f "$S1_OUT/camera/blocked.txt" ] && { echo "selftest: camera recorded a refusal although s1-cam is installed"; fail=1; } || echo "selftest: camera ran s1-cam instead of refusing"
+# Stage 8 with the device busy (the stock camera process holds it): the stage must FAIL and record
+# no recording — on 2026-10-31 it pulled the day-before's mic.wav as today's and played it back.
+ASKED_FROM=$(wc -c < "$ADB_SHIM_LOG" 2>/dev/null || echo 0)
+if SHIM_ARECORD_BUSY=1 scripts/s1/bench.sh audio > "$WORK/audio-busy.txt" 2>&1; then echo "selftest: audio stage PASSED with the device busy"; fail=1; else echo "selftest: audio stage fails when arecord cannot open the device"; fi
+grep -q "audio/mic.wav" "$S1_OUT/artefatos.txt" 2>/dev/null && { echo "selftest: audio recorded a mic.wav artefact although arecord failed"; fail=1; } || echo "selftest: audio recorded no recording artefact on the failure"
+grep -q "Device or resource busy" "$WORK/audio-busy.txt" && echo "selftest: audio names arecord's error" || { echo "selftest: audio does not name arecord's error"; fail=1; }
 run audio
+asked audio "stop dji_camera"
+asked audio "rm -f /data/debian/tmp/mic.wav"
 asked audio "arecord -D hw:0,0 -f S16_LE -r 48000 -c 2 -d 60 /tmp/mic.wav"
 asked audio "aplay -D hw:0,0 /mnt/system/audio/sound/engine_start.wav"
 run telemetry

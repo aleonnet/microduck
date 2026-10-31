@@ -305,8 +305,17 @@ case "$stage" in
     # recording takes channel 0 and hears nothing — so: stereo at 48 kHz, the right channel split
     # off on the Mac. Paths given to the chroot's arecord are the chroot's ($CHROOT/tmp on the
     # robot); the tee runs outside.
-    sh_robot "$BB chroot $CHROOT /usr/bin/arecord -D hw:0,0 -f S16_LE -r 48000 -c 2 -d 60 /tmp/mic.wav 2>&1 | $BB tee /data/stream_60s.txt" || true
-    $A pull "$CHROOT/tmp/mic.wav" "$D/mic.wav" >/dev/null || true; $A pull /data/stream_60s.txt "$D/stream_60s.txt" >/dev/null || true
+    # The capture device is single-client and the stock camera process holds it from boot (fd 84 on
+    # pcmC0D0c, measured 2026-10-31), so it is stopped first, as stage 7 does. The previous recording
+    # is removed before arecord runs and the stage stops on arecord's own failure: on 2026-10-31
+    # 02:11 the device was busy, arecord failed, and this stage pulled the day-before's mic.wav as
+    # today's and played it back to the owner.
+    rec=$(sh_robot "stop dji_camera; setprop ctl.stop dji_camera; $BB sleep 1; $BB rm -f $CHROOT/tmp/mic.wav; $BB chroot $CHROOT /usr/bin/arecord -D hw:0,0 -f S16_LE -r 48000 -c 2 -d 60 /tmp/mic.wav > /data/stream_60s.txt 2>&1 && echo ARECORD_OK || echo ARECORD_FAILED")
+    $A pull /data/stream_60s.txt "$D/stream_60s.txt" >/dev/null || true
+    case "$rec" in
+      *ARECORD_OK*) $A pull "$CHROOT/tmp/mic.wav" "$D/mic.wav" >/dev/null ;;
+      *) say "arecord FAILED, nothing pulled, no recording artefact: $rec $(cat "$D/stream_60s.txt" 2>/dev/null)"; art "$D/stream_60s.txt"; exit 2 ;;
+    esac
     [ -f "$D/mic.wav" ] && ffmpeg -loglevel error -y -i "$D/mic.wav" -af "pan=mono|c0=c1" "$D/mic_right.wav" && ffmpeg -hide_banner -loglevel info -i "$D/mic_right.wav" -af "astats=metadata=1:reset=0" -f null - 2>&1 | grep -E "RMS level|Peak level" | tee -a "$D/stream_60s.txt"
     say "aplay while driving: run stage drive in another terminal, then this plays 20 s and samples top"
     sh_robot "$BB chroot $CHROOT /usr/bin/aplay -D hw:0,0 /tmp/mic.wav & for i in 1 2 3 4; do top -n 1 -m 8; $BB sleep 5; done" > "$D/cpu_play_drive.txt" 2>&1 || true
