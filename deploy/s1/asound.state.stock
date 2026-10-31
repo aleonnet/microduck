@@ -1,0 +1,662 @@
+state.comipsndsoc {
+	control.1 {
+		iface MIXER
+		name 'DACR Input'
+		value I2SR
+		comment {
+			access 'read write'
+			type ENUMERATED
+			count 1
+			item.0 I2SL
+			item.1 I2SR
+			item.2 PCML
+			item.3 PCMR
+			item.4 ZERO
+		}
+	}
+	control.2 {
+		iface MIXER
+		name 'DACL Input'
+		value I2SL
+		comment {
+			access 'read write'
+			type ENUMERATED
+			count 1
+			item.0 I2SL
+			item.1 I2SR
+			item.2 PCML
+			item.3 PCMR
+			item.4 ZERO
+		}
+	}
+	control.3 {
+		iface MIXER
+		name 'Stereo DAC Mute'
+		value.0 false
+		value.1 false
+		comment {
+			access 'read write'
+			type BOOLEAN
+			count 2
+		}
+	}
+	control.4 {
+		iface MIXER
+		name 'Mono DAC input'
+		value 7
+		comment {
+			access 'read write'
+			type ENUMERATED
+			count 1
+			item.0 I2SL
+			item.1 I2SR
+			item.2 PCML
+			item.3 PCMR
+			item.4 ADC1
+			item.5 ADC2
+			item.6 ZERO
+		}
+	}
+	control.5 {
+		iface MIXER
+		name 'Mono DAC Mute'
+		value true
+		comment {
+			access 'read write'
+			type BOOLEAN
+			count 1
+		}
+	}
+	control.6 {
+		iface MIXER
+		name 'Speaker Volume'
+		value 20
+		comment {
+			access 'read write'
+			type INTEGER
+			count 1
+			range '0 - 31'
+			dbmin -2600
+			dbmax 500
+			dbvalue.0 -600
+		}
+	}
+	control.7 {
+		iface MIXER
+		name 'Headphone Volume'
+		value.0 25
+		value.1 25
+		comment {
+			access 'read write'
+			type INTEGER
+			count 2
+			range '0 - 31'
+			dbmin -2500
+			dbmax 600
+			dbvalue.0 0
+			dbvalue.1 0
+		}
+	}
+	control.8 {
+		iface MIXER
+		name 'Receiver Volume'
+		value 0
+		comment {
+			access 'read write'
+			type INTEGER
+			count 1
+			range '0 - 31'
+			dbmin -2500
+			dbmax 600
+			dbvalue.0 -2500
+		}
+	}
+	control.9 {
+		iface MIXER
+		name 'sideTn Volume'
+		value 0
+		comment {
+			access 'read write'
+			type INTEGER
+			count 1
+			range '0 - 30'
+			dbmin -3000
+			dbmax 0
+			dbvalue.0 -3000
+		}
+	}
+	control.10 {
+		iface MIXER
+		name 'Line Volume'
+		value.0 0
+		value.1 0
+		comment {
+			access 'read write'
+			type INTEGER
+			count 2
+			range '0 - 39'
+			dbmin -4650
+			dbmax 1200
+			dbvalue.0 -4650
+			dbvalue.1 -4650
+		}
+	}
+	control.11 {
+		iface MIXER
+		name 'Mono DAC Gain'
+		value 103
+		comment {
+			access 'read write'
+			type INTEGER
+			count 1
+			range '0 - 127'
+			dbmin -9999999
+			dbmax 1875
+			dbvalue.0 75
+		}
+	}
+	control.12 {
+		iface MIXER
+		name 'Stereo DAC Gain'
+		value.0 72
+		value.1 72
+		comment {
+			access 'read write'
+			type INTEGER
+			count 2
+			range '0 - 127'
+			dbmin -9999999
+			dbmax 1875
+			dbvalue.0 -2250
+			dbvalue.1 -2250
+		}
+	}
+	control.13 {
+		iface MIXER
+		name 'ADC1 Gain'
+		value 103
+		comment {
+			access 'read write'
+			type INTEGER
+			count 1
+			range '0 - 127'
+			dbmin -9999999
+			dbmax 1875
+			dbvalue.0 75
+		}
+	}
+	control.14 {
+		iface MIXER
+		name 'ADC2 Gain'
+		value 103
+		comment {
+			access 'read write'
+			type INTEGER
+			count 1
+			range '0 - 127'
+			dbmin -9999999
+			dbmax 1875
+			dbvalue.0 75
+		}
+	}
+	control.15 {
+		iface MIXER
+		name 'MIC1 Volume'
+		value 14
+		comment {
+			access 'read write'
+			type INTEGER
+			count 1
+			range '0 - 40'
+			dbmin -1000
+			dbmax 2000
+			dbvalue.0 50
+		}
+	}
+	control.16 {
+		iface MIXER
+		name 'MIC2 Volume'
+		value 29
+		comment {
+			access 'read write'
+			type INTEGER
+			count 1
+			range '0 - 40'
+			dbmin -1000
+			dbmax 2000
+			dbvalue.0 1175
+		}
+	}
+	control.17 {
+		iface MIXER
+		name 'MIC1-HS Switch'
+		value false
+		comment {
+			access 'read write'
+			type BOOLEAN
+			count 1
+		}
+	}
+	control.18 {
+		iface MIXER
+		name 'MIC2-HS Switch'
+		value false
+		comment {
+			access 'read write'
+			type BOOLEAN
+			count 1
+		}
+	}
+	control.19 {
+		iface MIXER
+		name 'I2S Loop Back'
+		value false
+		comment {
+			access 'read write'
+			type BOOLEAN
+			count 1
+		}
+	}
+	control.20 {
+		iface MIXER
+		name 'MIC1 Boost'
+		value false
+		comment {
+			access 'read write'
+			type BOOLEAN
+			count 1
+		}
+	}
+	control.21 {
+		iface MIXER
+		name 'MIC2 Boost'
+		value true
+		comment {
+			access 'read write'
+			type BOOLEAN
+			count 1
+		}
+	}
+	control.22 {
+		iface MIXER
+		name 'Pcm To Codec'
+		value true
+		comment {
+			access 'read write'
+			type BOOLEAN
+			count 1
+		}
+	}
+	control.23 {
+		iface MIXER
+		name 'Dual-Mic Switch'
+		value false
+		comment {
+			access 'read write'
+			type BOOLEAN
+			count 1
+		}
+	}
+	control.24 {
+		iface MIXER
+		name 'Pcm32Bclk Switch'
+		value false
+		comment {
+			access 'read write'
+			type BOOLEAN
+			count 1
+		}
+	}
+	control.25 {
+		iface MIXER
+		name 'Pa Enable'
+		value false
+		comment {
+			access 'read write'
+			type BOOLEAN
+			count 1
+		}
+	}
+	control.26 {
+		iface MIXER
+		name 'Adc2 Mixer Mic2 Input Switch'
+		value true
+		comment {
+			access 'read write'
+			type BOOLEAN
+			count 1
+		}
+	}
+	control.27 {
+		iface MIXER
+		name 'Adc1 Mixer Mic1 Input Switch'
+		value true
+		comment {
+			access 'read write'
+			type BOOLEAN
+			count 1
+		}
+	}
+	control.28 {
+		iface MIXER
+		name 'Adc1 Mixer Line input Switch'
+		value false
+		comment {
+			access 'read write'
+			type BOOLEAN
+			count 1
+		}
+	}
+	control.29 {
+		iface MIXER
+		name 'Hpr Mixer Side Tone Switch'
+		value false
+		comment {
+			access 'read write'
+			type BOOLEAN
+			count 1
+		}
+	}
+	control.30 {
+		iface MIXER
+		name 'Hpr Mixer Right Playback Switch'
+		value false
+		comment {
+			access 'read write'
+			type BOOLEAN
+			count 1
+		}
+	}
+	control.31 {
+		iface MIXER
+		name 'Hpr Mixer Mono Voice Switch'
+		value false
+		comment {
+			access 'read write'
+			type BOOLEAN
+			count 1
+		}
+	}
+	control.32 {
+		iface MIXER
+		name 'Hpr Mixer Right Line Switch'
+		value false
+		comment {
+			access 'read write'
+			type BOOLEAN
+			count 1
+		}
+	}
+	control.33 {
+		iface MIXER
+		name 'Hpl Mixer Side Tone Switch'
+		value false
+		comment {
+			access 'read write'
+			type BOOLEAN
+			count 1
+		}
+	}
+	control.34 {
+		iface MIXER
+		name 'Hpl Mixer Left Playback Switch'
+		value false
+		comment {
+			access 'read write'
+			type BOOLEAN
+			count 1
+		}
+	}
+	control.35 {
+		iface MIXER
+		name 'Hpl Mixer Mono Voice Switch'
+		value false
+		comment {
+			access 'read write'
+			type BOOLEAN
+			count 1
+		}
+	}
+	control.36 {
+		iface MIXER
+		name 'Hpl Mixer Left Line Switch'
+		value false
+		comment {
+			access 'read write'
+			type BOOLEAN
+			count 1
+		}
+	}
+	control.37 {
+		iface MIXER
+		name 'Rec Mixer Side Tone Switch'
+		value false
+		comment {
+			access 'read write'
+			type BOOLEAN
+			count 1
+		}
+	}
+	control.38 {
+		iface MIXER
+		name 'Rec Mixer Right Playback Switch'
+		value false
+		comment {
+			access 'read write'
+			type BOOLEAN
+			count 1
+		}
+	}
+	control.39 {
+		iface MIXER
+		name 'Rec Mixer Left Playback Switch'
+		value false
+		comment {
+			access 'read write'
+			type BOOLEAN
+			count 1
+		}
+	}
+	control.40 {
+		iface MIXER
+		name 'Rec Mixer Mono Voice Switch'
+		value false
+		comment {
+			access 'read write'
+			type BOOLEAN
+			count 1
+		}
+	}
+	control.41 {
+		iface MIXER
+		name 'Aux Mixer Right Playback Switch'
+		value true
+		comment {
+			access 'read write'
+			type BOOLEAN
+			count 1
+		}
+	}
+	control.42 {
+		iface MIXER
+		name 'Aux Mixer Left Playback Switch'
+		value true
+		comment {
+			access 'read write'
+			type BOOLEAN
+			count 1
+		}
+	}
+	control.43 {
+		iface MIXER
+		name 'Aux Mixer Mono Voice Switch'
+		value false
+		comment {
+			access 'read write'
+			type BOOLEAN
+			count 1
+		}
+	}
+	control.44 {
+		iface MIXER
+		name 'Aux Mixer Right Line Switch'
+		value false
+		comment {
+			access 'read write'
+			type BOOLEAN
+			count 1
+		}
+	}
+	control.45 {
+		iface MIXER
+		name 'Aux Mixer Left Line Switch'
+		value false
+		comment {
+			access 'read write'
+			type BOOLEAN
+			count 1
+		}
+	}
+	control.46 {
+		iface MIXER
+		name 'Spk Mixer Right Playback Switch'
+		value false
+		comment {
+			access 'read write'
+			type BOOLEAN
+			count 1
+		}
+	}
+	control.47 {
+		iface MIXER
+		name 'Spk Mixer Left Playback Switch'
+		value false
+		comment {
+			access 'read write'
+			type BOOLEAN
+			count 1
+		}
+	}
+	control.48 {
+		iface MIXER
+		name 'Spk Mixer Mono Voice Switch'
+		value false
+		comment {
+			access 'read write'
+			type BOOLEAN
+			count 1
+		}
+	}
+	control.49 {
+		iface MIXER
+		name 'Spk Mixer Right Line Switch'
+		value false
+		comment {
+			access 'read write'
+			type BOOLEAN
+			count 1
+		}
+	}
+	control.50 {
+		iface MIXER
+		name 'Spk Mixer Left Line Switch'
+		value false
+		comment {
+			access 'read write'
+			type BOOLEAN
+			count 1
+		}
+	}
+	control.51 {
+		iface MIXER
+		name 'I2sR Out'
+		value ADC1
+		comment {
+			access 'read write'
+			type ENUMERATED
+			count 1
+			item.0 ADC1
+			item.1 ADC2
+			item.2 PDML
+			item.3 PDMR
+		}
+	}
+	control.52 {
+		iface MIXER
+		name 'I2sL Out'
+		value ADC2
+		comment {
+			access 'read write'
+			type ENUMERATED
+			count 1
+			item.0 ADC1
+			item.1 ADC2
+			item.2 PDML
+			item.3 PDMR
+		}
+	}
+	control.53 {
+		iface MIXER
+		name 'PcmR Out'
+		value PDMR
+		comment {
+			access 'read write'
+			type ENUMERATED
+			count 1
+			item.0 ADC1
+			item.1 ADC2
+			item.2 PDML
+			item.3 PDMR
+		}
+	}
+	control.54 {
+		iface MIXER
+		name 'PcmL Out'
+		value PDMR
+		comment {
+			access 'read write'
+			type ENUMERATED
+			count 1
+			item.0 ADC1
+			item.1 ADC2
+			item.2 PDML
+			item.3 PDMR
+		}
+	}
+	control.55 {
+		iface MIXER
+		name 'mic1Pga mux'
+		value MIC1
+		comment {
+			access 'read write'
+			type ENUMERATED
+			count 1
+			item.0 MIC1
+			item.1 HPMIC
+		}
+	}
+	control.56 {
+		iface MIXER
+		name 'sideTn mux'
+		value MIC1PGA
+		comment {
+			access 'read write'
+			type ENUMERATED
+			count 1
+			item.0 MIC1PGA
+			item.1 MIC2PGA
+		}
+	}
+	control.57 {
+		iface MIXER
+		name 'mic2Pga mux'
+		value MIC2
+		comment {
+			access 'read write'
+			type ENUMERATED
+			count 1
+			item.0 MIC2
+			item.1 HPMIC
+		}
+	}
+}

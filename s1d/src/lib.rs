@@ -5,6 +5,7 @@
 //! A library and a thin binary, so the integration tests can drive the control loop against a body
 //! that writes to a file instead of a UART — which is how the deadman is proved without a robot.
 
+pub mod alsa;
 pub mod api;
 pub mod body;
 pub mod button;

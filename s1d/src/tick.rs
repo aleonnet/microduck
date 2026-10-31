@@ -651,6 +651,23 @@ pub fn run(body: &mut dyn S1Body, state: Arc<State>, intents: Arc<Intents>, cfg:
                             meaning = dds_retcode_meaning(frame.cmd_id, frame.data.first().copied()),
                             "dds answer"
                         );
+                    } else if frame.is_ack {
+                        // A module answering one of our one-shots (`gimbal sleep`, a work mode, a
+                        // position task…): kept in telemetry and said at `info`, retcode first —
+                        // on 2026-10-31 the gimbal's answer to `sleep` was traced and lost while
+                        // the gimbal did not fold.
+                        let retcode = frame.data.first().copied();
+                        telemetry.acks += 1;
+                        telemetry.last_ack = Some((frame.cmd_set, frame.cmd_id, retcode));
+                        changed = true;
+                        tracing::info!(
+                            cmd_set = format!("{:#04x}", frame.cmd_set),
+                            cmd_id = format!("{:#04x}", frame.cmd_id),
+                            seq = frame.seq,
+                            ?retcode,
+                            data = %hex(&frame.data),
+                            "ack"
+                        );
                     } else {
                         tracing::trace!(
                             cmd_set = frame.cmd_set,

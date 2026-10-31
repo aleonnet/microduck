@@ -701,3 +701,39 @@ fn a_gimbal_rate_is_streamed_until_stopped_and_the_angle_hold_waits() {
         .count();
     assert!(holds_after >= 2, "the angle hold resumes: {holds_after}");
 }
+
+/// A module's acknowledgement to one of our one-shots lands in `s1.telemetry` with its retcode —
+/// the gimbal's answer to `sleep`, traced and lost on 2026-10-31 while the gimbal did not fold.
+#[test]
+fn an_ack_to_a_one_shot_is_kept_with_its_retcode() {
+    let path = std::env::temp_dir().join(format!("s1d-fake-ack-{}.bin", std::process::id()));
+    let mut body = FakeFile::create(&path).unwrap();
+    let mut ack = Frame::request(
+        host::GIMBAL,
+        host::CHASSIS_SENDER,
+        5,
+        0x04,
+        0x0d,
+        vec![0x00],
+    );
+    ack.is_ack = true;
+    body.inbound.extend_from_slice(&ack.encode().unwrap());
+    let state = Arc::new(State::new(100));
+    let intents = Arc::new(Intents::new());
+    let (s, i) = (Arc::clone(&state), Arc::clone(&intents));
+    let handle = std::thread::spawn(move || run(&mut body, s, i, Config::default()));
+    std::thread::sleep(Duration::from_millis(100));
+    state.shutdown.store(true, Ordering::Relaxed);
+    handle.join().unwrap();
+    let _ = std::fs::remove_file(&path);
+    let t = state.telemetry_result();
+    assert_eq!(t.acks, 1);
+    assert_eq!(
+        t.last_ack,
+        Some(s1d::api::AckResult {
+            cmd_set: 0x04,
+            cmd_id: 0x0d,
+            retcode: Some(0)
+        })
+    );
+}

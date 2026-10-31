@@ -45,6 +45,9 @@ $A push deploy/s1/robotd.toml "$CHROOT/etc/robot/robotd.toml" >/dev/null
 # The microphone for the duck's 16 kHz mono consumers (`pet-detect`, the sound sentry): `micleft`, a plug
 # over hw:0,0 that resamples and keeps the LEFT channel — the one the voice is on (measured 2026-10-31).
 $A push deploy/s1/asound.conf "$CHROOT/etc/asound.conf" >/dev/null
+# The mixer as the stock leaves it (57 controls, `alsactl store` on the robot 2026-10-31), restored by
+# `s1d --alsa-state` at start: the microphone path no longer needs the stock to have run since boot.
+$A push deploy/s1/asound.state.stock "$CHROOT/opt/robot/asound.state.stock" >/dev/null
 $A shell "chmod 755 $CHROOT/opt/robot/bin/*"
 # A sound bank for `robot.sound`: the stock firmware's own wavs (`/system`, bind-mounted read-only
 # into the chroot by `bench.sh exec`) under the duck's tags, until phase 2 gives the S1 a voice.

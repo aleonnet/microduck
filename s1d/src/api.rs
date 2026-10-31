@@ -261,6 +261,20 @@ pub struct TelemetryResult {
     pub sticks: Option<[bool; 2]>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub battery: Option<BatteryResult>,
+    /// Acknowledgements received to this daemon's one-shots, and the last one.
+    #[serde(default)]
+    pub acks: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_ack: Option<AckResult>,
+}
+
+/// A module's answer to one of our one-shots: which command, and DJI's retcode (first data byte;
+/// `0` is accepted). What says whether the gimbal took `sleep`, instead of a lost trace line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AckResult {
+    pub cmd_set: u8,
+    pub cmd_id: u8,
+    pub retcode: Option<u8>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

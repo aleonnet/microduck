@@ -74,6 +74,11 @@ pub struct Telemetry {
     pub stock_pushes: u64,
     /// Pushes nobody here decodes: the stock's 1 Hz subject, a truncation.
     pub foreign_pushes: u64,
+    /// The last acknowledgement a module sent to one of our one-shots: `(cmd_set, cmd_id, retcode)`,
+    /// the retcode being the first data byte DJI's `unpack_resp` reads. Until 2026-10-31 these were
+    /// traced and lost; the gimbal's answer to `sleep` is what settles whether it refused.
+    pub last_ack: Option<(u8, u8, Option<u8>)>,
+    pub acks: u64,
 }
 
 pub struct State {
@@ -192,6 +197,14 @@ impl State {
                 temperature: b.temperature,
                 current_ma: b.current,
             }),
+            acks: t.acks,
+            last_ack: t
+                .last_ack
+                .map(|(cmd_set, cmd_id, retcode)| crate::api::AckResult {
+                    cmd_set,
+                    cmd_id,
+                    retcode,
+                }),
         }
     }
 

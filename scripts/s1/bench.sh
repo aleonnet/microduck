@@ -15,7 +15,9 @@
 # Env:   S1_HOST (default 192.168.1.236:5555) · S1_OUT (default ~/Development/RoboMaster-S1/out/<date>-poc2)
 #        S1_CHROOT (default /data/debian) · S1_BAUD (from capture) · S1_ROOTFS (tar from build-rootfs.sh)
 #        S1_UDP (the robot's netpadd, default <host without port>:4210) · S1_TCP (the forwarded socket,
-#        default 127.0.0.1:9000) · S1_VOLUME_CONTROL (the speaker's mixer control, from stage 8's dump)
+#        default 127.0.0.1:9000) · S1_VOLUME_CONTROL (the speaker's mixer control, the *simple* name
+#        `amixer sset` takes: `Speaker`, measured on the robot 2026-10-31 — `Speaker Volume`, the
+#        `contents` name stage 8 dumps, is refused)
 set -euo pipefail
 cd "$(dirname "$0")/../.."   # `cargo s1` (the alias in .cargo/config.toml) and target/ are the repo's
 
@@ -109,10 +111,17 @@ e2e_robot() { local log="$1"; shift
 # day); the `sleep 1` inside the shell is what settles it. `--volume-control` only once stage 8's
 # `amixer contents` has named the speaker's control: until then `s1.volume` is refused by name and
 # the e2e item says so.
-# The control's name is quoted for the robot's shell: it has a space ("Speaker Volume", stage 8),
-# and unquoted it reached s1d as a second argument — the daemon refused it and died, and the stage
-# went on against a dead socket (2026-10-30, 21:58). So the launch is followed by `pidof`: a daemon
-# that did not come up ends the stage with the tail of its log, not with a riddle downstream.
+# The control's name is quoted for the robot's shell: a name with a space ("Speaker Volume", the
+# `contents` name stage 8 dumps) unquoted reached s1d as a second argument — the daemon refused it
+# and died, and the stage went on against a dead socket (2026-10-30, 21:58). The name `s1.volume`
+# needs is the *simple* one, `Speaker` (2026-10-31: `amixer sset 'Speaker Volume'` exited 1 on the
+# robot, `Speaker` set 50 % → 16 of 31). So the launch is followed by `pidof`: a daemon that did
+# not come up ends the stage with the tail of its log, not with a riddle downstream.
+# `--alsa-state`: the mixer as the stock leaves it (`deploy/s1/asound.state.stock`, saved on the
+# robot with `alsactl store` while the stock was alive, 2026-10-31), restored by the daemon at start
+# so the microphone path no longer depends on the stock having run since boot.
+S1_VOLUME_CONTROL="${S1_VOLUME_CONTROL-Speaker}"
+ALSA_STATE=/opt/robot/asound.state.stock
 start_daemons() {
     : "${S1_BAUD:?S1_BAUD is the baud the capture stage measured with stty}"
     # A re-run with the daemons still up keeps them: a second s1d would lose the socket and its
@@ -120,7 +129,7 @@ start_daemons() {
     if sh_robot "$BB pidof s1d >/dev/null && echo s1d_already_up" | grep -q s1d_already_up; then
         echo s1d_already_up | tee "$OUT/$stage/daemons.txt"; return 0
     fi
-    sh_robot "($BB setsid $BB nohup $CHROOT_ENV /opt/robot/bin/s1d --port /dev/ttyS3 --baud $S1_BAUD --sounds /opt/robot/sounds ${S1_VOLUME_CONTROL:+--volume-control '$S1_VOLUME_CONTROL'} ${S1_ARGS:-} </dev/null >/data/s1d.log 2>&1 &); $BB sleep 1"
+    sh_robot "($BB setsid $BB nohup $CHROOT_ENV /opt/robot/bin/s1d --port /dev/ttyS3 --baud $S1_BAUD --sounds /opt/robot/sounds ${S1_VOLUME_CONTROL:+--volume-control '$S1_VOLUME_CONTROL'} --alsa-state $ALSA_STATE ${S1_ARGS:-} </dev/null >/data/s1d.log 2>&1 &); $BB sleep 1"
     sleep 2
     sh_robot "$BB pidof s1d >/dev/null && echo s1d_up || { echo S1D_DEAD; $BB tail -5 /data/s1d.log; }" | tee "$OUT/$stage/daemons.txt"
     grep -q s1d_up "$OUT/$stage/daemons.txt" || { say "s1d did not come up — its log's tail is above and in daemons.txt"; exit 1; }

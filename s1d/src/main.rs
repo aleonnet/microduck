@@ -68,9 +68,15 @@ struct Args {
     /// ALSA device of the speaker.
     #[arg(long, default_value = "hw:0,0")]
     audio_device: String,
-    /// The mixer control `s1.volume` sets (the bench's `amixer contents` names it).
+    /// The mixer control `s1.volume` sets: the *simple* control name `amixer sset` takes
+    /// (`Speaker` on the S1; `Speaker Volume`, the `contents` name, was refused on the robot,
+    /// 2026-10-31).
     #[arg(long)]
     volume_control: Option<String>,
+    /// An ALSA state file (`alsactl store`) restored with `alsactl restore` before anything else:
+    /// the mixer as the stock firmware leaves it, microphone path included. The file must exist.
+    #[arg(long)]
+    alsa_state: Option<PathBuf>,
     /// The owner's key for gel beads: without it `s1.blaster` fires infrared only.
     #[arg(long)]
     blaster_gel: bool,
@@ -148,6 +154,16 @@ async fn main() -> ExitCode {
         },
         (None, None) => unreachable!("clap requires --baud without --fake"),
     };
+
+    if let Some(alsa_state) = &args.alsa_state {
+        match s1d::alsa::restore_state(alsa_state, &s1d::alsa::default_alsactl()) {
+            Ok(()) => tracing::info!(state = %alsa_state.display(), "ALSA mixer state restored"),
+            Err(e) => {
+                tracing::error!(state = %alsa_state.display(), error = %e, "cannot restore the ALSA mixer state");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
 
     let state = Arc::new(State::new(args.hz));
     state
