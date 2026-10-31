@@ -1166,6 +1166,69 @@ directly (load base `0xc0008000`, verified: all 22 mixer-control name strings re
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/mic-lab/kernel_codec_controls_regs.txt sha256=4085b28be5fac68662d6c74bfd05fb648d7ac3b23590b14474880b6e122cc703
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/mic-lab/codec_controls_regs.py sha256=7b36f4f3373c58b9968a962a76003721590429a458a401861d44c640a55ce1c8
 
+## Item 3, the microphone, CLOSED on the robot: the owner heard their own voice from our capture (2026-10-31, 09:5x–10:2x)
+
+**Outcome first.** The 60 s recording of 02:31 (`audio/mic.wav`, the fixed stage 8, stock stopped,
+owner speaking in its first 20 s) **does hold the owner's voice**: a 12 s cut of its left channel,
+raised 18 dB, was played on the Mac twice and the owner recognised it ("Perfeito!"). The
+microphone, the codec path and our capture work. What was wrong yesterday was my reading of the
+numbers: the "per-second level" I printed was a sample of per-frame metadata, which hid the
+speech envelope; a correct per-second RMS (numpy, 48 000-sample windows) shows, on the **left**
+channel, a −51 dB floor with the voice at −38..−44 dB in seconds 3–11, and on the **right** channel
+the same envelope 25 dB lower (−76 floor, voice −65..−71). The "noise floor −∞ / exact zeros" claim
+about the right channel was also wrong: 7–8 % of its samples are exact zeros, the rest a weak
+signal. **Corrections to the two sections above:** the sentence "the recording holds no voice"
+and the hypothesis that the capture depends on the playback-side register are withdrawn.
+
+**What the morning's probes established (robot powered on without the USB cable, stock stopped
+by the stages, every reading in `mic-lab/`):**
+
+- The playback-side register behaves exactly as the kernel code says (active when a playback
+  stream is open, idle when it closes) **and the capture does not depend on it**: opened before or
+  after the capture, the right channel stayed at its floor. Refuted by measurement.
+- The capture-side register is **equal** during the stock's capture and ours; my "0x22 vs 0x32"
+  compared the stock *armed* against ours *running*. With capture and playback both running, **all
+  90 codec registers and every power widget are identical** to the stock's own capture under the
+  app (`probe5_6_geometry_and_full_dump.txt`: two `IDENTICAL`). The stock's exact stream geometry
+  (period 480, buffer 1920) changes nothing either.
+- So the codec is not where the stock and we differ; nothing differed. The difference between the
+  stock's video audio (floor −75 dB, voice −31..−43 dB) and our left channel (floor −51 dB, voice
+  −38..−44 dB) is the stock's **software**: `dji_camera` runs its audio algorithms
+  (`/system/audio/mic_ahc_open.apu`, "denoise_mode" in its strings) before encoding. Our raw
+  capture has the same voice level and a 24 dB higher noise floor. Phase 2 decides whether a
+  denoiser is needed for its uses (petting classifier at 16 kHz mono, sound sentry).
+- Where the microphone is, as captured: the **left** channel (the path the stock boosts: `MIC2
+  Boost` on, `MIC2 Volume` 29) carries the usable signal; the right channel carries the same voice
+  25 dB down. Stage 8's comment and its `mic_right.wav` split picked the wrong channel (from the
+  2026-10-30 run, when the left channel was a DC constant — a different boot state after
+  `dji_camera` had been killed twice under strace; not reproduced since). **To fix in the stage:**
+  analyse both channels and keep the left as the microphone; proposed to the owner, not yet done.
+- The kernel's power widgets report the left (ADC2) path **Off** while its enable bits are set at
+  the register level: the stock's four control writes at boot (`mic_pga`, `mic_boost`, `adc_gain`,
+  `adc_reg` by numeric id) leave that path enabled outside the kernel's power management, and the
+  state persists after the stock is stopped — our capture inherits it. A boot in which `dji_camera`
+  never ran would not have it; the daemon must set the same controls itself (the four values are
+  in `tinymix_stock_alive_app_closed.txt`). To verify on a later power-on by reading the registers
+  before and after `dji_camera` starts.
+- The kernel reading itself stands and is kept as a map of the codec driver: which operation writes
+  which register for which stream direction, and which widget events set which bits
+  (`kernel_codec_dai_ops_disasm.txt`, `kernel_codec_event_handler.txt`, `kernel_codec_controls_regs.txt`).
+
+The robot stays on with the stock stopped and nothing of ours running; the owner is free to power
+it off.
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/audio/voice_left_2-14s_plus18dB.wav sha256=b891fd472cae78f577d2aa1ce399b3280e47c563f29bda04a2abd5702de0e036
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/mic-lab/reg31_probe.txt sha256=9aecbbb683c1c46e35b9c04306f4c8287ddcd22f972693c548c50686109ea974
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/mic-lab/reg31_probe_step2.txt sha256=97bf4ef8948c138f8df1377acd15bf253af6d0302f8ea8080df27e770a8dcf32
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/mic-lab/reg14_probe_step2b.txt sha256=420deb108e40676e32188f95dfbc97999d7f8997bf70f2fe47c5964be4af6ddd
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/mic-lab/probe5_6_geometry_and_full_dump.txt sha256=bc9ce03741a3f0437f87a8bef0cf56d217e860252df1f9af8f7afacf647a2a22
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/mic-lab/probe1.wav sha256=92bfb2db6d343c0ef23af2aaaf54cfe36d8971b0a4a788d465b262247b5a6c7f
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/mic-lab/probe3.wav sha256=10554ba8790011ef366c489c0d31bf0ee59df553932262ece79cf20d004b562a
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/mic-lab/probe4.wav sha256=71c18ffc639012e92a36e16eed7fb6f9daba68dc79b83090a63b8e41c5d65827
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/mic-lab/probe5.wav sha256=20f65430041f43de901529b9956146a76b37ff675f8c3e659fff8e4e82ead6b7
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/mic-lab/probe6.wav sha256=4ecd91f63bfe41a2987a31fd14053bfdea3eb08889a0072502a85b2f21ecfb85
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/mic-lab/kernel_codec_event_handler.txt sha256=ab2799a08c3e0e6e630ae4c0c6c28547bea6c70d7d06d33c40555a53af1603af
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/mic-lab/gpio_holders_stock_stopped.txt sha256=10ef6fac789dd4f88a0ef6df51752baa8e8e1aa431282d3a32ff717584cab462
+
 ## Corrections after the cold reader (2026-10-30 18:29 -0300) — this section supersedes the hand-off's open-items table
 
 A cold reader resumed from `docs/plans/2026-10-30-1905-handoff-s1-fase1-bateria2.md` alone and found
