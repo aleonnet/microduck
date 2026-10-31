@@ -1,6 +1,7 @@
 //! The S1's own list, end to end without a socket: every call parses and refuses an unknown
-//! member by name, and every call that moves something queues the frame DJI's own library would
-//! send — the oracle hex of `scripts/s1/dji-oracle.py`, byte for byte.
+//! member by name, and every one-shot that moves something queues the frame DJI's own library
+//! would send — the oracle hex of `scripts/s1/dji-oracle.py`, byte for byte. The continuous ones
+//! (`wheels`, the gimbal rate) set the slot the loop streams from, judged in `fake_body.rs`.
 
 use duck_ipc_proto as proto;
 use s1d::api::{self, S1Call};
@@ -92,6 +93,8 @@ fn gimbal_calls_queue_the_librarys_frames() {
         vec!["551604fcc9040000403fb2070805640000006400bfa0"]
     );
 
+    // A rate is a continuous intent the loop streams (one frame moved the gimbal about a degree on
+    // the robot, 2026-10-31), so the call queues nothing and sets the slot; `stop` is the zero rate.
     run(
         &s,
         &i,
@@ -100,7 +103,16 @@ fn gimbal_calls_queue_the_librarys_frames() {
             pitch: -15.0,
         }),
     );
-    assert_eq!(queued(&i), vec!["5514046dc904000000040c2c0100006affdc8c4f"]);
+    assert!(
+        queued(&i).is_empty(),
+        "a rate is streamed by the loop, not queued once"
+    );
+    let snap = i.snapshot();
+    assert_eq!(snap.gimbal_rate, [30.0, -15.0]);
+    assert!(snap.gimbal_rate_age < std::time::Duration::from_secs(1));
+    run(&s, &i, &S1Call::Gimbal(api::GimbalAction::Stop));
+    assert_eq!(i.snapshot().gimbal_rate, [0.0; 2]);
+    assert!(queued(&i).is_empty());
 
     run(&s, &i, &S1Call::Gimbal(api::GimbalAction::Sleep));
     run(&s, &i, &S1Call::Gimbal(api::GimbalAction::Wake));
@@ -134,6 +146,9 @@ fn goto_queues_the_position_task_and_its_stop() {
         queued(&i),
         vec!["551a04b1c9c30000403f25070800006400ceff8403322c016440"]
     );
+    // The controller's task owns the wheels until it could have finished: 1.12 m at 0.5 m/s plus
+    // 90° at 30 °/s plus two seconds of slack, well within the hour the test allows.
+    assert!(i.position_task_active(), "the wheels are the controller's");
     run(
         &s,
         &i,
@@ -153,6 +168,7 @@ fn goto_queues_the_position_task_and_its_stop() {
         queued(&i),
         vec!["55170438c9c30000403f2507010000000000000000406c"]
     );
+    assert!(!i.position_task_active(), "--stop gives the wheels back");
 }
 
 #[test]

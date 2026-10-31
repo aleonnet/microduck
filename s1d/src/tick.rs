@@ -245,6 +245,70 @@ pub fn head_from_gimbal(yaw_ddeg: i16, pitch_ddeg: i16) -> [f64; 4] {
     ]
 }
 
+/// The wheels-stop rule's thresholds, from the floor captures of 2026-10-31
+/// (`out/2026-10-31-poc2/floor/lift*_telemetry.ndjson`, record "Floor session, part 2"): on the
+/// floor at 0.15 and 0.3 m/s the controller's fused body velocity and the velocity the four wheel
+/// speeds imply agree within 0.13 m/s; lifted — on a stand with the wheels stopped (2026-10-30),
+/// in a hand with the wheels turning, in a hand with the wheels stopped — the fused velocity runs
+/// away and the disagreement passes 0.4 m/s within 1.5 s. The DJI `pick_up` bit never set in any
+/// of those (owner's rule, 2026-10-31 00:1x: never that bit, never the fused velocity as truth of
+/// motion; its *disagreement* with the wheels as the lift signal, owner's word 2026-10-31 14:5x).
+pub const LIFT_TRIP_M_S: f64 = 0.4;
+pub const LIFT_TRIP_FOR: Duration = Duration::from_millis(300);
+pub const LIFT_RELEASE_M_S: f64 = 0.15;
+pub const LIFT_RELEASE_FOR: Duration = Duration::from_millis(500);
+
+/// The body speed the four ESC speeds imply, metres per second — the forward mecanum kinematics,
+/// the inverse of [`mecanum_rpm`] with the wire's sign convention (the left wheels read negative
+/// when the robot drives forward: `[27, −26, −33, 31]` rpm at 0.15 m/s on the floor, 2026-10-31,
+/// which this gives as 0.153 m/s). Order as the ESC subject and the wire have it: front-right,
+/// front-left, back-left, back-right.
+pub fn wheel_speed_m_s(esc_rpm: [i16; 4], radius_m: f64) -> f64 {
+    let [fr, fl_w, bl_w, br] = esc_rpm.map(f64::from);
+    let (fl, bl) = (-fl_w, -bl_w);
+    let to_m_s = |rpm: f64| rpm / 60.0 * std::f64::consts::TAU * radius_m;
+    let vx = to_m_s((fl + fr + bl + br) / 4.0);
+    let vy = to_m_s((fr + bl - fl - br) / 4.0);
+    vx.hypot(vy)
+}
+
+/// Lifted or not, from the disagreement between the fused velocity and the wheels, with the
+/// persistence the thresholds above ask for: over the trip level for `LIFT_TRIP_FOR` trips, under
+/// the release level for `LIFT_RELEASE_FOR` releases; anything in between keeps the state.
+#[derive(Debug, Default)]
+pub struct LiftDetector {
+    over_since: Option<Instant>,
+    under_since: Option<Instant>,
+    lifted: bool,
+}
+
+impl LiftDetector {
+    pub fn lifted(&self) -> bool {
+        self.lifted
+    }
+
+    /// Feed one disagreement, metres per second, at `now`; returns the state after it.
+    pub fn update(&mut self, disagreement_m_s: f64, now: Instant) -> bool {
+        if disagreement_m_s > LIFT_TRIP_M_S {
+            self.under_since = None;
+            let since = *self.over_since.get_or_insert(now);
+            if now.duration_since(since) >= LIFT_TRIP_FOR {
+                self.lifted = true;
+            }
+        } else if disagreement_m_s < LIFT_RELEASE_M_S {
+            self.over_since = None;
+            let since = *self.under_since.get_or_insert(now);
+            if now.duration_since(since) >= LIFT_RELEASE_FOR {
+                self.lifted = false;
+            }
+        } else {
+            self.over_since = None;
+            self.under_since = None;
+        }
+        self.lifted
+    }
+}
+
 /// Whose push a `0x48/0x08` was, once decoded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Push {
@@ -359,6 +423,7 @@ pub fn run(body: &mut dyn S1Body, state: Arc<State>, intents: Arc<Intents>, cfg:
     let mut telemetry = Telemetry::default();
     let mut last_gimbal: Option<((i16, i16), Instant)> = None;
     let mut rate_was_on = false;
+    let mut lift = LiftDetector::default();
     let mut last_sub: Option<Instant> = None;
     let mut last_push: Option<Instant> = None;
     // The launcher's shots still to be lit and sounded.
@@ -408,7 +473,7 @@ pub fn run(body: &mut dyn S1Body, state: Arc<State>, intents: Arc<Intents>, cfg:
                 Heartbeat::Stock => cmd::heartbeat_stock(s),
             });
 
-            let twist = if snap.twist_age > cfg.deadman {
+            let mut twist = if snap.twist_age > cfg.deadman {
                 if snap.twist != [0.0; 3] {
                     limited_by.push("deadman".to_owned());
                 }
@@ -416,11 +481,22 @@ pub fn run(body: &mut dyn S1Body, state: Arc<State>, intents: Arc<Intents>, cfg:
             } else {
                 snap.twist
             };
+            // Lifted: the wheels stop — a zero wheel frame every tick, whatever was asked, the
+            // heartbeat on; the gimbal, the sounds, the lights and the pushes go on (owner's rule).
+            let lifted = lift.lifted();
+            if lifted {
+                if twist != [0.0; 3] || snap.wheels.is_some_and(|w| w != [0; 4]) {
+                    limited_by.push("lifted".to_owned());
+                }
+                twist = [0.0; 3];
+            }
             // `s1.wheels` asked for rpm directly and more recently than any twist: send those,
             // under the same deadman.
             let direct = match snap.wheels {
                 Some(rpm)
-                    if snap.wheels_age <= snap.twist_age && snap.wheels_age <= cfg.deadman =>
+                    if !lifted
+                        && snap.wheels_age <= snap.twist_age
+                        && snap.wheels_age <= cfg.deadman =>
                 {
                     Some(rpm)
                 }
@@ -428,9 +504,18 @@ pub fn run(body: &mut dyn S1Body, state: Arc<State>, intents: Arc<Intents>, cfg:
             };
             // A position task of the controller (`s1.goto`) owns the wheels: no wheel or follow
             // frame while it runs, or the task is overwritten every tick (floor, 2026-10-31).
-            let twist = if snap.position_task { [0.0; 3] } else { twist };
+            let twist = if snap.position_task && !lifted {
+                [0.0; 3]
+            } else {
+                twist
+            };
             match (direct, snap.follow, cfg.twist_mode) {
-                _ if snap.position_task => {}
+                _ if snap.position_task && !lifted => {}
+                // Lifted: zero wheel speeds, the controller's own task included.
+                _ if lifted => {
+                    let s = w.seq(cmd::id::CHASSIS_WHEEL_SPEED);
+                    w.send(cmd::chassis_wheel_speed(s, 0, 0, 0, 0));
+                }
                 (Some([fr, fl, bl, br]), _, _) => {
                     let s = w.seq(cmd::id::CHASSIS_WHEEL_SPEED);
                     w.send(cmd::chassis_wheel_speed(s, fr, fl, bl, br));
@@ -687,6 +772,24 @@ pub fn run(body: &mut dyn S1Body, state: Arc<State>, intents: Arc<Intents>, cfg:
             Err(e) => tracing::debug!(error = %e, "serial read failed"),
         }
 
+        // The wheels-stop rule, judged every tick on the latest push: the fused body velocity
+        // against what the four wheel speeds imply.
+        if let (Some(esc), Some(vel)) = (telemetry.esc, telemetry.velocity) {
+            let wheels = wheel_speed_m_s(esc.speed_rpm, cfg.wheel_radius_m);
+            let fused = f64::from(vel.body[0]).hypot(f64::from(vel.body[1]));
+            let was = lift.lifted();
+            let now_lifted = lift.update((fused - wheels).abs(), Instant::now());
+            state.lifted.store(now_lifted, Ordering::Relaxed);
+            if now_lifted != was {
+                tracing::warn!(
+                    fused_m_s = format!("{fused:.2}"),
+                    wheels_m_s = format!("{wheels:.2}"),
+                    lifted = now_lifted,
+                    "wheels-stop rule"
+                );
+            }
+        }
+
         // Publish only when somebody listens: assembling a frame allocates.
         if state.state_tx.receiver_count() > 0 {
             let _ = state.state_tx.send(state.frame(snap.twist, limited_by));
@@ -885,6 +988,60 @@ mod tests {
         assert!(dds_retcode_meaning(0x03, Some(0x50)).starts_with("refused"));
         assert!(dds_retcode_meaning(0x01, Some(0x02)).starts_with("refused"));
         assert_eq!(dds_retcode_meaning(0x02, None), "empty answer");
+    }
+
+    /// The floor sample of 2026-10-31 (0.15 m/s asked, `[27, −26, −33, 31]` rpm) reads as 0.153 m/s;
+    /// a turn in place (sides opposed) has wheel speed and no body speed; a strafe is lateral.
+    #[test]
+    fn wheel_speed_is_the_forward_mecanum_kinematics_in_the_wires_signs() {
+        let v = wheel_speed_m_s([27, -26, -33, 31], 0.05);
+        assert!((v - 0.153).abs() < 0.002, "{v}");
+        let turn = wheel_speed_m_s([50, 50, 50, 50], 0.05);
+        assert!(
+            turn.abs() < 1e-9,
+            "a turn in place is no body speed: {turn}"
+        );
+        // The inverse of mecanum_rpm for a pure strafe, through the wire's negations.
+        let [fr, fl, bl, br] = mecanum_rpm([0.0, 0.3, 0.0], 0.05, 0.2);
+        let v = wheel_speed_m_s([fr, -fl, -bl, br], 0.05);
+        assert!((v - 0.3).abs() < 0.01, "{v}");
+    }
+
+    /// Over 0.4 m/s for 300 ms trips; under 0.15 m/s for 500 ms releases; the floor's worst
+    /// disagreement (0.13 m/s, 2026-10-31) never trips; a brief spike alone does not either.
+    #[test]
+    fn the_lift_detector_needs_persistence_both_ways() {
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        let mut d = LiftDetector::default();
+        for ms in (0..=1000).step_by(20) {
+            assert!(
+                !d.update(0.13, at(ms)),
+                "the floor's worst case must not trip"
+            );
+        }
+        assert!(
+            !d.update(0.9, at(1020)),
+            "a first sample over the level is not a lift"
+        );
+        assert!(!d.update(0.9, at(1200)));
+        assert!(d.update(0.9, at(1320)), "300 ms over the level: lifted");
+        assert!(
+            d.update(0.3, at(1400)),
+            "between the levels the state holds"
+        );
+        assert!(
+            d.update(0.1, at(1500)),
+            "a first sample under the level is not a release"
+        );
+        assert!(d.update(0.1, at(1900)));
+        assert!(!d.update(0.1, at(2000)), "500 ms under the level: released");
+        // A spike shorter than the trip time, then the floor again: never lifted.
+        let mut d = LiftDetector::default();
+        assert!(!d.update(1.0, at(0)));
+        assert!(!d.update(1.0, at(200)));
+        assert!(!d.update(0.1, at(220)));
+        assert!(!d.update(1.0, at(400)));
     }
 
     /// The duck looks left with a positive yaw and down with a positive pitch; DJI's gimbal takes

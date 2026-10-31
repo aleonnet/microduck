@@ -737,3 +737,138 @@ fn an_ack_to_a_one_shot_is_kept_with_its_retcode() {
         })
     );
 }
+
+/// A stock push (161 bytes, ESC then battery) with the given wheel speeds and fused body velocity,
+/// the rest plausible and still — what the controller pushes on the floor and in the hand.
+fn stock_push(seq: u16, rpm: [i16; 4], body: [f32; 3]) -> Vec<u8> {
+    let mut d = vec![0u8; 161];
+    d[0..4].copy_from_slice(&(u32::from(seq) * 20).to_le_bytes());
+    for (i, v) in body.iter().enumerate() {
+        d[22 + 12 + 4 * i..22 + 12 + 4 * i + 4].copy_from_slice(&v.to_le_bytes());
+    }
+    for (i, r) in rpm.iter().enumerate() {
+        d[46 + 2 * i..46 + 2 * i + 2].copy_from_slice(&r.to_le_bytes());
+    }
+    for i in 0..4 {
+        d[46 + 16 + 4 * i..46 + 16 + 4 * i + 4].copy_from_slice(&1000u32.to_le_bytes());
+    }
+    d[82..84].copy_from_slice(&11_900u16.to_le_bytes());
+    d[84..86].copy_from_slice(&300i16.to_le_bytes());
+    d[86..90].copy_from_slice(&(-1000i32).to_le_bytes());
+    d[90] = 80;
+    d[104 + 8..104 + 12].copy_from_slice(&(-1.0f32).to_le_bytes());
+    let mut data = vec![0u8, 1u8];
+    data.extend_from_slice(&d);
+    Frame::request(
+        host::MOTION_CONTROLLER,
+        host::BASE,
+        seq,
+        id::DDS_PUSH.0,
+        id::DDS_PUSH.1,
+        data,
+    )
+    .encode()
+    .unwrap()
+}
+
+/// The wheels-stop rule on the loop, with pushes shaped like the floor captures of 2026-10-31:
+/// driving at 0.15 m/s with the fused velocity agreeing, the wheels turn; the fused velocity
+/// running away to 0.9 m/s while the wheels still read 0.15 (the robot in a hand) zeroes the
+/// wheels within the trip time and marks `picked_up`; agreement again for the release time gives
+/// the wheels back. The floor's own worst disagreement never trips it.
+#[test]
+fn lifted_stops_the_wheels_and_the_floor_does_not() {
+    let dir = std::env::temp_dir().join(format!("s1d-fake-lift-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let wire = dir.join("wire.bin");
+    let inbound = dir.join("in.bin");
+    let mut body = FakeFile::create(&wire)
+        .unwrap()
+        .with_inbound_file(&inbound)
+        .unwrap();
+    let state = Arc::new(State::new(100));
+    let intents = Arc::new(Intents::new());
+    intents.set_enabled(true);
+    let (s, i) = (Arc::clone(&state), Arc::clone(&intents));
+    let handle = std::thread::spawn(move || run(&mut body, s, i, Config::default()));
+    // The floor at 0.15 m/s: the measured rpm, the fused velocity a little above (0.26 is the
+    // floor's worst, 2026-10-31 run 2 at 3.5 s).
+    let mut seq = 0u16;
+    let mut push = |rpm: [i16; 4], body: [f32; 3]| {
+        seq = seq.wrapping_add(1);
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&inbound)
+            .unwrap();
+        f.write_all(&stock_push(seq, rpm, body)).unwrap();
+    };
+    use std::io::Write;
+    let drive = |phase_ms: u64, body: [f32; 3], push: &mut dyn FnMut([i16; 4], [f32; 3])| {
+        let end = std::time::Instant::now() + Duration::from_millis(phase_ms);
+        while std::time::Instant::now() < end {
+            intents.set_twist([0.15, 0.0, 0.0]);
+            push([27, -26, -33, 31], body);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    };
+    drive(600, [0.26, 0.0, 0.0], &mut push);
+    let floor_end = std::fs::metadata(&wire).unwrap().len() as usize;
+    assert!(
+        !state.lifted.load(Ordering::Relaxed),
+        "the floor's worst case is not a lift"
+    );
+    drive(700, [0.9, 0.0, 0.0], &mut push);
+    let lifted_end = std::fs::metadata(&wire).unwrap().len() as usize;
+    assert!(
+        state.lifted.load(Ordering::Relaxed),
+        "0.9 vs 0.15 m/s for 700 ms: lifted"
+    );
+    assert!(state.frame([0.0; 3], Vec::new()).safety.picked_up);
+    drive(900, [0.16, 0.0, 0.0], &mut push);
+    assert!(
+        !state.lifted.load(Ordering::Relaxed),
+        "agreement for 900 ms: released"
+    );
+    intents.set_twist([0.15, 0.0, 0.0]);
+    std::thread::sleep(Duration::from_millis(200));
+    state.shutdown.store(true, Ordering::Relaxed);
+    handle.join().unwrap();
+    let bytes = std::fs::read(&wire).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    let wheels = |slice: &[u8]| -> Vec<[i16; 4]> {
+        Decoder::new()
+            .push(slice)
+            .iter()
+            .filter(|f| (f.cmd_set, f.cmd_id) == id::CHASSIS_WHEEL_SPEED)
+            .map(wheel_rpm)
+            .collect()
+    };
+    let floor = wheels(&bytes[..floor_end]);
+    assert!(
+        floor.iter().filter(|w| **w != [0; 4]).count() >= 40,
+        "on the floor the wheels drive: {}",
+        floor.len()
+    );
+    let lifted = wheels(&bytes[floor_end..lifted_end]);
+    // The trip takes 300 ms of pushes (~30 ticks of moving frames), then every frame is zero.
+    let tail = &lifted[lifted.len() - 20..];
+    assert!(
+        tail.iter().all(|w| *w == [0; 4]),
+        "lifted: the wheels are held at zero: {:?}",
+        &tail[..3]
+    );
+    let first_zero = lifted
+        .iter()
+        .position(|w| *w == [0; 4])
+        .expect("the wheels stopped");
+    assert!(
+        first_zero <= 45,
+        "the stop comes within the trip time (300 ms + a push period): {first_zero} ticks"
+    );
+    let after = wheels(&bytes[lifted_end..]);
+    assert!(
+        after.iter().filter(|w| **w != [0; 4]).count() >= 10,
+        "released: the twist drives again: {}",
+        after.len()
+    );
+}

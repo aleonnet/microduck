@@ -93,6 +93,9 @@ pub struct State {
     pub write_errors_total: AtomicU64,
     pub decoder_dropped: AtomicU64,
     pub armed: AtomicBool,
+    /// The wheels-stop rule's verdict (`tick::LiftDetector`): lifted, so the wheels are held at
+    /// zero and `robot.state.safety.picked_up` says so beside DJI's own bit.
+    pub lifted: AtomicBool,
     /// The last wheel command actually written, rpm fr/fl/bl/br, for `robot.state`.
     pub applied_twist: ArcSwap<[f64; 3]>,
     pub gimbal_ddeg: ArcSwap<(i16, i16)>,
@@ -137,6 +140,7 @@ impl State {
             write_errors_total: AtomicU64::new(0),
             decoder_dropped: AtomicU64::new(0),
             armed: AtomicBool::new(false),
+            lifted: AtomicBool::new(false),
             applied_twist: ArcSwap::from_pointee([0.0; 3]),
             gimbal_ddeg: ArcSwap::from_pointee((0, 0)),
             telemetry: ArcSwap::from_pointee(Telemetry::default()),
@@ -352,7 +356,9 @@ impl State {
                 limp: !armed,
                 gravity,
                 gain: None,
-                picked_up: t.sa_status.map(|s| s.is_pick_up).unwrap_or(false),
+                // DJI's own bit (never seen set, 2026-10-30/31) or the wheels-stop rule's verdict.
+                picked_up: t.sa_status.map(|s| s.is_pick_up).unwrap_or(false)
+                    || self.lifted.load(Ordering::Relaxed),
             },
             control_loop: proto::LoopState {
                 hz,
