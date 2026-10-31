@@ -71,7 +71,7 @@ stages 5, 6 and 8.
 | 9 | `app` | what the DJI app does with the stock stopped | pending (informative) |
 | 10 | `restore` | reboot brings the stock back; the app drives | measured twice 2026-10-30 (stock back, app drove), artefact pending |
 | 11 | `frames` | frames at 720p and 360p: fps and CPU — by `s1-cam` over the stock's own call sequence (no `gst-launch v4l2src`: same generic path that rebooted the robot) | pending — **gates the port** (360p was never captured from the stock; a 360p `S_FMT` is a hypothesis and does not go to the robot) |
-| 12 | `infer` | `s1-infer` (the detector's ONNX path) on the S1 with `libonnxruntime` armv7 and on the Mac over the same frames: ms/frame on both tiers | pending on the robot; the Mac tier ran tonight on a synthetic frame (below) — **gates the port** (one tier suffices) |
+| 12 | `infer` | `s1-infer` (the detector's ONNX path) on the S1 with `libonnxruntime` armv7 and on the Mac over the same frames: ms/frame on both tiers | **measured 2026-10-31 01:1x on the robot's own frame** (section "Stage 12"): S1 **2342 ms** per frame on the CPU path, Mac 12.9 ms — the number that decides the accelerator question, with two levers still to measure (NEON build flags, threads) |
 | — | `telemetry` | with the stock alive and nothing of ours on the UART: the stock controller process relaunched under `strace` from its first write (its boot-time DDS subscription, the subject list of the 176 B push) and 40 s of UART reads while the owner drives the gimbal to its stops (the `0x04/0x05` push against the manual's limits) | **done 2026-10-30, 20:55 and 21:0x** (subject list captured; gimbal push confirmed at the pitch stops, below) |
 | — | `telemetry-free` | stock stopped, `s1d` armed (chassis work mode 1, gimbal work mode 0), wheels off the ground: the head swept by `robot.head` while `s1.telemetry` is sampled — the body must not follow, ground yaw − chassis-relative yaw must equal the attitude yaw; then the head held while the owner tilts the robot — which pitch field is the ground's. `s1d`'s UART reads under `strace` alongside | **done 2026-10-30, 22:00–22:3x** (below): head obeyed ±60° to 0.1°, body still (owner's eyes), relation holds to 1.1°, pitch at 0 is ground frame; and the ESC/battery block comes in two orders between boots, now both read (below) |
 
@@ -854,6 +854,33 @@ dequeue and its requeue); no resolution the stock never showed goes to the robot
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/camera/frame_001.nv12 sha256=11e7ebc7c6c43f5325c0d01bbfdc43196e1a5ee546c31831233163bf31f5bb1e
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/camera/frame_002.nv12 sha256=24bce74213a9fe5d282ac02f5004026c722257fab8138203a4c6bfce8f521fb7
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/camera/frame.png sha256=f563fbbf553f00a3965d76537dfdcd67d974e4514d47a0c34001af1832d94b2b
+
+## Stage 12, inference on the robot's own frame (2026-10-31, 01:1x)
+
+`bench.sh infer` over `camera/frame.png` (the Mandalorian frame of item 2), the same model
+(`duck_detect.onnx`, 320×320 in) on both tiers, three passes each, threshold 0.35:
+
+| tier | latency p50 | p95 | throughput | CPU per frame | detections |
+|---|---|---|---|---|---|
+| S1 (Leadcore LC1860, 5× ARMv7 rev 5 with NEON/VFPv4 online, `libonnxruntime.so.1.28.0` armv7 built by `build-onnxruntime.sh`) | **2341.8 ms** | 2613.1 ms | 0.42 fps | 2306.7 ms | 0 |
+| Mac (arm64, ORT 1.28.0 release) | 12.9 ms | 12.9 ms | 77.4 fps | not measured | 0 |
+
+Zero detections on both is the expected answer of a duck detector shown a figure; what the stage
+measures is the time. **The CPU path as built is 180× the Mac and about 2.3 s a frame: nowhere
+near a live rate.** CPU time per frame equals the wall time, so the two intra-op threads the
+session asks for (`duck-detect/src/onnx.rs`, two so that `robotd`'s loop keeps two cores) bought
+nothing here — one core did the work. Two levers are measurable before any conclusion about an
+accelerator, and neither has been pulled yet: **the build flags** — `build-onnxruntime.sh` passes
+no `-mfpu`/`-march`, so Debian's `arm-linux-gnueabihf-gcc` default (VFPv3-d16, no NEON) is what
+the runtime's kernels were compiled for, on a CPU that has NEON and VFPv4 (`cat_proc_cpuinfo.txt`:
+`neon vfpv3 vfpv4`) — a rebuild with `-march=armv7-a -mfpu=neon-vfpv4` is the first thing to
+measure; and **the thread count**, five cores online (`/sys/devices/system/cpu/online` → `0-4`;
+`cpufreq` exposes nothing, so the clock is unknown) against the two asked for. The accelerator
+question (Coral over USB, or the MA2100 vision coprocessor DJI's own detectors run on) is the
+owner's, and it is asked with this number on the table, not before.
+
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/infer/onboard.txt sha256=a93eee73e47c2312386e1266535570f388cf20b59c87b300a9d493e56d0aea31
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/infer/offboard.txt sha256=51ad2e0020fc32a66cbf01f4c6bdb5a58f2ae25e5f7d0089ab38f30ad3ae4e28
 
 ## Corrections after the cold reader (2026-10-30 18:29 -0300) — this section supersedes the hand-off's open-items table
 
