@@ -988,6 +988,16 @@ and the USB id list for `03e7` (Intel/Movidius — this S1's MA2100 is on SPI pe
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/usb-coral/dji_json_gpio_m4.txt sha256=c60e507eeef6bc2256125ce0b03c547829e0d87c54a64597a060462bd7fac207
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/usb-coral/manual_ports.txt sha256=c9a007dcaf5aeed4be05e9158e3ca29478b3d44b672449dd1ecd398d0d0ad402
 
+**Parked by the owner (2026-10-31, 01:5x), to measure in phase 2:** the "no 5 V on the micro-USB"
+is an inference (the Coral's LED dark twice through a passive chain, the same LED lit on the back
+USB-C with power alone, no VBUS GPIO claimed by the driver, the manual's "connect to the computer"
+role), not a reading. Phase 2 measures it: a meter on the micro-USB VBUS pin during the forced-host
+window, or a device that lights by itself (USB lamp, pendrive with LED) in that window; and the
+owner decides on the self-powered OTG hub with that reading. Two caveats left open: whether the
+micro-USB→A cable used was the one that carried adb to the Mac (if so its 5 V wire works), and the
+kernel's regulators are not in sysfs, so a boost inside the PMIC that the driver never enables
+cannot be excluded by reading. Next item: 3, the microphone.
+
 ## Corrections after the cold reader (2026-10-30 18:29 -0300) — this section supersedes the hand-off's open-items table
 
 A cold reader resumed from `docs/plans/2026-10-30-1905-handoff-s1-fase1-bateria2.md` alone and found
