@@ -739,8 +739,14 @@ by hand with the owner watching the gimbal, then a 25 s tilt window.
   stand, armed, `robot.move` vx 0.15 m/s re-sent every 200 ms for 8 s (the deadman is 500 ms):
   wheels at up to 58 rpm, `static_flag` off, the controller's odometry velocity rising to 0.35 m/s
   (it believes the robot moves — the velocity subject is wheel odometry), the accelerometer flat
-  (acc_x −0.07..0.00 g), and `is_pick_up` never set (0 of 38 samples), nor before or after. So
-  the bit's trigger is neither lifting at rest nor wheels turning without motion; it is left
+  (acc_x −0.07..0.00 g), and `is_pick_up` never set (0 of 38 samples), nor before or after. The
+  owner also lifted the robot off the stand with the wheels still turning (t = 11.0–12.0 s of
+  `pickup_wheels.ndjson`: the accelerometer wobbles, rpm 22–45 throughout, bit still off) — the
+  wheels stopped at 12.05 s because the script's `robot.stop` ran then, not because the controller
+  reacted; and after the stop the controller's velocity estimate kept climbing to 1.15 m/s with
+  the wheels at 0 rpm while the robot was carried, so that subject fuses the IMU and is no
+  measure of wheel motion — a lift detector reads the ESC rpm, never that velocity. So the
+  bit's trigger is neither lifting at rest, nor wheels turning without motion, nor both; it is left
   unexplained and unused. What this measured instead is the detector phase 1 can build without
   it: wheel rpm (or odometry speed) above a floor while the IMU reports no matching acceleration
   — exactly the signature here. Owner's rule for the body (2026-10-30, night): when lifted the
