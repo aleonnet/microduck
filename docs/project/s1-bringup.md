@@ -1296,6 +1296,9 @@ a smaller input — or off the S1's CPU: the Coral through the OTG Y cable (orde
 That choice is the owner's phase-2 decision; the numbers are on the table. **The robot restarted by
 itself twice during the morning** (uptime 63 s at 12:4x after a second drop; adb refused, the Lab
 re-enabled it): to watch the battery level at the next power-on before reading more into it.
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/infer/onboard.txt sha256=48b4e127a7871ce7cf030377f7d6b76b38219a9c7db767d7b722288c8241032d
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/infer/offboard.txt sha256=a07594a8bdeb7b15c775bd87d3bd42db5de932fcf35580f587f10f6abc07dc91
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/onnxruntime-neon/libonnxruntime.sha256 sha256=bd763f0599b3dee27e24d5a5cb5b8fa5da53ff770758de0d8ba7e475df575956
 
 ## Corrections after the cold reader (2026-10-30 18:29 -0300) — this section supersedes the hand-off's open-items table
 
