@@ -236,10 +236,11 @@ fn stock_pushes_fill_health_state_and_the_head() {
     assert!(!frame.safety.fallen && !frame.safety.picked_up);
     let imu = frame.imu.expect("gyro present once a push arrived");
     assert!((imu.gyro[2] + 0.0034).abs() < 1e-4);
-    // DJI's gimbal yaw −179.6° (right positive) is the duck's +179.6° (left positive); pitch
-    // +35.6° up is the duck's −35.6°.
+    // The head is relative to the body: the gimbal's yaw against the chassis, 158.3° to DJI's
+    // right, is the duck's −158.3° (left positive); the ground-frame −179.6° stays in
+    // `s1.telemetry`. Pitch +35.6° up is the duck's −35.6°.
     assert!(
-        (frame.head[2] - 179.6f64.to_radians()).abs() < 1e-6,
+        (frame.head[2] + 158.3f64.to_radians()).abs() < 1e-6,
         "{}",
         frame.head[2]
     );

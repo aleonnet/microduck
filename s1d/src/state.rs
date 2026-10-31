@@ -245,11 +245,13 @@ impl State {
     /// in `head` as `[0, pitch, yaw, 0]`, the order `HeadParams` uses and the duck's signs (left
     /// and down positive; the gimbal's own are the opposite, `tick::gimbal_ddeg`) — the angle the
     /// gimbal itself pushes (`0x04/0x05`) when it flows, else the DDS subject, else the last
-    /// commanded one.
+    /// commanded one. The duck's head is relative to its body, so the gimbal's yaw **relative to
+    /// the chassis** is what travels here (owner, 2026-10-30: the body following the gimbal in the
+    /// app's mode must not read as the head turning); the ground-frame yaw stays in `s1.telemetry`.
     pub fn frame(&self, requested: [f64; 3], limited_by: Vec<String>) -> proto::RobotState {
         let t = self.telemetry.load();
         let (yaw_ddeg, pitch_ddeg) = match (t.gimbal, t.gimbal_pos) {
-            (Some(g), _) => (g.yaw_ddeg, g.pitch_ddeg),
+            (Some(g), _) => (g.yaw_vs_chassis_ddeg, g.pitch_ddeg),
             (None, Some(g)) => (g.yaw_ddeg, g.pitch_ddeg),
             (None, None) => **self.gimbal_ddeg.load(),
         };
