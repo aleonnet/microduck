@@ -735,6 +735,20 @@ by hand with the owner watching the gimbal, then a 25 s tilt window.
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-free/s1d.log sha256=6b8246fda86ebf4ec3bbc7a0cc36f994ae3b791da49374e107d6fe8b4a3dea69
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-free/pickup.ndjson sha256=123c2773deac619de943f067fb648acab4f70ae2aae4d27bc406dcca34408a96
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-free/pickup_bits.txt sha256=4d03612e7957dd3b7fa03aa6c0b3170bc18c8a8c66743d32fb2b29df7ee68aaf
+- **Wheels spinning in the air do not set the pick-up bit either (00:0x, owner's question).** On the
+  stand, armed, `robot.move` vx 0.15 m/s re-sent every 200 ms for 8 s (the deadman is 500 ms):
+  wheels at up to 58 rpm, `static_flag` off, the controller's odometry velocity rising to 0.35 m/s
+  (it believes the robot moves — the velocity subject is wheel odometry), the accelerometer flat
+  (acc_x −0.07..0.00 g), and `is_pick_up` never set (0 of 38 samples), nor before or after. So
+  the bit's trigger is neither lifting at rest nor wheels turning without motion; it is left
+  unexplained and unused. What this measured instead is the detector phase 1 can build without
+  it: wheel rpm (or odometry speed) above a floor while the IMU reports no matching acceleration
+  — exactly the signature here. Owner's rule for the body (2026-10-30, night): when lifted the
+  **wheels stop**; head, sounds, lights and perception keep reacting (unlike the duck, which
+  pauses its policy — a difference of body, not of contract: `picked_up` stays in `robot.state`,
+  what the S1 does with it is its own).
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-free/pickup_wheels.ndjson sha256=fbf2d5ddf571492af92ae1248cc2c9f09eba4899ddbefe7cdbaaa4e3d0011980
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-free/pickup_wheels_bits.txt sha256=351d7870d493a65cf6320882833835634372b237db3d827b3760c6eec371ecf4
 - Refutations (`telemetry-refute.sh`, six plants, all refused, sources restored by hash): the
   battery offset; the head verdict without the duck/DJI sign; the attitude offset in the strace
   report; the plausibility window opened (49 mV would pass as a pack); the second order's ESC
