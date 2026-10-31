@@ -902,7 +902,19 @@ did not electrically happen, and it says nothing yet about whether the port can 
 itself is suspect: a phone-style OTG adapter carries pull-downs on its CC pins to make the C side
 the host, which is the opposite of what a Coral's USB-C expects; the clean test is a micro-USB OTG
 adapter (ID grounded) with the Coral's own USB-A→USB-C cable, and that adapter is not in the house
-tonight. Open; the inference number (stage 12) is what makes it worth pursuing.
+tonight. **Second attempt (01:5x, the owner swapped the OTG adapter), the kernel log read through
+`/proc/kmsg` this time:** on `echo 1` the driver says `set vbus power 0`, then `set vbus power 1`,
+`comip_otg_start_host: host on`, `comip_hcd_driver_start`, `Init: Power Port (0)`, and then
+nothing for 20 s — no `new … USB device`, no port connect; on `echo 0`: `host off`, `set vbus
+power 0`, the gadget back with `rndis,mass_storage,bulk,acm,adb`. So the software side does what a
+host does and claims to switch VBUS on; whether 5 V actually appear at the micro-USB connector is
+the next thing to measure, and the Coral's LED is the owner's meter (first attempt: off). A device
+that lights by itself — a pendrive with an LED, a USB lamp — in the forced-host window is the
+decisive check that needs no adapter: lit and enumerated → the port hosts and the Coral chain is
+the problem; dark → VBUS does not reach the connector and this port cannot host without a hardware
+change. Open; the inference number (stage 12) is what makes it worth pursuing.
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/usb-coral/host_forced_coral_on_microusb_otg2.txt sha256=33bbee9d058fa1e01817b424b83972d67898e0261f84597db5e65917518b5258
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/usb-coral/kmsg_otg2.txt sha256=84322dad3664a6ca2d2e7f308cbeeee14fddfaf65e70f2beae02b53f105e5f0a
 
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/usb-coral/host_forced_coral_on_microusb.txt sha256=
 
