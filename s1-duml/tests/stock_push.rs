@@ -5,7 +5,7 @@
 //! and 12 V, gravity of one g on the z axis, a tilt bit set exactly when the pitch is −6.6°.
 
 use s1_duml::Frame;
-use s1_duml::dds::{PushPeriod, StockPush};
+use s1_duml::dds::{BlockOrder, PushPeriod, StockPush};
 use s1_duml::events::GimbalPush;
 
 fn frame(bytes: &[u8]) -> Frame {
@@ -83,19 +83,20 @@ fn the_2026_10_29_push_agrees_with_itself_about_the_slope() {
 }
 
 /// Anything but 161 bytes of subjects is not this push: the 1 Hz one (54 bytes) and a truncation.
-/// The push of the boot in which the stock controller process had been relaunched by hand
-/// (`bench.sh telemetry`, 2026-10-30 21:05) and then restarted by init: same 161 bytes, same
-/// msg id, and the subjects from the position on (92..144) read as before — gravity, the
-/// chassis attitude, the status word — but the ESC and battery block (46..92) does not: the
-/// "battery" reads 49 mV at 0 %, the "rpm" 10 675 against a motor whose range is ±1000 (the
-/// SDK's `drive_wheels`). Cut from `telemetry-free/s1d_tilt_reads.strace`, 22:2x. What the
-/// block carries on such a boot is open (item 1, delivery 4); what the layout must do is refuse
-/// to publish it as a battery or as wheel speeds.
+/// The 46..92 block holds two subjects, the ESC's 36 bytes and the battery's 10, and their
+/// ORDER differs between boots: every push of the 17:05 capture and the 29/10 one read
+/// `esc, battery` (msg ids 0 and 1), every push after 20:50 — the hand relaunch, two clean boots,
+/// with and without the app, 3080 pushes — read `battery, esc`, with the pack at 10.7–12.2 V and
+/// the wheels at idle, and the other order implausible in all 5442 pushes (2026-10-30, 23:xx,
+/// Python over every capture). The msg id does not tell the orders apart; the content does. This
+/// fixture is one such push, cut from `telemetry-free/s1d_tilt_reads.strace` (22:2x): the robot on
+/// since 20:50, 29 % and 10.675 V — the "10 675 rpm" the other order read; at 82 it would be 49 mV at 0 %.
 #[test]
-fn the_relaunched_boots_push_keeps_imu_and_attitude_but_its_esc_and_battery_are_implausible() {
+fn the_other_boots_put_the_battery_before_the_esc_and_the_layout_reads_both_orders() {
     let p = stock(include_bytes!(
         "fixtures/dds_push_stock_relaunched_2026-10-30.bin"
     ));
+    assert_eq!(p.block_order, Some(BlockOrder::BatteryThenEsc));
     assert!(
         (p.imu.acc[2] + 1.0).abs() < 0.02,
         "one g down: {}",
@@ -103,20 +104,44 @@ fn the_relaunched_boots_push_keeps_imu_and_attitude_but_its_esc_and_battery_are_
     );
     assert!((p.attitude.yaw - 19.9).abs() < 0.1, "{}", p.attitude.yaw);
     assert!(p.sa_status.static_flag);
-    assert_eq!(p.battery.adc_value, 49, "49 mV is no battery");
-    assert_eq!(p.battery.percent, 0);
-    assert!(!p.battery.plausible());
-    assert_eq!(p.esc.speed_rpm[0], 10_675, "ten times the motor's range");
-    assert!(!p.esc.plausible());
-    // and the pushes the layout was read from are plausible on both counts
+    assert_eq!(p.battery.adc_value, 10_675, "millivolts, the pack at 29 %");
+    assert_eq!(p.battery.percent, 29);
+    assert_eq!(p.battery.temperature, 304, "30.4 °C");
+    assert_eq!(p.battery.current, -1_107, "milliamps, discharging");
+    assert!(p.battery.plausible() && p.esc.plausible());
+    assert!(
+        p.esc.speed_rpm.iter().all(|r| r.abs() <= 5),
+        "idle: {:?}",
+        p.esc.speed_rpm
+    );
+    assert!(
+        p.esc.timestamp.iter().max().unwrap() - p.esc.timestamp.iter().min().unwrap() < 100,
+        "four ESC clocks within a tick: {:?}",
+        p.esc.timestamp
+    );
+    // the captures the layout was first read from are the other order, unchanged
     let idle = stock(include_bytes!(
         "fixtures/dds_push_stock_idle_2026-10-30.bin"
     ));
-    assert!(idle.battery.plausible() && idle.esc.plausible());
-    let moving = stock(include_bytes!(
-        "fixtures/dds_push_stock_moving_2026-10-30.bin"
-    ));
-    assert!(moving.battery.plausible() && moving.esc.plausible());
+    assert_eq!(idle.block_order, Some(BlockOrder::EscThenBattery));
+    assert_eq!(idle.battery.adc_value, 11_940);
+    let real = stock(include_bytes!("fixtures/dds_push_176_real.bin"));
+    assert_eq!(
+        real.block_order,
+        Some(BlockOrder::EscThenBattery),
+        "29/10, msg id 1"
+    );
+    assert_eq!(real.battery.adc_value, 11_862);
+}
+
+/// 161 zero bytes are a push of the right length whose block reads as nothing in either order:
+/// no order is claimed, and what the daemon publishes from it is decided by the plausibility
+/// guards, not by the layout.
+#[test]
+fn a_block_plausible_in_neither_order_claims_no_order() {
+    let p = StockPush::parse(&[0u8; StockPush::LEN]).expect("the length is the stock's");
+    assert_eq!(p.block_order, None);
+    assert!(!p.battery.plausible());
 }
 
 #[test]

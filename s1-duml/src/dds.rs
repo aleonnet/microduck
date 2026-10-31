@@ -307,9 +307,16 @@ impl Esc {
     /// The wheel motor's range in DJI's own SDK (`chassis.drive_wheels`: `[-1000, 1000]` rpm).
     pub const MAX_RPM: i16 = 1000;
 
-    /// Whether the four speeds read as wheels — the 2026-10-30 22:00 boot put 10 675 here.
+    /// Whether these 36 bytes read as the four ESCs: speeds within the motor's range and the
+    /// four ESC clocks within a second of each other (they sit a few counts apart in every real
+    /// push; read at the wrong offset they are tens of millions apart). The battery-first order
+    /// read as ESC put 10 675 rpm here (2026-10-30 22:00).
     pub fn plausible(&self) -> bool {
-        self.speed_rpm.iter().all(|r| r.abs() <= Self::MAX_RPM)
+        let (lo, hi) = (
+            self.timestamp.iter().min().copied().unwrap_or(0),
+            self.timestamp.iter().max().copied().unwrap_or(0),
+        );
+        self.speed_rpm.iter().all(|r| r.abs() <= Self::MAX_RPM) && hi - lo < 1000
     }
 
     pub fn parse(b: &[u8]) -> Option<(Self, &[u8])> {
@@ -430,6 +437,19 @@ impl Stick {
 /// subscribed in the first milliseconds of `dji_hdvt_uav` — and the 14 bytes at 8..22 are one
 /// subject the SDK does not name: a float that tracks the gimbal's yaw in whole degrees
 /// (0, −1, −178 against the gimbal's own `0x04/0x05` push of −179.6°) and ten zero bytes.
+/// Which way round the two subjects of bytes 46..92 came — the ESC's 36 and the battery's 10.
+/// Both orders have been read off the robot (2026-10-30: `esc, battery` in the 17:05 capture and
+/// the 29/10 push, msg ids 0 and 1; `battery, esc` in every push after 20:50 across two clean
+/// boots, with and without the app, 3080 pushes), and the msg id does not tell them apart: the
+/// order is read from the bytes themselves, by which way both subjects read as physics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlockOrder {
+    /// ESC at 46, battery at 82.
+    EscThenBattery,
+    /// Battery at 46, ESC at 56.
+    BatteryThenEsc,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct StockPush {
     /// The controller's clock, milliseconds, then the same instant in microseconds.
@@ -440,6 +460,10 @@ pub struct StockPush {
     pub velocity: Velocity,
     pub esc: Esc,
     pub battery: Battery,
+    /// The order the ESC and the battery were read in; `None` when neither order read as
+    /// physics — `esc` and `battery` then hold the `EscThenBattery` reading and fail their
+    /// plausibility, which is what a consumer must check before publishing either.
+    pub block_order: Option<BlockOrder>,
     pub position: Position,
     pub imu: Imu,
     pub sa_status: SaStatus,
@@ -453,6 +477,9 @@ impl StockPush {
     const AT_VELOCITY: usize = 22;
     const AT_ESC: usize = 46;
     const AT_BATTERY: usize = 82;
+    /// The other order: battery at 46, ESC right after its ten bytes.
+    const AT_BATTERY_FIRST: usize = 46;
+    const AT_ESC_AFTER_BATTERY: usize = 56;
     const AT_POSITION: usize = 92;
     const AT_IMU: usize = 104;
     const AT_SA_STATUS: usize = 128;
@@ -467,8 +494,17 @@ impl StockPush {
         let u32_at =
             |i: usize| u32::from_le_bytes([data[i], data[i + 1], data[i + 2], data[i + 3]]);
         let (velocity, _) = Velocity::parse(&data[Self::AT_VELOCITY..])?;
-        let (esc, _) = Esc::parse(&data[Self::AT_ESC..])?;
-        let (battery, _) = Battery::parse(&data[Self::AT_BATTERY..])?;
+        let (esc_a, _) = Esc::parse(&data[Self::AT_ESC..])?;
+        let (battery_a, _) = Battery::parse(&data[Self::AT_BATTERY..])?;
+        let (battery_b, _) = Battery::parse(&data[Self::AT_BATTERY_FIRST..])?;
+        let (esc_b, _) = Esc::parse(&data[Self::AT_ESC_AFTER_BATTERY..])?;
+        let (esc, battery, block_order) = if battery_a.plausible() && esc_a.plausible() {
+            (esc_a, battery_a, Some(BlockOrder::EscThenBattery))
+        } else if battery_b.plausible() && esc_b.plausible() {
+            (esc_b, battery_b, Some(BlockOrder::BatteryThenEsc))
+        } else {
+            (esc_a, battery_a, None)
+        };
         let (position, _) = Position::parse(&data[Self::AT_POSITION..])?;
         let (imu, _) = Imu::parse(&data[Self::AT_IMU..])?;
         let (sa_status, _) = SaStatus::parse(&data[Self::AT_SA_STATUS..])?;
@@ -480,6 +516,7 @@ impl StockPush {
             velocity,
             esc,
             battery,
+            block_order,
             position,
             imu,
             sa_status,

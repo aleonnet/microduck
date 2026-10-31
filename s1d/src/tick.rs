@@ -226,18 +226,19 @@ pub enum Push {
 /// the sticks', which `0x04/0x05` supplies.
 fn decode_push(msg_id: u8, data: &[u8], t: &mut Telemetry) -> Push {
     if let Some(p) = dds::StockPush::parse(data) {
-        // The ESC and battery block (46..92) is published only when it reads as physics: on the
-        // boot of 2026-10-30 22:00 (stock controller process relaunched by hand, then restarted
-        // by init) the same 161 bytes carried 49 mV / 0 % and 10 675 rpm there while the IMU,
-        // the attitude and the status word still read true. What that block carries on such a
-        // boot is open (item 1, delivery 4); a health that says the pack is empty is not.
-        t.esc = p.esc.plausible().then_some(p.esc);
+        // The ESC and battery block (46..92) comes in either of two subject orders, read off
+        // the bytes by which order makes both subjects physics (`StockPush::block_order`,
+        // 2026-10-30: 2363 pushes one way, 3080 the other). When neither does — a push of zeros,
+        // a layout this firmware has not shown yet — neither subject is published: a health that
+        // says the pack is empty is worse than none.
+        let block_read = p.block_order.is_some();
+        t.esc = block_read.then_some(p.esc);
         t.position = Some(p.position);
         t.velocity = Some(p.velocity);
         t.imu = Some(p.imu);
         t.attitude = Some(p.attitude);
         t.sa_status = Some(p.sa_status);
-        t.battery = p.battery.plausible().then_some(p.battery);
+        t.battery = block_read.then_some(p.battery);
         return Push::Stock;
     }
     if msg_id != DDS_MSG_ID || data.len() != DDS_PUSH_LEN {
@@ -729,17 +730,29 @@ mod tests {
         );
     }
 
-    /// On the boot of 2026-10-30 22:00 the stock's push kept its length and its IMU, attitude
-    /// and status, but the ESC and battery block read 49 mV / 0 % and 10 675 rpm. The telemetry
-    /// takes what still reads as physics and drops the block that does not: no battery, no
-    /// wheel speeds, rather than a health that says the pack is empty.
+    /// The boot of 2026-10-30 22:00 put the battery before the ESC in the push; read in the
+    /// other order it was 49 mV at 0 % and 10 675 rpm. The layout reads both orders, so the
+    /// telemetry carries the pack (10.675 V, 29 %) and idle wheels from that push.
     #[test]
-    fn an_implausible_esc_or_battery_block_is_not_published() {
+    fn the_battery_first_order_is_published_as_a_pack() {
         let frame = s1_duml::Frame::decode(include_bytes!(
             "../../s1-duml/tests/fixtures/dds_push_stock_relaunched_2026-10-30.bin"
         ))
         .expect("a whole frame");
         let push = dds::PushPeriod::parse(&frame).expect("a push");
+        let mut t = Telemetry::default();
+        assert_eq!(decode_push(push.msg_id, push.data, &mut t), Push::Stock);
+        assert_eq!(
+            t.battery.map(|b| (b.adc_value, b.percent)),
+            Some((10_675, 29))
+        );
+        assert!(t.esc.unwrap().speed_rpm.iter().all(|r| r.abs() <= 5));
+    }
+
+    /// A block plausible in neither order — 161 zero bytes, 0 mV at 0 % — is not published as a
+    /// battery or as wheel speeds: a health that says the pack is empty is worse than none.
+    #[test]
+    fn an_implausible_esc_or_battery_block_is_not_published() {
         let mut t = Telemetry {
             battery: Some(dds::Battery {
                 adc_value: 11_900,
@@ -750,10 +763,13 @@ mod tests {
             }),
             ..Telemetry::default()
         };
-        assert_eq!(decode_push(push.msg_id, push.data, &mut t), Push::Stock);
+        assert_eq!(
+            decode_push(1, &[0u8; dds::StockPush::LEN], &mut t),
+            Push::Stock
+        );
         assert!(t.attitude.is_some() && t.imu.is_some() && t.sa_status.is_some());
-        assert_eq!(t.battery, None, "49 mV at 0 % is not a reading");
-        assert_eq!(t.esc, None, "10 675 rpm is not a wheel");
+        assert_eq!(t.battery, None, "0 mV at 0 % is not a reading");
+        assert_eq!(t.esc, None);
     }
 
     /// `0x50` is "already there" only where the SDK reads it so, on add-node.

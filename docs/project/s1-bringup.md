@@ -73,7 +73,7 @@ stages 5, 6 and 8.
 | 11 | `frames` | frames at 720p and 360p: fps and CPU — by `s1-cam` over the stock's own call sequence (no `gst-launch v4l2src`: same generic path that rebooted the robot) | pending — **gates the port** (360p was never captured from the stock; a 360p `S_FMT` is a hypothesis and does not go to the robot) |
 | 12 | `infer` | `s1-infer` (the detector's ONNX path) on the S1 with `libonnxruntime` armv7 and on the Mac over the same frames: ms/frame on both tiers | pending on the robot; the Mac tier ran tonight on a synthetic frame (below) — **gates the port** (one tier suffices) |
 | — | `telemetry` | with the stock alive and nothing of ours on the UART: the stock controller process relaunched under `strace` from its first write (its boot-time DDS subscription, the subject list of the 176 B push) and 40 s of UART reads while the owner drives the gimbal to its stops (the `0x04/0x05` push against the manual's limits) | **done 2026-10-30, 20:55 and 21:0x** (subject list captured; gimbal push confirmed at the pitch stops, below) |
-| — | `telemetry-free` | stock stopped, `s1d` armed (chassis work mode 1, gimbal work mode 0), wheels off the ground: the head swept by `robot.head` while `s1.telemetry` is sampled — the body must not follow, ground yaw − chassis-relative yaw must equal the attitude yaw; then the head held while the owner tilts the robot — which pitch field is the ground's. `s1d`'s UART reads under `strace` alongside | **done 2026-10-30, 22:00–22:3x** (below): head obeyed ±60° to 0.1°, body still (owner's eyes), relation holds to 1.1°, pitch at 0 is ground frame; and the ESC/battery block of that boot is not the validated layout |
+| — | `telemetry-free` | stock stopped, `s1d` armed (chassis work mode 1, gimbal work mode 0), wheels off the ground: the head swept by `robot.head` while `s1.telemetry` is sampled — the body must not follow, ground yaw − chassis-relative yaw must equal the attitude yaw; then the head held while the owner tilts the robot — which pitch field is the ground's. `s1d`'s UART reads under `strace` alongside | **done 2026-10-30, 22:00–22:3x** (below): head obeyed ±60° to 0.1°, body still (owner's eyes), relation holds to 1.1°, pitch at 0 is ground frame; and the ESC/battery block comes in two orders between boots, now both read (below) |
 
 The `items` stage is `s1-e2e robot` alone, with the daemons already up; `e2e` is the same program
 with no robot (`s1-e2e fake`), the pre-test every stage-5 and stage-6 item passes before the robot
@@ -685,29 +685,36 @@ by hand with the owner watching the gimbal, then a 25 s tilt window.
   (unit tests on the tilt numbers: nose up → gravity behind and below, the forward axis climbing
   by sin 21.7°, heading −24.8° for DJI's 24.8; `fake_body.rs` on the turned push). Before this,
   `quat` was identity and `gravity` a constant. `s1.telemetry` keeps DJI's own fields and signs.
-- **The ESC and battery block of this boot is not the validated layout.** Same 161 bytes, same
-  msg id 1, and the subjects from 92 on read true (position, gravity, status word, attitude —
-  the tilt above), but 46..92 read `rpm (10 675, 304, −1107, −1)`, "battery" 49 mV at 0 % with a
-  ramping "temperature" (a counter, +607/s). Both captures that gave the layout (17:05, 21:0x —
-  stock alive from boot — and the 29/10 push with the stock killed) read 11.75–11.94 V and idle
-  rpm. What differs on this boot: the stock controller process had been **relaunched by hand**
-  (stage `telemetry`, 21:05) and then restarted by init — the subscription the push answers is
-  that boot's, and the first composite subject's inner layout is not the same. Hypothesis to
-  measure, not a conclusion: a power cycle restores the layout the stock subscribes at a clean
-  boot; the clean path to the battery is to read the subject list behind the push that is
-  flowing, which `s1d` cannot see. Until then `s1d` publishes the block only when it reads as
-  physics: a pack within 9.0–13.0 V (manual: 10.8 V, 4.2 V a cell when full) at ≤ 100 %, wheels
-  within ±1000 rpm (the SDK's `drive_wheels` range) — `dds::Battery::plausible`,
-  `dds::Esc::plausible`, applied in `tick::decode_push`; a real push of this boot is the fixture
-  `dds_push_stock_relaunched_2026-10-30.bin` (tests: layout and daemon). `robot.health.battery`
-  is absent on such a boot rather than 0.049 V. **Item 1, delivery 4 (open, robot):** on a
-  power-cycled robot, `telemetry-free` again — if the battery reads, the hypothesis stands and the
-  record says which boots lie; if not, the block's subjects are to be decoded from the relaunch's
-  subscription.
-- Refutations (`telemetry-refute.sh`, five plants, all refused, sources restored by hash): the
+- **The ESC and battery block comes in two orders, and the layout now reads both (delivery 4,
+  closed from the captures, 23:xx).** First read as "the block lies": the same 161 bytes, msg id
+  1, subjects from 92 on true, but 46..92 read `rpm (10 675, …)`, "battery" 49 mV at 0 %. Two
+  hypotheses went to the robot and fell: a power cycle (clean boot, stock alive, nothing of ours:
+  992 pushes, same bytes) and the app connected (667 pushes, same bytes). Then the bytes
+  themselves, side by side with the 17:05 push: the 36-byte ESC subject and the 10-byte battery
+  subject are **swapped** — `esc, battery` at 46/82 in the 17:05 capture and the 29/10 push,
+  `battery, esc` at 46/56 in every push after 20:50. The "10 675 rpm" was the pack at 10.675 V;
+  the "temperature counter" was an ESC clock. Over all 5442 captured pushes exactly one order
+  reads as physics (pack 9–13 V at ≤ 100 %, wheels within ±1000 rpm, the four ESC clocks within
+  a second of each other): 2363 one way, 3080 the other, none both, none neither; the pack read
+  11.94 V/80 % at 17:05, 12.23 V/92 % at 21:0x, 10.68 V/29 % at 22:2x, 10.99 V/45 % and
+  10.90 V/42 % on the clean boot — a day's discharge. The msg id does not name the order (the
+  29/10 push is `esc, battery` under msg id 1): the order is a property of that boot's
+  subscription, which the hdvt builds in an order that varies per boot, and `StockPush::parse`
+  reads it off the bytes (`BlockOrder`), publishing neither subject when neither order reads as
+  physics (`tick::decode_push`). Fixture of the second order:
+  `dds_push_stock_relaunched_2026-10-30.bin` (10.675 V, 29 %, idle wheels, four clocks within 4
+  counts). What remains for the robot is only to watch `robot.health.battery` through `s1d` on a
+  live boot (`telemetry-free`), the daemon path having been run on the Mac over the real fixture
+  — the robot went off the network before that run tonight.
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-cleanboot/hdvt_cleanboot_reads.strace sha256=0d947e5051fc4758f568f444127f167aa4277d48d83e58245b1fc7616f2e880f
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-cleanboot/battery_check.txt sha256=2bd58a761ec94dbddc133ea1f417d894ef3bc3754e71798de4461b734d4b4d67
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-cleanboot/hdvt_app_connected_reads.strace sha256=210d82bcbdeb567605a91ac42d78eafca6a8815b74642c195bf4a72d9536707e
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-cleanboot/battery_check_app.txt sha256=ea31b681429e0f678e46a517c2d7b4c3a3063659a24e1c78764de834288f0086
+- Refutations (`telemetry-refute.sh`, six plants, all refused, sources restored by hash): the
   battery offset; the head verdict without the duck/DJI sign; the attitude offset in the strace
-  report; the plausibility window opened (49 mV would pass — the real-push test says
-  `implausible`); the judge calling the body still without wheel speeds.
+  report; the plausibility window opened (49 mV would pass as a pack); the second order's ESC
+  two bytes early (the real battery-first push stops reading as `BatteryThenEsc`); the judge
+  calling the body still without wheel speeds.
 
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-free/stop.txt sha256=93993a72aca42aaa5d68f7f5908a965278cb4465616b8ad9b55f1e7cef566425
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-free/daemons.txt sha256=7412236579166ee86683b4c1b6fc13f9f8cbe0054d0f2e5569b94436e1d8a760

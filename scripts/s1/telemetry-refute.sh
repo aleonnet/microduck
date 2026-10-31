@@ -61,6 +61,9 @@ plant() {
     plant scripts/s1/duml-strace.py "AT_STOCK_ATTITUDE = 132" "AT_STOCK_ATTITUDE = 120" "python3 -I scripts/s1/duml-strace.py --selftest" "gimbal_vs_attitude"
     # The plausibility guard with its window opened to anything: the relaunched boot's 49 mV
     # would pass as a pack, and the layout test over that real push must say so.
-    plant s1-duml/src/dds.rs "Self::PLAUSIBLE_MV.contains(&self.adc_value) && self.percent <= 100" "self.percent <= 100" "cargo test -p s1-duml --test stock_push" "implausible"
+    plant s1-duml/src/dds.rs "Self::PLAUSIBLE_MV.contains(&self.adc_value) && self.percent <= 100" "self.percent <= 100" "cargo test -p s1-duml --test stock_push" "plausible"
+    # The battery-first order with its ESC two bytes early: the real battery-first push must stop
+    # reading as that order.
+    plant s1-duml/src/dds.rs "const AT_ESC_AFTER_BATTERY: usize = 56;" "const AT_ESC_AFTER_BATTERY: usize = 54;" "cargo test -p s1-duml --test stock_push" "BatteryThenEsc"
     plant scripts/s1/telemetry-free.py 'lines.append(f"body_still undecided: no wheel speeds in the samples' 'lines.append(f"body_still yes: no wheel speeds in the samples' "python3 -I scripts/s1/telemetry-free.py --selftest" "body_still undecided"
 } | tee "$OUT"
