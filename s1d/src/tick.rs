@@ -336,8 +336,15 @@ pub fn run(body: &mut dyn S1Body, state: Arc<State>, intents: Arc<Intents>, cfg:
                     let s = w.seq(cmd::id::CHASSIS_WORKMODE);
                     w.send(cmd::chassis_workmode(s, 1));
                 }
+                // The gimbal freed from the chassis, explicitly (`0x04/0x4c 00 00`, DJI's
+                // `gimbal_free_mode`): the duck's head is independent of its body, and with the
+                // stock stopped the controller keeps whatever mode the app left — the body
+                // followed the gimbal through the whole session of 2026-10-30 (owner's finding).
+                // Following is a behaviour asked for through `s1.follow`, never inherited.
+                let s = w.seq(cmd::id::GIMBAL_WORKMODE);
+                w.send(cmd::gimbal_workmode(s, 0));
                 state.armed.store(true, Ordering::Relaxed);
-                tracing::info!("armed: heartbeat on, chassis in work mode 1");
+                tracing::info!("armed: heartbeat on, chassis in work mode 1, gimbal free");
             }
             Some(PowerRequest::Disarm) => {
                 zero_wheels(&mut w, 10);

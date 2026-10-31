@@ -577,6 +577,16 @@ than the one at 4 when the chassis had turned 19°: ground frame at 4, relative 
 left alone; `0x04/0x05` fills the gimbal angle; `robot.health` carries the controller's battery
 (volts, percent); `robot.state` takes odometry, attitude, the status bits and the gimbal's real
 angle in `head`; `s1.telemetry` adds `stock_pushes`, `gimbal_yaw_vs_chassis_deg`, `gimbal_quat`.
+**Two corrections from the owner (2026-10-30, ~21:15):** `robot.state.head` carries the gimbal's yaw
+**relative to the chassis** (the push's field at 8), because the duck's head is relative to its body
+— with the body following the gimbal, the ground-frame yaw is the robot turning, not the head; and
+arming now puts the gimbal in DJI's free mode explicitly (`0x04/0x4c 00 00`, once, after the
+chassis work mode and before the first heartbeat), because with the stock stopped the controller
+keeps the mode the app left and the body followed the gimbal through the whole session. Following
+is a behaviour asked for through `s1.follow`, never inherited (`fake_body.rs`:
+`arming_frees_the_gimbal_from_the_chassis_once`, `stock_pushes_fill_health_state_and_the_head`).
+Still open for the robot: in free mode, the ground yaw minus the chassis-relative yaw must equal
+the chassis attitude yaw, and which of the two pitch fields (0 or 2) follows the chassis on a slope.
 Our own subscription is still sent once at start and re-asked only while nothing flows — the
 controller refuses it (`02 03` to add-node, `0f …` to subscribe, also `21 03` on another boot;
 cause undetermined) and it is no longer needed for the telemetry the duck consumes. Fixtures cut

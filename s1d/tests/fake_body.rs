@@ -279,12 +279,18 @@ fn queued_frames_and_gimbal_lead_reach_the_wire() {
     let bytes = std::fs::read(&path).unwrap();
     let _ = std::fs::remove_file(&path);
     let frames = Decoder::new().push(&bytes);
-    let modes: Vec<u16> = frames
+    // Arming sends the gimbal's free mode first (seq 0, below); the two queued frames follow with
+    // their own sequences.
+    let modes: Vec<(u16, u8)> = frames
         .iter()
         .filter(|f| (f.cmd_set, f.cmd_id) == id::GIMBAL_WORKMODE)
-        .map(|f| f.seq)
+        .map(|f| (f.seq, f.data[0]))
         .collect();
-    assert_eq!(modes, vec![0, 1], "each queued frame got its own sequence");
+    assert_eq!(
+        modes,
+        vec![(0, 0), (1, 2), (2, 0)],
+        "the arm's free mode, then each queued frame with its own sequence"
+    );
     let follows = frames
         .iter()
         .filter(|f| (f.cmd_set, f.cmd_id) == id::CHASSIS_FOLLOW)
@@ -437,5 +443,55 @@ fn a_volley_lights_the_muzzle_and_sounds_each_shot_on_the_launchers_cadence() {
         launcher,
         ["fire 13", "flash", "flash", "flash"],
         "the fire frame, then the stock's muzzle flash once per shot"
+    );
+}
+
+/// Arming puts the gimbal in its free mode explicitly (`0x04/0x4c 00 00`, DJI's `gimbal_free_mode`),
+/// once, beside the chassis work mode: the duck's head is independent of its body, and with the
+/// stock stopped the controller would otherwise stay in whatever mode the app left — on 2026-10-30
+/// the body followed the gimbal through our whole session (owner's finding). Following is asked
+/// for explicitly through `s1.follow`, never inherited.
+#[test]
+fn arming_frees_the_gimbal_from_the_chassis_once() {
+    let path = std::env::temp_dir().join(format!("s1d-fake-arm-{}.bin", std::process::id()));
+    let mut body = FakeFile::create(&path).unwrap();
+    let state = Arc::new(State::new(100));
+    let intents = Arc::new(Intents::new());
+    intents.set_enabled(true);
+    let (s, i) = (Arc::clone(&state), Arc::clone(&intents));
+    let handle = std::thread::spawn(move || run(&mut body, s, i, Config::default()));
+    std::thread::sleep(Duration::from_millis(200));
+    state.shutdown.store(true, Ordering::Relaxed);
+    handle.join().unwrap();
+    let bytes = std::fs::read(&path).unwrap();
+    let _ = std::fs::remove_file(&path);
+    let frames = Decoder::new().push(&bytes);
+    let free: Vec<Vec<u8>> = frames
+        .iter()
+        .filter(|f| (f.cmd_set, f.cmd_id) == id::GIMBAL_WORKMODE)
+        .map(|f| f.encode().unwrap())
+        .collect();
+    assert_eq!(
+        free,
+        vec![s1_duml::cmd::gimbal_workmode(0, 0).encode().unwrap()],
+        "exactly one gimbal work-mode frame on arm, DJI's free mode, byte for byte"
+    );
+    let chassis_modes = frames
+        .iter()
+        .filter(|f| (f.cmd_set, f.cmd_id) == id::CHASSIS_WORKMODE)
+        .count();
+    assert_eq!(chassis_modes, 5, "the chassis work mode as before");
+    // And the order: the gimbal is freed after the chassis is put in work mode 1, before any heartbeat.
+    let first_heartbeat = frames
+        .iter()
+        .position(|f| (f.cmd_set, f.cmd_id) == id::HEARTBEAT)
+        .expect("armed: the heartbeat runs");
+    let free_at = frames
+        .iter()
+        .position(|f| (f.cmd_set, f.cmd_id) == id::GIMBAL_WORKMODE)
+        .unwrap();
+    assert!(
+        free_at < first_heartbeat,
+        "freed before the first heartbeat"
     );
 }
