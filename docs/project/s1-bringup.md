@@ -998,6 +998,73 @@ micro-USB→A cable used was the one that carried adb to the Mac (if so its 5 V 
 kernel's regulators are not in sysfs, so a boost inside the PMIC that the driver never enables
 cannot be excluded by reading. Next item: 3, the microphone.
 
+## Item 3, the microphone: the stock's own capture, read live (2026-10-31, 01:4x–02:0x)
+
+Laboratory first, nothing of ours on the robot: the stock alive after its own reboot, root adb over
+Wi-Fi, the DJI app closed until the last step. Artefacts in `out/2026-10-31-poc2/mic-lab/`.
+
+- **The stock opens the microphone at boot and leaves it armed, not running.** `dji_camera` (pid
+  235, fd 84) holds `/dev/snd/pcmC0D0c` in state SETUP: S16_LE, 2 channels, 48000 Hz, period 480,
+  buffer 1920. `/data/audio_files/audio.ini` (28 bytes, pulled for the first time) carries the same
+  numbers — 48000, 480, 4 periods, 16 bits — so the stock's capture parameters are exactly what
+  stage 8 used. The parameters are not the difference.
+- **The mixer with the stock alive is the mixer stage 8 dumped**, control for control (57 controls
+  through `/system/bin/tinymix`, no chroot needed): `MIC1 Volume` 14 of 0–40, no boost; `MIC2
+  Volume` 29, boost on; `ADC1/ADC2 Gain` 103 of 0–127; `I2sR Out` = ADC1, `I2sL Out` = ADC2.
+- **Turning on applause recognition does not start the capture.** A DJI Lab script
+  (`mic_lab_applause.py`, run through the lab client with the app closed; defining the applause
+  callbacks makes the framework enable sound recognition) ran 30 s: the device stayed SETUP
+  throughout. Whether the request succeeded is not known (the runtime logs it internally; not in
+  `/data/dji/log`). A second script (SDK audio stream on, then a 10 s recording to the microSD) was
+  **not run: the owner declined it.**
+- **The DJI app recording a video does start it — card or no card.** The owner pressed record in
+  the app (which warned "no SD card"): the device went RUNNING at 01:56:44 and stayed so for the rest
+  of the watch (53 samples to 01:58:32), `hw_ptr` advancing ~98 000 frames per 2 s = 48 kHz. The
+  warning did not inhibit the audio. (A first watch lost its lines to a `tr` that ran on the robot
+  instead of the Mac — my defect, `pcm0c_poll_app.txt` kept as the record of it; the second watch is
+  the artefact.) The owner's earlier "speak into the mic" in the app was the **phone's** microphone
+  played on the robot's speaker: two new `interconn_permanent-*.wav` appeared at 01:54, the same
+  files as the app's custom audio (`rm_audio_setting.json` lists their ids) — 48 kHz mono, −21 to
+  −29 dB RMS, not recordings of the robot's microphone.
+- **The codec's power map with the stream running names the microphone: MIC1, right channel.**
+  `/sys/kernel/debug/asoc/comip_snd_soc/comip_codec/dapm`, armed vs running: `Capture`, `MIC1`,
+  `MIC1P`/`MIC1N`, `MIC1 Pga`, `mic1Pga mux`, `Adc1 Mixer`, `ADC1 Pga` and the bias `MICB1` go
+  **On**; `MIC2 Pga`, `Adc2 Mixer`, `ADC2 Pga` and `MICB2` stay **Off** (the `MIC2` input widget
+  flips on but nothing behind it does; `MICB2` has no route in the driver — "in 0 out 0"). So the
+  stock's path is MIC1 → ADC1 → `I2sR Out` → the **right** channel, the channel stage 8 picked
+  (`mic_right.wav`), and the left channel's constant is an unpowered ADC2, not a saturated
+  microphone. The codec registers (`codec_reg`) did not change between armed and running (R0 `0x11`,
+  R1 `0xd8`, R77 `0xa7`); what changed was the kernel's power management, which turns the bias on
+  by itself when a stream runs. **Refuted:** the hypothesis that the microphone needs a bias only
+  the stock's direct register writes provide. **Open:** the level. Stage 8's −73 dB RMS was recorded
+  with nobody speaking (the owner was away from the robot, record of 2026-10-30); the proof left is
+  a recording of ours with the owner speaking, which needs the stock stopped (the device is
+  single-client) — not done tonight, the owner's call; the levers if it comes out low are `MIC1
+  Volume` (14 of 40) and `MIC1 Boost`, the same controls the stock has.
+- **The app's "no SD card" (seen since the first reboot of 2026-10-30, unexplained then).** The
+  card is mounted on the robot (`/dev/block/mmcblk1p1` on `/sdcard`, vfat, 29.8 GB, 3.6 GB used:
+  `DCIM`, `MISC`, our `bk/`), nothing was formatted. It carries a `.fseventsd` folder, which only
+  macOS writes: created 2026-10-30 23:19, its uuid file rewritten 2026-10-31 00:51 — one minute
+  after this boot (uptime 2612 s at 01:34). The robot's USB disk function (`f_mass_storage/lun0`,
+  the `dji_sys` "UMS" mode, `CAM_USB_MODE_UMS` in its strings) was **empty** during the whole
+  session, and a 75 s watch while the owner unplugged and replugged the Mac's cable (gadget
+  DISCONNECTED 02:02:05, CONFIGURED 02:02:18) showed no hand-over: lun empty, card mounted, no Mac
+  volume. The owner also heard the Mac's "disk removed" sound several times earlier (not during the
+  watch). **Hypothesis to measure, not conclusion:** at **boot with the Mac on the micro-USB** the
+  stock hands the card to the computer as a USB disk, the Mac mounts it, and `dji_camera` marks
+  "Storage not present" (its string) for the rest of that boot. Clean test, zero cost, next power-on:
+  boot with **nothing on the micro-USB**, open the app, check the card.
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/mic-lab/audio_files/audio.ini sha256=2a09662efbcadcc7344deac669117139dd751fa8b907ff054fe993ced60b3fa6
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/mic-lab/audio_files/rm_audio_setting.json sha256=2ceb21a0bedb51fedfa9fbf60b2d2e7ddaec744894e2a9aacda436469a13971f
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/mic-lab/tinymix_stock_alive_app_closed.txt sha256=61da4f3e3588b66d572a21222eeb7868bcab6683118fbd64460942339a73f47b
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/mic-lab/codec_state_stock_setup.txt sha256=d3f4ea32c00cc8022c87de037ae8e7f7aa304262e329f751b9055ce80b449f93
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/mic-lab/codec_state_stock_running_app.txt sha256=e426610239b397ea50faae0a70ee1818d69d3e8301de5a920d94f8f51ad1cfc0
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/mic-lab/pcm0c_poll_app2.txt sha256=1610e92fb3872a1898e753db9c039df1cf8bf9e57bcf08fb02631c2c7ea0e8c1
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/mic-lab/pcm0c_poll_applause.txt sha256=f035ef95053f332dd9b2cbe93e5c194bc2ada921b7c2c607b92fe3f80047554f
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/mic-lab/lab_run_applause.txt sha256=139d4307572924cb7840b9212799c8e0d71300b01db2fe597af5bc4a51cddba0
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/mic-lab/mic_lab_applause.py sha256=5591b57bec4940bfb423d67db2acf2defe9cef68ccce5c3d3b9a13bb5c26b692
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/mic-lab/usb_card_handover_watch.txt sha256=c0024b806d5dcb68b7d94cb5abea69e2bc47c344843ba61599b1d778d5bbd0a7
+
 ## Corrections after the cold reader (2026-10-30 18:29 -0300) — this section supersedes the hand-off's open-items table
 
 A cold reader resumed from `docs/plans/2026-10-30-1905-handoff-s1-fase1-bateria2.md` alone and found
