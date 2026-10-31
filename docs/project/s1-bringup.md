@@ -1758,3 +1758,68 @@ them with their own refutation or artefact in this record, none on the command p
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/refute/telemetry-refute.txt sha256=3872acd4deeb1c145be7c6cbc8a351f7a1800108ff8f09560b40c2ad4488d16e
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/refute/audio-refute.txt sha256=9e471908e26afb7ad47e1703b6b7d3c0f156b2f50326da2cc1455b7bd49521ef
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/refute/cam-refute.txt sha256=4d7e048fa041d293410fc7126ef81037bee4c7e8f9b7d348eace795b5edeabf6
+
+## What closes phase 1, and the research that directs the console front (written 2026-10-31 18:4x; the research had lived only in the chat and a compaction summary — the owner's text, kept whole)
+
+**Left to close phase 1:** (1) one floor run, `bench.sh up` then `bench.sh floor` (~15 min, the owner watching), proving D1–D4 and
+D6–D8 and measuring the gimbal's retcode on sleep/wake (D5); (2) that run recorded with its artefacts; (3) the eighth gate (the diff
+outside the front's scope) is blocked by two earlier hand-offs in `docs/plans/`: the owner reopens the front with that directory in scope
+and marks them superseded, or accepts; (4) `/roadworthy:close` with the eight gates fresh. The robot's root adb (Wi-Fi or USB) comes back
+after a power cycle only through the app's Lab, the owner's hand. **Not a plan yet** for the console: by the house rite a plan has
+context, an impact sweep with commands and their output, changes per file, a scope in globs, acceptance in EARS form with the proving
+command, verification gates, out-of-scope and the overnight policy, written after every file to be changed is read whole and passed
+through the mechanical pre-flight. What follows is the research and the direction that plan starts from.
+
+### The research, as delivered to the owner on 2026-10-31 (morning), verbatim
+
+Pesquisa feita; o que as referências dizem converge e muda um detalhe do que eu tinha proposto. Resumo em uma linha: o estado da arte é
+um contrato único com evolução só aditiva, extensões por namespace tipadas no próprio contrato, e capacidades anunciadas no handshake para
+o cliente descobrir o que o corpo tem; contratos separados por dispositivo são o padrão apenas quando o transporte é genérico, o que não é
+o nosso caso.
+
+O que as fontes dizem
+
+- Protocolos JSON-RPC grandes (LSP, MCP) não fazem contrato por dispositivo: fazem um contrato com namespaces e negociação de
+  capacidades. O LSP marca métodos com prefixo `$/` como "dependentes de implementação", que um lado pode não suportar, e tem um bloco
+  `experimental` nas capacidades para funcionalidades que nem todo cliente adota; a regra é nunca assumir que o outro lado tem a função
+  sem checar as capacidades trocadas no `initialize` (especificação LSP 3.18, 3.17). O MCP copia o padrão: capacidades `experimental`
+  "coordenadas entre cliente e servidor", "não assuma presença sem checar" (MCP, capacidades). Mapeado para nós: as rotas do S1 entram
+  no contrato sob o namespace `s1.`, e o `hello` passa a anunciar as capacidades do corpo; o console mostra ou esconde controles por
+  capacidade, não por adivinhar o modelo.
+- Evolução aditiva é compatível; remoção e mudança de tipo não são (guia de compatibilidade do Google, AIP-180: adicionar métodos,
+  mensagens, campos e valores de enum dentro da mesma versão maior é permitido; remover ou mudar tipo não) (AIP-180, Google API design).
+  B é puramente aditivo; o risco que você perguntou ("peças que o pato não usa") não é incompatibilidade: é só superfície não
+  implementada, respondida com "método desconhecido", exatamente o que esses guias preveem.
+- Verificação de quebra de contrato em CI, a cada PR, é prática corrente no mundo Protobuf (`buf breaking`) (guia Protobuf). No nosso
+  mundo Rust o equivalente é `cargo-semver-checks` sobre a crate do contrato, que já tem lints específicas para enums e variantes
+  (cargo-semver-checks), somado a um teste de "fotografia" do `every_call()` serializado, para o PR mostrar o diff do fio.
+- `#[non_exhaustive]` versus `match` exaustivo: a literatura Rust trata o atributo como ferramenta para bibliotecas publicadas, onde
+  adicionar variante não pode quebrar terceiros (predr.ag, discussão interna do Rust). O nosso contrato é consumido dentro de um só
+  workspace; o `match` exaustivo nos transportes é o que obriga cada rota nova a ser classificada. Manter exaustivo é a escolha certa aqui.
+- ROS 2, o vizinho robótico: "use as interfaces padrão onde couberem; tipos próprios só quando semanticamente necessários; interfaces em
+  pacote próprio" (tutorial ROS 2); fabricantes publicam pacotes de interface por dispositivo (MotoROS2). Isso parece apoiar o contrato
+  separado, mas só funciona porque o transporte do ROS é genérico (qualquer tipo viaja). Os nossos transportes são concretos sobre
+  `proto::Call`; um contrato separado nos forçaria a forkar `mediad`, `btd` e `robotctl`. A lição aproveitável é a primeira metade: o
+  que é "de robô" usa nomes neutros (`robot.lights`, `robot.follow`, `robot.volume`); o que é só do S1 fica `s1.*`.
+
+O caminho, para um sênior que olha CI/CD, merges, extensibilidade, documentação e leitura por humanos e LLMs
+
+1. Um contrato (B), aditivo, com namespaces: rotas gerais com nome neutro em `robot.*`; rotas só do S1 em `s1.*`; variantes novas
+   agrupadas num bloco delimitado no fim do enum (merge com o upstream fica mecânico). Versão 44 → 45.
+2. Capacidades no `hello`: o corpo anuncia os namespaces e rotas que serve; `mediad`, `btd` e a página do console gateiam por isso
+   (padrão LSP/MCP), nunca por modelo.
+3. Portão de contrato em CI: `cargo semver-checks` na crate do contrato e a fotografia serializada de `every_call()`; toda rota nova
+   precisa de braço explícito nos transportes (o `match` exaustivo é o revisor automático) e de classificação de segurança.
+4. Documentação gerada do contrato, uma página por namespace, a partir dos próprios tipos (o repositório já faz isso com o manifesto de
+   políticas): uma fonte de verdade, legível por gente e por modelo.
+5. Contrato separado e via de passagem crua: descartados, com as razões acima.
+
+É B, feito do jeito que LSP e MCP fazem. Entra no plano da frente do console, após o fecho da Fase 1.
+
+### Also settled that morning
+- **Reuse the duck's own console**: `mediad` serves `webclient/index.html` on :8080 (WebRTC video, the control channel, state). The Hugging
+  Face `microduck-simulator` Space was looked at; the owner chose the duck's console. The console controls everything on the S1, and the
+  same system drives a duck if the owner buys that hardware; the brain lives above the contract, never inside `s1d`.
+- **Video**: the duck encodes with Rockchip's `mpph264enc`, absent on the S1. `s1-cam` becomes a `mediad` source; software H.264 is
+  measured first, then the Hantro encoder the stock uses (`hx280enc`) as a plugin if the CPU cannot carry it.
+- The 3D model in `~/Development/RoboMaster-S1/3D` (Sketchfab, visual only, 267 nodes, no articulation) is phase 5's input, not this front's.
