@@ -24,6 +24,8 @@ JOBS="${JOBS:-4}"
 # Instruction-set flags for the cross compiler. Empty = the compiler's baseline (the 2026-10-30 build:
 # 2342 ms per 320x320 frame on the S1, no NEON). The S1's Cortex-A7 has neon-vfpv4; the stage-12 lever
 # is ORT_ARCH_FLAGS="-march=armv7-a -mfpu=neon-vfpv4 -mfloat-abi=hard" into a second output directory.
+# They go on the cmake command line beside -Wno-psabi: a toolchain file's CMAKE_<LANG>_FLAGS_INIT is
+# ignored once -DCMAKE_<LANG>_FLAGS is given (CMake documents *_INIT as "used to initialize" only).
 ORT_ARCH_FLAGS="${ORT_ARCH_FLAGS:-}"
 
 if ! docker version >/dev/null 2>&1; then
@@ -55,8 +57,6 @@ SET(CMAKE_SYSTEM_VERSION 1)
 SET(CMAKE_SYSTEM_PROCESSOR armv7l)
 SET(CMAKE_C_COMPILER arm-linux-gnueabihf-gcc)
 SET(CMAKE_CXX_COMPILER arm-linux-gnueabihf-g++)
-SET(CMAKE_C_FLAGS_INIT "$ORT_ARCH_FLAGS")
-SET(CMAKE_CXX_FLAGS_INIT "$ORT_ARCH_FLAGS")
 SET(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
 SET(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
 SET(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
@@ -65,13 +65,17 @@ TC
 mkdir -p /build && cd /build
 cmake /src/cmake -G Ninja --compile-no-warning-as-error \
     -DCMAKE_TOOLCHAIN_FILE=/tool.cmake \
-    -DCMAKE_CXX_FLAGS=-Wno-psabi -DCMAKE_C_FLAGS=-Wno-psabi \
+    -DCMAKE_CXX_FLAGS="-Wno-psabi $ORT_ARCH_FLAGS" -DCMAKE_C_FLAGS="-Wno-psabi $ORT_ARCH_FLAGS" \
     -DCMAKE_BUILD_TYPE=Release \
     -Donnxruntime_BUILD_SHARED_LIB=ON \
     -Donnxruntime_BUILD_UNIT_TESTS=OFF \
     -Donnxruntime_ENABLE_CPUINFO=OFF \
     -Donnxruntime_ENABLE_PYTHON=OFF \
     -DPython_EXECUTABLE=/venv/bin/python3
+# The flags must be in the generated rules, or the build is the baseline under another name
+# (2026-10-31: the toolchain *_INIT route was silently overridden by -DCMAKE_C_FLAGS). No apostrophes
+# in this block: it is one single-quoted sh -c string.
+[ -z "$ORT_ARCH_FLAGS" ] || echo "arch flags in build.ninja: $(grep -c -F -- "$ORT_ARCH_FLAGS" /build/build.ninja) rules"
 ninja -j"$JOBS" onnxruntime
 ls -la /build/libonnxruntime.so*
 ' > "$OUT/build.log" 2>&1
