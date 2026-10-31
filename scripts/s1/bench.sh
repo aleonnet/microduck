@@ -108,10 +108,16 @@ e2e_robot() { local log="$1"; shift
 # day); the `sleep 1` inside the shell is what settles it. `--volume-control` only once stage 8's
 # `amixer contents` has named the speaker's control: until then `s1.volume` is refused by name and
 # the e2e item says so.
+# The control's name is quoted for the robot's shell: it has a space ("Speaker Volume", stage 8),
+# and unquoted it reached s1d as a second argument — the daemon refused it and died, and the stage
+# went on against a dead socket (2026-10-30, 21:58). So the launch is followed by `pidof`: a daemon
+# that did not come up ends the stage with the tail of its log, not with a riddle downstream.
 start_daemons() {
     : "${S1_BAUD:?S1_BAUD is the baud the capture stage measured with stty}"
-    sh_robot "($BB setsid $BB nohup $CHROOT_ENV /opt/robot/bin/s1d --port /dev/ttyS3 --baud $S1_BAUD --sounds /opt/robot/sounds ${S1_VOLUME_CONTROL:+--volume-control $S1_VOLUME_CONTROL} ${S1_ARGS:-} </dev/null >/data/s1d.log 2>&1 &); $BB sleep 1"
+    sh_robot "($BB setsid $BB nohup $CHROOT_ENV /opt/robot/bin/s1d --port /dev/ttyS3 --baud $S1_BAUD --sounds /opt/robot/sounds ${S1_VOLUME_CONTROL:+--volume-control '$S1_VOLUME_CONTROL'} ${S1_ARGS:-} </dev/null >/data/s1d.log 2>&1 &); $BB sleep 1"
     sleep 2
+    sh_robot "$BB pidof s1d >/dev/null && echo s1d_up || { echo S1D_DEAD; $BB tail -5 /data/s1d.log; }" | tee "$OUT/$stage/daemons.txt"
+    grep -q s1d_up "$OUT/$stage/daemons.txt" || { say "s1d did not come up — its log's tail is above and in daemons.txt"; exit 1; }
     sh_robot "($BB setsid $BB nohup $CHROOT_ENV /opt/robot/bin/netpadd </dev/null >/data/netpadd.log 2>&1 &); $BB sleep 1"; sleep 1
 }
 # The stock body process and its monitor stopped, as stage 4 does; prints STILL_ALIVE or
@@ -219,7 +225,7 @@ case "$stage" in
     say "collecting robot.state for 10 s"
     sh_robot "$BB timeout -t 10 $CHROOT_ENV /opt/robot/bin/robotctl monitor --json" > "$D/monitor.log" 2>&1 || true
     $A pull /data/s1d.log "$D/s1d.log" >/dev/null; $A pull /data/netpadd.log "$D/netpadd.log" >/dev/null
-    for f in "$D"/health.json "$D"/quack.txt "$D"/e2e.log "$D"/e2e_console.txt "$D"/monitor.log "$D"/s1d.log "$D"/netpadd.log; do art "$f"; done ;;
+    for f in "$D"/daemons.txt "$D"/health.json "$D"/quack.txt "$D"/e2e.log "$D"/e2e_console.txt "$D"/monitor.log "$D"/s1d.log "$D"/netpadd.log; do art "$f"; done ;;
 
   items)
     need_robot; D=$(dir items)
@@ -388,7 +394,7 @@ case "$stage" in
     $A pull /data/s1d_free.strace "$D/s1d_free_reads.strace" >/dev/null 2>&1 || true
     $A pull /data/s1d.log "$D/s1d.log" >/dev/null 2>&1 || true
     [ -f "$D/s1d_free_reads.strace" ] && scripts/s1/duml-strace.py "$D/s1d_free_reads.strace" gimbal_vs_attitude | tee "$D/gimbal_vs_attitude.txt"
-    for f in "$D"/stop.txt "$D"/samples.ndjson "$D"/verdict.txt "$D"/s1d_free_reads.strace "$D"/gimbal_vs_attitude.txt "$D"/s1d.log; do [ -f "$f" ] && art "$f" || true; done ;;
+    for f in "$D"/stop.txt "$D"/daemons.txt "$D"/samples.ndjson "$D"/verdict.txt "$D"/s1d_free_reads.strace "$D"/gimbal_vs_attitude.txt "$D"/s1d.log; do [ -f "$f" ] && art "$f" || true; done ;;
 
   verify-record)
     md="${1:?usage: bench.sh verify-record <record.md>}"

@@ -92,7 +92,13 @@ def run(args):
 
     period = 1.0 / args.rate
     try:
-        rpc.call("robot.enable", {"on": True, "toggle": False})
+        try:
+            rpc.call("robot.enable", {"on": True, "toggle": False})
+        except (ConnectionError, OSError, RuntimeError) as e:
+            # An adb forward accepts the connection whether or not the daemon is behind it; the
+            # daemon's absence shows here, on the first call (2026-10-30: s1d had died at start).
+            print(f"no daemon behind {args.tcp or args.socket}: {e}", file=sys.stderr)
+            return 2
         # The arm sequence (work mode, gimbal free mode, first heartbeat) goes out in the next tick.
         time.sleep(1.0)
         # Four legs: centre, left, right, centre — each a quarter of the sweep; pitch moves on the

@@ -35,6 +35,7 @@ case "$1" in
       *"dd if="*) echo "0000000000000000000000000000000000000000000000000000000000000001  /sdcard/bk/system.img" ;;
       *getenforce*) echo Disabled; echo EXEC_IN_DATA_OK ;;
       *"test -"*) exit 0 ;;
+      *"pidof s1d >/dev/null"*) echo s1d_up ;;
       *gst-launch-1.0*num-buffers=300*) echo "Execution ended after 0:00:12.500000000" ;;
       *) echo "shim: $*" ;;
     esac ;;
@@ -44,7 +45,8 @@ chmod 755 "$WORK/bin/adb"
 export PATH="$WORK/bin:$PATH"
 # The e2e driver is pointed at ports nothing answers on: port 1 is reserved and refuses, so even a
 # forward left by an earlier robot session on 9000 cannot make this self-test drive a robot.
-export S1_HOST=shim:5555 S1_OUT="$WORK/out" S1_BAUD=921600 S1_UDP=127.0.0.1:1 S1_TCP=127.0.0.1:1
+# The speaker control's name carries a space, as stage 8 found it: the launch line must quote it.
+export S1_HOST=shim:5555 S1_OUT="$WORK/out" S1_BAUD=921600 S1_UDP=127.0.0.1:1 S1_TCP=127.0.0.1:1 S1_VOLUME_CONTROL="Speaker Volume"
 
 fail=0
 run() { # run <stage> [args]: the stage must exit 0; `asked` then reads only what this stage sent
@@ -79,7 +81,8 @@ asked stop "stop dji_hdvt_uav"
 run drive
 # After a reboot the chroot has no /dev: the stage must re-make the mounts before the daemon starts.
 asked drive "|| mount -o bind /dev /data/debian/dev"
-asked drive "chroot /data/debian /usr/bin/env PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin /opt/robot/bin/s1d --port /dev/ttyS3 --baud 921600 --sounds /opt/robot/sounds"
+asked drive "chroot /data/debian /usr/bin/env PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin /opt/robot/bin/s1d --port /dev/ttyS3 --baud 921600 --sounds /opt/robot/sounds --volume-control 'Speaker Volume'"
+asked drive "pidof s1d >/dev/null && echo s1d_up"
 asked drive "chroot /data/debian /usr/bin/env PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin /opt/robot/bin/netpadd"
 asked drive "robotctl health --json"
 asked drive "robotctl quack"
@@ -107,7 +110,8 @@ asked telemetry-gimbal "strace -f -tt -e trace=read -s 256 -o /data/hdvt_gimbal.
 # strace, the driver pointed at a port that refuses — the stage records that and goes on.
 run telemetry-free
 asked telemetry-free "stop dji_hdvt_uav"
-asked telemetry-free "chroot /data/debian /usr/bin/env PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin /opt/robot/bin/s1d --port /dev/ttyS3 --baud 921600 --sounds /opt/robot/sounds"
+asked telemetry-free "chroot /data/debian /usr/bin/env PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin /opt/robot/bin/s1d --port /dev/ttyS3 --baud 921600 --sounds /opt/robot/sounds --volume-control 'Speaker Volume'"
+asked telemetry-free "pidof s1d >/dev/null && echo s1d_up"
 asked telemetry-free "strace -f -tt -e trace=read -s 256 -o /data/s1d_free.strace -p"
 grep -q "telemetry-free rc=2" "$WORK/telemetry-free.txt" && echo "selftest: telemetry-free recorded the unreachable daemon" || { echo "selftest: telemetry-free did NOT record the unreachable daemon"; fail=1; }
 # The two judges over cases built in the scripts themselves.
