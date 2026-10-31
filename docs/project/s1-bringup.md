@@ -931,7 +931,62 @@ worth pursuing.
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/usb-coral/host_forced_coral_on_microusb_otg2.txt sha256=33bbee9d058fa1e01817b424b83972d67898e0261f84597db5e65917518b5258
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/usb-coral/kmsg_otg2.txt sha256=84322dad3664a6ca2d2e7f308cbeeee14fddfaf65e70f2beae02b53f105e5f0a
 
-- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/usb-coral/host_forced_coral_on_microusb.txt sha256=
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/usb-coral/host_forced_coral_on_microusb.txt sha256=f4719eeb60126488cfdb359ccc7eae325331dbc9fc35477eefb495ed6665eb6f
+
+## Item 4, the research side closed: no software path makes either port host the Coral (2026-10-31, 01:3x)
+
+The owner's order after the two dark LEDs: exhaust the research before accepting the "no". Four
+fronts, each with its artefact below, read whole and measured on the robot with the stock alive
+(it rebooted into stock between the last test and this one: uptime 2612 s, the eight `dji_*`
+processes up, `s1d` down).
+
+- **The kernel** (inflated from the dump). The OTG driver does know a VBUS switch: the request
+  labels `OTG EN` and `OTG 7.5V` sit right after `USB_OTG: set vbus power %x`. But the live GPIO
+  table (`/sys/kernel/debug/gpio`) holds no pin under either label; the only pin the driver owns
+  is `gpio-137`, the ID pin. So on this board "set vbus power 1" flips the controller's port-power
+  bit and drives no switch — there is no 5 V for it to turn on, which is what the Coral's LED
+  measured twice. The driver exposes one knob (`otg_state`; its directory lists driver, modalias,
+  otg_state, power, subsystem, uevent) and is built in (no `/sys/module/comip_otg`).
+- **`dji_sys`.** "set OTG_POWER up/down" lives in `sys_m4.c`, the upgrade path of an "M4" that the
+  daemon looks for with `busybox lsusb | grep VID:PID` — the USB device the hardware config names
+  as `dji_m4_up`: channel usb, device "TOF", vid `ff00` pid `00ff`, host "bvision". With the stock
+  alive, lsusb shows the Genesys hub and the Wi-Fi and nothing else: this S1 carries no such
+  device, and the config names no GPIO for its power (its only `*_gpio` keys: reset 108, program
+  221, reset 228, pairing 185). The eight GPIOs exported through sysfs (32–35, 145, 146 out; 128,
+  130 in) are not exported by `init.rc` (zero gpio lines), so they are `dji_sys`'s own — M0
+  power/reset/switch, MA2100 reset, LTC and env-temp program, per its strings — and none maps to a
+  USB rail by any name we hold. Flipping them blind is a shot at the power-management pins; not
+  done. "add OTG udisk", `/data/usbstorage`, `CAM_USB_MODE_UMS`, `test_otg_for_glass.sh` are the
+  shared firmware's other products (goggles, camera); no such script exists on this robot's disk.
+- **The USB-C at the back.** The manual (p.18) lists on the intelligent controller: microSD slot,
+  Camera Port, Speaker Port, autonomous-program button, antennas, **"Reserved Port — Unused
+  port"**, CAN Bus (gimbal), Micro USB ("used to connect to the computer"), connect-mode switch,
+  connect button — no USB-C by name. Hackaday's teardown: "The Intelligent Controller has three
+  USB C type connectors. One of these connectors is used with the camera", the other two unknown
+  to the author, and the camera's USB-C cable "appears to be unique to this device". The camera is
+  MIPI on `comip_cam` (`ov5695`, the only sensor the kernel names; `ENUMINPUT 1` → EINVAL), so a
+  USB-C shape on this controller carries DJI's own signals, not USB. Measured here: 5 V present,
+  no USB event on either bus in 40 s. The back USB-C is the manual's reserved port: power plus
+  proprietary signals; nothing in software reaches it.
+- **The internal hub.** Genesys `05e3:0619`, four ports, the Wi-Fi on port 4, ports 1–3 free and
+  powered (the hub driver powers every port at init; a device there would have enumerated). They
+  are the only idle USB host data lines in the robot, and they are on the board.
+
+**So: no software path.** Two hardware paths, both the owner's call: (a) no board change — a
+**self-powered micro-USB OTG hub** between the micro-USB (host forced by `otg_state`, or a true
+OTG plug that grounds ID) and the Coral: the hub feeds the Coral, the robot gives data only;
+unverified until the part is in the house. (b) Board work — tapping hub ports 1–3; not proposed.
+Item 4 stays open on (a); whether to buy the part is the owner's decision, with stage 12's
+2342 ms/frame on the table. Web sources read: the Hackaday project
+(<https://hackaday.io/project/167276-dji-robomaster-s1-hacks>), the HU-ICT-LAB wiki on the EP's
+USB link (RNDIS, robot at 192.168.42.2, a type-A host on the other side —
+<https://github-wiki-see.page/m/HU-ICT-LAB/RobotWars/wiki/Controlling-the-RoboMaster-with-an-External-Microcontroller>),
+and the USB id list for `03e7` (Intel/Movidius — this S1's MA2100 is on SPI per `dji_sys`, not USB).
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/usb-coral/stock_alive_usb_tree_gpios.txt sha256=4927fa717368c796d73241e706d181841aafc6410c54182e9bfd2305cda2464e
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/usb-coral/kernel_otg_strings.txt sha256=94ae4998c98d20a76054735cde3146865ea9e98c61af39ae7c0715f74744e66f
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/usb-coral/dji_sys_otg_strings.txt sha256=be925a25b493f79062a8333d6b89e0b594b8e0c96f52b031ab9d48cae84949dd
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/usb-coral/dji_json_gpio_m4.txt sha256=c60e507eeef6bc2256125ce0b03c547829e0d87c54a64597a060462bd7fac207
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/usb-coral/manual_ports.txt sha256=c9a007dcaf5aeed4be05e9158e3ca29478b3d44b672449dd1ecd398d0d0ad402
 
 ## Corrections after the cold reader (2026-10-30 18:29 -0300) — this section supersedes the hand-off's open-items table
 
