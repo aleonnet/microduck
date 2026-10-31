@@ -66,7 +66,7 @@ stages 5, 6 and 8.
 | 4 | `stop` | `hdvt_uav` and `monitor` stopped; nobody holds `ttyS3` | **done 2026-10-30** (below) |
 | 5 | `drive` + `items` | `s1d` + `netpadd` + `robotctl health` in the chroot; `s1-e2e robot` from the Mac: the pad over UDP into `netpadd` (wheels, turn, strafe, gimbal, lights, sounds, arm/disarm), the S1 list through `s1ctl --tcp`, telemetry | **wheels and gimbal done 2026-10-30** (below, owner's witness); **every item pre-tested on the Mac** (`s1-e2e fake`, 40 of 40, below); the robot session runs the same program minus the two wire-only items (a test holds the two lists equal); telemetry **done 2026-10-30 (night)**: the controller's own boot-time push and the gimbal's `0x04/0x05` decoded by layout, held to two real captures and confirmed on the robot (stages `telemetry`, `telemetry-gimbal`, below) |
 | 6 | `events` | `robotctl flashlight` lights the LEDs; every effect of the real `0x3f/0x32`; armour hits, IR and the button as `s1.event` | **done 2026-10-30 (night)**, the owner watching: five body-LED effects, the launcher's trail light, 23 armour hits on the four plates, two button presses and the infrared hits as `s1.event` (section "Robot session") |
-| 7 | `camera` | formats listed; `s1-cam` replays the stock camera process's own sequence (input, three private controls, the format, five MMAP buffers), holds every answer to the recording and streams only when all matched: three frames to files and ten seconds of rate | **`s1-cam` built and pre-tested on the Mac 2026-10-31 00:xx** (section "Item 2"); the frame waits for the next power-on |
+| 7 | `camera` | formats listed; `s1-cam` replays the stock camera process's own sequence (input, three private controls, the format, five MMAP buffers), holds every answer to the recording and streams only when all matched: three frames to files and ten seconds of rate | **done 2026-10-31 00:4x–00:5x** (section "Item 2"): the whole sequence matched the recording, 30.1 fps, 395 frames, 0 dropped, CPU 0.07 s in 13 s, no reboot; the first frame has the owner's Mandalorian in it (`frame.png`) |
 | 8 | `audio` | mic as a 60 s stream through `arecord`; `aplay` while driving, CPU sampled | speaker **proven** (owner, four times); mic: device `hw:0,0` right channel, no signal yet (2026-10-30) |
 | 9 | `app` | what the DJI app does with the stock stopped | pending (informative) |
 | 10 | `restore` | reboot brings the stock back; the app drives | measured twice 2026-10-30 (stock back, app drove), artefact pending |
@@ -788,7 +788,7 @@ by hand with the owner watching the gimbal, then a 25 s tilt window.
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-free-20261030-221150/s1d_tilt_reads.strace sha256=967e5117009f37bd0634e1c0dbbc1340b21c277ccfc52dbf4b8ed03ef5847a88
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-free-20261030-221150/tilt_gimbal_vs_attitude.txt sha256=d62b4154c67fbb13feef09c98035444e4ae3d0fa56040a479c53ddba2684b7e8
 
-## Item 2, the camera: `s1-cam` built on the Mac, the robot's turn next (2026-10-31, 00:4x–01:3x)
+## Item 2, the camera: `s1-cam`, and the first picture out of the S1 (2026-10-31, 00:4x–00:5x)
 
 The owner's design decision (00:4x): 720p NV12 mirrors the duck (`mediad` captures 1280×720 and
 letterboxes it into the detector's 320×320 in one pass, `mediad/src/detect.rs`); what a viewer or
@@ -826,12 +826,34 @@ dequeue and its requeue); no resolution the stock never showed goes to the robot
   generic stream is asked. `scripts/s1/cam-refute.sh`: the recording's frame size planted wrong →
   the sequence tests fail naming `1382432`; `VIDIOC_S_FMT` planted wrong → the oracle test fails
   naming it; both files restored by hash.
-- **Not done:** the robot. It was powered off when the code was ready; the next power-on is the
-  clean boot the stage wants (`/dev/video0` answered `ENODEV` after the stock camera process was
-  killed twice on 2026-10-30), and the run is `s1-push.sh` then `bench.sh camera`: three frames,
-  a PNG the owner judges, and the rate. Out of scope: the 1 Hz private control the stock issues
-  after the stream (`+0x1928`, four values; sensor register reads by the look of it) and any
-  other resolution.
+- **On the robot (2026-10-31 00:4x–00:5x, a clean boot, the stock camera process stopped by the
+  stage).** Every one of the 27 steps answered as the recording says, the stream went on, and the
+  driver delivered **30.1 fps** (302 frames in 10.03 s), 395 frames in all with **no sequence gap**,
+  the process at 0.004 s user + 0.071 s system CPU over 13.2 s of wall — the capture itself costs
+  the S1 under one percent of a core; and **no reboot**. First run: the three saved frames were the
+  first three off the sensor and came out dark (frame 0 at a mean luma of 4/255, frames 1–2 at 21,
+  max 82 — the exposure still settling); `s1-cam` now dequeues and returns 90 frames (3 s) before
+  saving (`--warmup`), and the second run's frames read a mean luma of 94 with highlights at 255:
+  a picture. **`frame.png` is the owner's Mandalorian figure standing in front of the robot,
+  sharp, on a white board** — the first image out of the S1 by our path, judged by the owner in
+  the chat ("está lá!"). Two things the bytes told: the frame is NV12 1280×720 (1 382 400 bytes)
+  plus **32 trailing bytes** the driver appends — the same every frame, `20 0a 98 07 …` = 2592,
+  1944 (the sensor's full size), then small words that look like exposure/gain statistics; the
+  "1920 bytes per line" the driver reports is the row of luma plus chroma, not the luma stride
+  (`ffmpeg -pix_fmt nv12 -s 1280x720` reads it straight, warning about the 32 leftovers). The
+  3 s warm-up is this driver's measured behaviour; what the stock does instead is the 1 Hz
+  private control after the stream (`+0x1928`, four values whose answers look like sensor
+  register reads — an exposure loop of its own, by the look of it), left out of scope with any
+  other resolution. Stage 11's 720p half is this measurement; its 360p half does not exist (the
+  stock never showed 360p and no other format goes to the robot).
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/camera/cmd.txt sha256=27e1b78908fee8f94dfb2c330e5448a3dee3fc3c47469e7101541beca9eab5bd
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/camera/fmt.txt sha256=e1c104b0ffd723bfd1b0339ae36122bde5172a3961f6d054529bd12975d25dd4
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/camera/formats.txt sha256=25529c790da242980f878fed2e6b57f6574e92b1bdbc6f49a1d0258e4f955fc1
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/camera/s1-cam.json sha256=fefcb742b5b076437a921678d40829b8302b75c2cb9eb4390ffdea47d89e6e0d
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/camera/frame_000.nv12 sha256=e53da8762d83ce4cbe06d54fe69ba21b5f6bb8c62971edf41cf27a4ebeceb8b4
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/camera/frame_001.nv12 sha256=11e7ebc7c6c43f5325c0d01bbfdc43196e1a5ee546c31831233163bf31f5bb1e
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/camera/frame_002.nv12 sha256=24bce74213a9fe5d282ac02f5004026c722257fab8138203a4c6bfce8f521fb7
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/camera/frame.png sha256=f563fbbf553f00a3965d76537dfdcd67d974e4514d47a0c34001af1832d94b2b
 
 ## Corrections after the cold reader (2026-10-30 18:29 -0300) — this section supersedes the hand-off's open-items table
 

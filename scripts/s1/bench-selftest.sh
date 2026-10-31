@@ -95,7 +95,7 @@ asked events "cat /dev/input/event0"
 run camera
 asked camera "v4l2-ctl -d /dev/video0 --list-formats-ext"
 # The frame comes from s1-cam replaying the stock's sequence (three frames, ten seconds of rate), never from a generic tool.
-asked camera "/opt/robot/bin/s1-cam --device /dev/video0 --frames 3 --seconds 10 --out /tmp/cam"
+asked camera "/opt/robot/bin/s1-cam --device /dev/video0 --warmup 90 --frames 3 --seconds 10 --out /tmp/cam"
 [ -f "$S1_OUT/camera/frame.png" ] && echo "selftest: camera converted the frame to PNG" || { echo "selftest: camera did NOT produce frame.png"; fail=1; }
 # Stage 7 must NOT stream with a generic tool (it rebooted the robot twice): no S_FMT, no mmap stream.
 grep -qE -- "--set-fmt-video|--stream-mmap" "$ADB_SHIM_LOG" && { echo "selftest: camera still streams with v4l2-ctl"; fail=1; } || echo "selftest: camera stops before the stream"

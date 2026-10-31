@@ -27,6 +27,11 @@ fn main() -> std::process::ExitCode {
     struct Args {
         #[arg(long, default_value = "/dev/video0")]
         device: String,
+        /// Frames dequeued and given straight back before any is saved: the first frames off
+        /// this sensor are dark (2026-10-31: frame 0 at a mean luma of 4/255, frames 1–2 at 21,
+        /// the exposure still settling), so the saved ones come after a warm-up.
+        #[arg(long, default_value_t = 90)]
+        warmup: u32,
         /// Frames to save before the rate is measured.
         #[arg(long, default_value_t = 3)]
         frames: u32,
@@ -87,6 +92,7 @@ fn main() -> std::process::ExitCode {
     }
 
     let mut saved = Vec::new();
+    let mut warmed = 0u32;
     let mut first_sequence = None;
     let mut last_sequence = None;
     let mut counted = 0u64;
@@ -113,7 +119,12 @@ fn main() -> std::process::ExitCode {
         let (index, sequence, len) = (frame.index, frame.sequence, frame.data.len());
         first_sequence.get_or_insert(sequence);
         last_sequence = Some(sequence);
-        if (saved.len() as u32) < args.frames {
+        if warmed < args.warmup {
+            warmed += 1;
+            if warmed == args.warmup && args.frames == 0 {
+                measuring_from = Some(Instant::now());
+            }
+        } else if (saved.len() as u32) < args.frames {
             let path = args.out.join(format!("frame_{:03}.nv12", saved.len()));
             if let Err(e) = std::fs::write(&path, frame.data) {
                 println!(
@@ -153,12 +164,13 @@ fn main() -> std::process::ExitCode {
         (Some(a), Some(b)) => b.wrapping_sub(a) as u64 + 1,
         _ => 0,
     };
-    let delivered = counted + saved.len() as u64;
+    let delivered = counted + saved.len() as u64 + u64::from(warmed);
     let report = serde_json::json!({
         "streamed": true,
         "format": {"width": session.format.width, "height": session.format.height,
                    "fourcc": "NV12", "field": session.format.field,
                    "bytesperline": session.format.bytesperline, "sizeimage": session.format.sizeimage},
+        "warmup_frames": warmed,
         "frames_saved": saved,
         "rate": {"frames": counted, "seconds": measured_s,
                  "fps": if measured_s > 0.0 { counted as f64 / measured_s } else { 0.0 }},

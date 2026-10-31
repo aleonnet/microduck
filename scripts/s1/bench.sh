@@ -278,10 +278,10 @@ case "$stage" in
     # `s1-cam` (s1-push.sh installs it) replays the stock camera process's own sequence — input,
     # the three private controls, the format with its field and colourspace, five MMAP buffers —
     # holding every answer to the recording and switching the stream on only when all matched; a
-    # divergence is JSON on stdout, exit 3, nothing streamed. Three frames saved, then 10 s of
-    # rate. Paths named to it are the chroot's. Without the binary the stage records the refusal.
+    # divergence is JSON on stdout, exit 3, nothing streamed. 90 frames of warm-up (the first
+    # ones off this sensor are dark, 2026-10-31), three frames saved, then 10 s of rate. Paths named to it are the chroot's. Without the binary the stage records the refusal.
     if $A shell "test -x $CHROOT/opt/robot/bin/s1-cam" 2>/dev/null; then
-        sh_robot "$CHROOT_ENV /opt/robot/bin/s1-cam --device /dev/video0 --frames 3 --seconds 10 --out /tmp/cam" | tee "$D/s1-cam.json" || say "s1-cam rc=$? — the report is in s1-cam.json"
+        sh_robot "$CHROOT_ENV /opt/robot/bin/s1-cam --device /dev/video0 --warmup 90 --frames 3 --seconds 10 --out /tmp/cam" | tee "$D/s1-cam.json" || say "s1-cam rc=$? — the report is in s1-cam.json"
         for i in 0 1 2; do $A pull "$CHROOT/tmp/cam/frame_00$i.nv12" "$D/frame_00$i.nv12" >/dev/null 2>&1 || true; done
         # NV12 720p as the driver declared it (1920 bytes a line, 1382432 a frame); the owner judges the PNG
         [ -f "$D/frame_000.nv12" ] && ffmpeg -loglevel error -y -f rawvideo -pix_fmt nv12 -s "$geo" -i "$D/frame_000.nv12" "$D/frame.png" || true
