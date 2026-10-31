@@ -1300,6 +1300,45 @@ re-enabled it): to watch the battery level at the next power-on before reading m
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/infer/offboard.txt sha256=a07594a8bdeb7b15c775bd87d3bd42db5de932fcf35580f587f10f6abc07dc91
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/onnxruntime-neon/libonnxruntime.sha256 sha256=bd763f0599b3dee27e24d5a5cb5b8fa5da53ff770758de0d8ba7e475df575956
 
+## Floor session, part 1 (2026-10-31, 13:5x–14:1x): F1 both ways and the volume proven, F6 did not move, the stock's mixer state saved
+
+Robot on the floor (track 5 m ahead, 40 cm behind, 50 cm wide), rebooted into stock, root adb through
+the Lab, stock stopped, our daemons up (health ok, 12.46 V / 97 %, 99.98 Hz), armed by `robotctl robot
+enable`, the S1 list driven from the Mac through the forwarded socket.
+
+- **Stock mixer state saved with ALSA's own tool** while the stock was alive: `alsactl store` →
+  `alsa/asound.state.stock` (57 controls). This is what the daemon restores at start (to do), instead
+  of relying on `dji_camera` having run.
+- **F1 chassis follows gimbal ✅ with a finding.** `s1.follow gimbal_lead`, then `robot.head` yaw
+  +45° (duck left): the chassis turned left — and kept turning, to −120°, stopping only when the
+  head was sent back to 0 (gimbal-vs-chassis stayed within −5..+1°). Cause, read in `tick.rs`: in
+  this mode the loop re-sends the gimbal target every 100 ms **relative to the chassis**, so the
+  body chases a target that moves with it. **Fix to make in the daemon:** in `gimbal_lead` the head
+  target is a ground-frame angle (or sent once), with a test. `s1ctl gimbal speed 30 0` moved the
+  gimbal only ~1° (one frame of a rate command; the SDK streams it) — to document in the list.
+- **F1 gimbal follows chassis ✅.** `s1.follow chassis_lead`, `robot.move` 0.3 m/s streamed from the
+  Mac: 0.99 m forward (the Mac-side loop ran ~2 s longer than intended), the gimbal lagged to −22°
+  and realigned to 0.0°. Driving on this floor: accelerometer deviation p50 0.045 g, p90 0.12 g
+  against 0.020 g still — the "on the floor" signature the lift rule needs (in the air, 2026-10-30:
+  spinning and still within 0.002 g of each other).
+- **F5 gimbal sleep/wake:** both accepted; the owner's confirmation of the fold is pending.
+- **Volume ✅, with a correction:** `s1.volume` was refused ("amixer exited with exit status: 1"):
+  `amixer sset` wants the *simple* control name, `Speaker`, not the `contents` name `Speaker
+  Volume` the bench exported since stage 8. Restarted with `--volume-control Speaker`: 50 % → 52 %
+  (16 of 31, −10 dB), 90 % → 28 of 31 (+2 dB), a quack at each; back to 65 % (the stock's 20).
+  **To fix in the bench:** `S1_VOLUME_CONTROL` and the self-test lines say `Speaker Volume`.
+- **F6 goto ✗ (accepted, did not move):** `s1.goto 1 0 0 --speed 0.3` accepted; odometry unchanged,
+  max |rpm| 31. Read in `tick.rs`: while armed the loop sends a wheel-speed (or follow) frame every
+  tick, zero twist included, over the controller's own position task. **Fix to make in the daemon:**
+  while a goto is active (until `--stop`, a new twist, or a timeout from distance/speed) the loop
+  keeps the heartbeat and sends no wheel command; test with the fake body.
+- **Not done yet in this session:** the lift capture (wheels at 0.15 m/s, owner lifts 10 cm for 4 s),
+  F12 (no load), the restore stage with artefact.
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/alsa/asound.state.stock sha256=759c335701cf82b1e634ff0459ac5221167a9bc69a069c1a765b5fc9fdbe01b3
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/floor/f1_gimbal_lead_head_telemetry.ndjson sha256=9209943d2905e26073e62e6db85bcfce2cfb2ce06ee559840cb53e0a502b34be
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/floor/f1_chassis_lead_drive.ndjson sha256=0d6ef3abb3c5e2b44f2e5be87f17a3823998a1553c29f1198febb8f3a8e74e3b
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/floor/goto1_telemetry.ndjson sha256=6953aafa1eb2618cac75832b9fe2b1700b19d88240625c5621ec103fe740cdf0
+
 ## Corrections after the cold reader (2026-10-30 18:29 -0300) — this section supersedes the hand-off's open-items table
 
 A cold reader resumed from `docs/plans/2026-10-30-1905-handoff-s1-fase1-bateria2.md` alone and found
