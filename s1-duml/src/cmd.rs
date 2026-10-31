@@ -187,11 +187,24 @@ pub fn chassis_speed(seq: u16, vx: f32, vy: f32, vyaw_deg_s: f32) -> Frame {
 /// coordinate frame 3, roll zero. This moved the gimbal on the bench (`poc_gim.bin`, yaw +15°, pitch
 /// +10°). Manual limits: yaw ±250°, pitch −20°…+35° — the caller clamps, this does not.
 pub fn gimbal_angles(seq: u16, yaw_ddeg: i16, pitch_ddeg: i16) -> Frame {
+    gimbal_angles_axes(seq, yaw_ddeg, pitch_ddeg, GIMBAL_AXES_BOTH)
+}
+
+/// Axis bits of `0x3f/0xb0`'s ctrl byte (`rm_define.gimbal_axis_*_maskbit`): yaw `0x01`, pitch `0x04`.
+pub const GIMBAL_AXES_BOTH: u8 = 0x05;
+pub const GIMBAL_AXIS_PITCH: u8 = 0x04;
+
+/// [`gimbal_angles`] for the given axes only. With `GIMBAL_AXES_BOTH` it is the PoC's frame byte
+/// for byte; with `GIMBAL_AXIS_PITCH` the yaw is left to the controller — what DJI's own library
+/// does while the gimbal follows the chassis (`rm_ctrl.py` `angle_ctrl`: "gimbal_yaw_follow_mode,
+/// the yaw ctrl invalid", the yaw bit cleared).
+pub fn gimbal_angles_axes(seq: u16, yaw_ddeg: i16, pitch_ddeg: i16, axes: u8) -> Frame {
     const ACTION_ID: u8 = 0x00;
     const CTRL_AND_FREQ: u8 = 0x08; // action_ctrl 0 | push_freq 2 << 2
-    const VALID_AND_FRAME: u8 = 0x1d; // yaw_valid | pitch_valid << 2 | coordinate 3 << 3
+    const COORDINATE: u8 = 3; // yaw relative to the chassis, pitch NED (`rm_define.gimbal_coodrdinate_3`)
+    let valid_and_frame: u8 = (COORDINATE << 3) | (axes & 0x07);
     const SPEED: u16 = 30;
-    let mut data = vec![ACTION_ID, CTRL_AND_FREQ, VALID_AND_FRAME];
+    let mut data = vec![ACTION_ID, CTRL_AND_FREQ, valid_and_frame];
     for v in [yaw_ddeg, 0, pitch_ddeg] {
         data.extend_from_slice(&v.to_le_bytes());
     }

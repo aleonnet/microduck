@@ -316,11 +316,12 @@ pub fn dispatch_s1(
                     clamp_speed(yaw_speed),
                     clamp_speed(pitch_speed),
                 )),
+                // A rate, re-sent by the loop every tick while fresh (one frame moved the gimbal
+                // about a degree on the robot, 2026-10-31); `stop` is the zero rate, sent once.
                 api::GimbalAction::Speed { yaw, pitch } => {
-                    let ddeg = |v: f64| (v.clamp(-540.0, 540.0) * 10.0).round() as i16;
-                    intents.request_frame(cmd::gimbal_speed(0, ddeg(yaw), ddeg(pitch), 0xdc));
+                    intents.set_gimbal_rate([yaw.clamp(-540.0, 540.0), pitch.clamp(-540.0, 540.0)]);
                 }
-                api::GimbalAction::Stop => intents.request_frame(cmd::gimbal_speed(0, 0, 0, 0)),
+                api::GimbalAction::Stop => intents.set_gimbal_rate([0.0; 2]),
                 api::GimbalAction::Sleep => {
                     intents.request_frame(cmd::gimbal_suspend_resume(0, true))
                 }
@@ -332,6 +333,7 @@ pub fn dispatch_s1(
         }
         S1Call::Goto(p) => {
             if p.stop {
+                intents.stop_position_task();
                 intents.request_frame(cmd::chassis_position_stop(0, TASK_ID));
                 return accepted(id);
             }
@@ -351,6 +353,13 @@ pub fn dispatch_s1(
                 vel,
                 omega,
             ));
+            // The wheels are the controller's until the task could have finished (distance at
+            // the asked speed, turn at the asked rate, two seconds of slack), until `--stop`, or
+            // until a driver asks for motion.
+            let travel = p.x.hypot(p.y) / f64::from(vel) * 100.0
+                + f64::from(yaw_ddeg.unsigned_abs()) / f64::from(omega)
+                + 2.0;
+            intents.start_position_task(std::time::Duration::from_secs_f64(travel));
             accepted(id)
         }
         S1Call::Lights(p) => {
@@ -653,8 +662,19 @@ pub fn dispatch(
             id,
             "this body neither sits nor powers itself off; use robot.relax",
         ),
-        proto::Call::RobotLook(_) => {
-            refused(id, "gaze on the gimbal arrives in phase 2; send robot.head")
+        // The gaze form of `robot.head`: the point becomes the two gimbal angles and feeds the
+        // same slot, and the answer is the contract's `LookResult` — the shape `robotctl robot
+        // look` decodes (an `IntentResult` here failed it with "missing field `head`" on the
+        // robot, 2026-10-31).
+        proto::Call::RobotLook(p) => {
+            let (head, clamped) = crate::tick::gaze_head(p);
+            intents.set_head([
+                head.neck_pitch,
+                head.head_pitch,
+                head.head_yaw,
+                head.head_roll,
+            ]);
+            proto::Response::ok(Some(id), &proto::LookResult { head, clamped })
         }
         proto::Call::RobotSetMode(_) => refused(id, "this body is always on wheels"),
         // The skill table and the pad bindings: truthfully empty — this body has no one-shot

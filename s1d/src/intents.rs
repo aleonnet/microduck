@@ -9,7 +9,7 @@
 
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -91,6 +91,18 @@ pub struct Intents {
     /// with the muzzle light and the shot sound in step with the launcher's own cadence. Taken
     /// once; zero is none.
     volley: AtomicU8,
+    /// Until when a position task of the motion controller (`s1.goto`) owns the wheels, in
+    /// microseconds since `epoch`; zero is none. While it runs the loop sends **no** wheel or
+    /// follow frame — measured 2026-10-31 on the floor: a goto accepted while the loop kept
+    /// sending zero wheel speeds every tick never moved the robot, the controller's task being
+    /// overwritten a hundred times a second. DJI's own library sends no wheel speeds during a
+    /// `move`. A new twist or direct wheel speeds take the wheels back.
+    position_task_until_us: AtomicU64,
+    /// `s1.gimbal speed`: a rate for the gimbal, degrees per second `[yaw, pitch]` in DJI's signs,
+    /// stamped like the twist. One `0x04/0x0c` moved the gimbal about a degree on the robot
+    /// (2026-10-31): the controller applies a rate for one short period, so the loop re-sends it
+    /// every tick while it is fresher than the deadman, as the app re-sends the stick.
+    gimbal_rate: ArcSwap<Stamped<[f64; 2]>>,
 }
 
 /// What the loop reads at the top of a tick.
@@ -104,6 +116,10 @@ pub struct Snapshot {
     pub follow: FollowMode,
     pub wheels: Option<[i16; 4]>,
     pub wheels_age: Duration,
+    /// A position task owns the wheels: the loop sends no wheel or follow frame.
+    pub position_task: bool,
+    pub gimbal_rate: [f64; 2],
+    pub gimbal_rate_age: Duration,
 }
 
 impl Default for Intents {
@@ -135,7 +151,41 @@ impl Intents {
                 at_us: 0,
             }),
             volley: AtomicU8::new(0),
+            position_task_until_us: AtomicU64::new(0),
+            gimbal_rate: ArcSwap::from_pointee(Stamped {
+                value: [0.0; 2],
+                at_us: 0,
+            }),
         }
+    }
+
+    /// `[yaw, pitch]` degrees per second, DJI's signs; zero is `stop`.
+    pub fn set_gimbal_rate(&self, rate: [f64; 2]) {
+        self.gimbal_rate.store(Arc::new(Stamped {
+            value: rate,
+            at_us: self.now_us(),
+        }));
+    }
+
+    /// `s1.goto`: the controller's position task owns the wheels for `timeout` at most — the
+    /// caller derives it from distance and speed with slack, so a task the controller abandons
+    /// without telling us does not leave the chassis deaf to the twist for ever.
+    pub fn start_position_task(&self, timeout: Duration) {
+        let until = self
+            .now_us()
+            .saturating_add(timeout.as_micros() as u64)
+            .max(1);
+        self.position_task_until_us.store(until, Ordering::Relaxed);
+    }
+
+    /// `s1.goto --stop`, or anything that takes the wheels back.
+    pub fn stop_position_task(&self) {
+        self.position_task_until_us.store(0, Ordering::Relaxed);
+    }
+
+    pub fn position_task_active(&self) -> bool {
+        let until = self.position_task_until_us.load(Ordering::Relaxed);
+        until != 0 && self.now_us() < until
     }
 
     /// `shots` just asked of the launcher: the loop lights and sounds each one.
@@ -155,6 +205,11 @@ impl Intents {
     }
 
     pub fn set_twist(&self, twist: [f64; 3]) {
+        // A driver asking for motion takes the wheels back from a position task; the zero twist
+        // a pad streams at rest does not (it would cancel every goto within a tick).
+        if twist != [0.0; 3] {
+            self.stop_position_task();
+        }
         self.twist.store(Arc::new(Stamped {
             value: twist,
             at_us: self.now_us(),
@@ -162,6 +217,9 @@ impl Intents {
     }
 
     pub fn set_wheels(&self, rpm: [i16; 4]) {
+        if rpm != [0; 4] {
+            self.stop_position_task();
+        }
         self.wheels.store(Arc::new(Stamped {
             value: Some(rpm),
             at_us: self.now_us(),
@@ -242,6 +300,7 @@ impl Intents {
         let twist = self.twist.load();
         let head = self.head.load();
         let wheels = self.wheels.load();
+        let rate = self.gimbal_rate.load();
         Snapshot {
             twist: twist.value,
             twist_age: Duration::from_micros(now.saturating_sub(twist.at_us)),
@@ -251,6 +310,9 @@ impl Intents {
             follow: self.follow(),
             wheels: wheels.value,
             wheels_age: Duration::from_micros(now.saturating_sub(wheels.at_us)),
+            position_task: self.position_task_active(),
+            gimbal_rate: rate.value,
+            gimbal_rate_age: Duration::from_micros(now.saturating_sub(rate.at_us)),
         }
     }
 }

@@ -115,6 +115,9 @@ const DDS_RETRY: Duration = Duration::from_secs(5);
 /// The gimbal command is an action; it is re-sent at this rate while the target is unchanged, and
 /// at once when it changes. The PoC sent it at 20 Hz.
 const GIMBAL_HOLD_PERIOD: Duration = Duration::from_millis(100);
+/// The ctrl byte of the gimbal rate frame: DJI's `accel_contral_flag` (`rm_module.py` `Gimbal`,
+/// `0xdc`; bit 6 is cleared only when the sticks overlay).
+const GIMBAL_RATE_CTRL: u8 = 0xdc;
 /// The launcher's own cadence for a fire command of `n` shots: measured 2026-10-30 on the robot,
 /// `blaster --times 3` against a white wall gave three pairs of infrared-hit events 330 ms apart
 /// (`out/2026-10-30-poc2/items/F17_infrared_fire3.log`). The muzzle light and the shot sound
@@ -195,6 +198,40 @@ pub fn gimbal_ddeg(head: [f64; 4]) -> (i16, i16) {
         .round()
         .clamp(f64::from(PITCH_DDEG_MIN), f64::from(PITCH_DDEG_MAX)) as i16;
     (yaw, pitch)
+}
+
+/// `robot.look`: a trunk-frame point to the head joints the gimbal can reach. The duck's frame is
+/// `x` forward, `y` left, `z` up, and `HeadParams` turns left with a positive yaw and noses down
+/// with a positive pitch (`MoveParams::vyaw`'s own words; `gimbal_ddeg` flips both to DJI's). So a
+/// point to the left is `atan2(y, x)`, and a point below is a positive pitch, `−atan2(z, ‖xy‖)`.
+/// A two-axis gimbal has no neck and no roll: `neck_pitch` is accepted and ignored. The manual's
+/// travel clamps the gaze, and `clamped` says so — the contract's "closest gaze, not a lock". The
+/// origin itself has no direction and looks straight ahead.
+pub fn gaze_head(look: &duck_ipc_proto::LookParams) -> (duck_ipc_proto::HeadParams, bool) {
+    let flat = look.x.hypot(look.y);
+    let (yaw, pitch) = if flat == 0.0 && look.z == 0.0 {
+        (0.0, 0.0)
+    } else {
+        (look.y.atan2(look.x), -look.z.atan2(flat))
+    };
+    let yaw_max = f64::from(YAW_DDEG_MAX) / 10.0;
+    // DJI's pitch is up-positive: the duck's down-positive pitch runs from −max up to −min down.
+    let (pitch_min, pitch_max) = (
+        -f64::from(PITCH_DDEG_MAX) / 10.0,
+        -f64::from(PITCH_DDEG_MIN) / 10.0,
+    );
+    let yaw_deg = yaw.to_degrees().clamp(-yaw_max, yaw_max);
+    let pitch_deg = pitch.to_degrees().clamp(pitch_min, pitch_max);
+    let clamped = yaw_deg != yaw.to_degrees() || pitch_deg != pitch.to_degrees();
+    (
+        duck_ipc_proto::HeadParams {
+            neck_pitch: 0.0,
+            head_pitch: pitch_deg.to_radians(),
+            head_yaw: yaw_deg.to_radians(),
+            head_roll: 0.0,
+        },
+        clamped,
+    )
 }
 
 /// The inverse of [`gimbal_ddeg`]: the gimbal's own angle (DJI's signs, tenths) back to the
@@ -321,6 +358,7 @@ pub fn run(body: &mut dyn S1Body, state: Arc<State>, intents: Arc<Intents>, cfg:
     let mut inbox = vec![0u8; 4096];
     let mut telemetry = Telemetry::default();
     let mut last_gimbal: Option<((i16, i16), Instant)> = None;
+    let mut rate_was_on = false;
     let mut last_sub: Option<Instant> = None;
     let mut last_push: Option<Instant> = None;
     // The launcher's shots still to be lit and sounded.
@@ -388,7 +426,11 @@ pub fn run(body: &mut dyn S1Body, state: Arc<State>, intents: Arc<Intents>, cfg:
                 }
                 _ => None,
             };
+            // A position task of the controller (`s1.goto`) owns the wheels: no wheel or follow
+            // frame while it runs, or the task is overwritten every tick (floor, 2026-10-31).
+            let twist = if snap.position_task { [0.0; 3] } else { twist };
             match (direct, snap.follow, cfg.twist_mode) {
+                _ if snap.position_task => {}
                 (Some([fr, fl, bl, br]), _, _) => {
                     let s = w.seq(cmd::id::CHASSIS_WHEEL_SPEED);
                     w.send(cmd::chassis_wheel_speed(s, fr, fl, bl, br));
@@ -422,16 +464,62 @@ pub fn run(body: &mut dyn S1Body, state: Arc<State>, intents: Arc<Intents>, cfg:
             }
             state.applied_twist.store(Arc::new(twist));
 
-            let target = gimbal_ddeg(snap.head);
-            let due = match last_gimbal {
-                Some((prev, at)) => prev != target || at.elapsed() >= GIMBAL_HOLD_PERIOD,
-                None => true,
-            };
-            if due {
-                let s = w.seq(cmd::id::GIMBAL_ROTATE);
-                w.send(cmd::gimbal_angles(s, target.0, target.1));
-                state.gimbal_ddeg.store(Arc::new(target));
-                last_gimbal = Some((target, Instant::now()));
+            // The gimbal: a rate while one is fresh, else the angle target.
+            //
+            // The rate (`s1.gimbal speed`) goes out every tick while fresher than the deadman —
+            // one frame moved the gimbal about a degree on the robot (2026-10-31) — and the
+            // angle hold is silent meanwhile, or it would pull the gimbal back every 100 ms.
+            // When the rate ends (`stop`, or the deadman) one zero-rate frame goes out and the
+            // head target becomes where the gimbal is, read from its own push, so the hold does
+            // not snap it back to where it was before the rate.
+            let rate_fresh = snap.gimbal_rate_age <= cfg.deadman;
+            let rate_on = rate_fresh && snap.gimbal_rate != [0.0; 2];
+            if rate_on {
+                let ddeg = |v: f64| (v * 10.0).round() as i16;
+                let s = w.seq(cmd::id::GIMBAL_SPEED);
+                w.send(cmd::gimbal_speed(
+                    s,
+                    ddeg(snap.gimbal_rate[0]),
+                    ddeg(snap.gimbal_rate[1]),
+                    GIMBAL_RATE_CTRL,
+                ));
+                rate_was_on = true;
+            } else {
+                if rate_was_on {
+                    // DJI's own stop: a zero rate with ctrl `0x00` (`rm_ctrl.py` `_stop_rotate`:
+                    // `set_accel_ctrl(0, 0, 0x00)`), not the moving frame's flag.
+                    let s = w.seq(cmd::id::GIMBAL_SPEED);
+                    w.send(cmd::gimbal_speed(s, 0, 0, 0));
+                    if let Some(g) = state.telemetry.load().gimbal {
+                        intents.set_head(head_from_gimbal(g.yaw_vs_chassis_ddeg, g.pitch_ddeg));
+                    }
+                    rate_was_on = false;
+                    last_gimbal = None;
+                }
+                let target = gimbal_ddeg(snap.head);
+                // Where the gimbal leads, the chassis chases it and the target's yaw is relative
+                // to the chassis (coordinate 3): a re-send puts the target ahead of the new
+                // heading again, and the body turned without end on the floor (2026-10-31). There
+                // the target goes out once per change, as DJI's library sends one task. Where the
+                // chassis leads, the controller owns the yaw and only the pitch is ours
+                // (`rm_ctrl.py` `angle_ctrl` in `gimbal_yaw_follow_mode`).
+                let hold = snap.follow != FollowMode::GimbalLead;
+                let due = match last_gimbal {
+                    Some((prev, at)) => {
+                        prev != target || (hold && at.elapsed() >= GIMBAL_HOLD_PERIOD)
+                    }
+                    None => true,
+                };
+                if due {
+                    let axes = match snap.follow {
+                        FollowMode::ChassisLead => cmd::GIMBAL_AXIS_PITCH,
+                        _ => cmd::GIMBAL_AXES_BOTH,
+                    };
+                    let s = w.seq(cmd::id::GIMBAL_ROTATE);
+                    w.send(cmd::gimbal_angles_axes(s, target.0, target.1, axes));
+                    state.gimbal_ddeg.store(Arc::new(target));
+                    last_gimbal = Some((target, Instant::now()));
+                }
             }
         }
 

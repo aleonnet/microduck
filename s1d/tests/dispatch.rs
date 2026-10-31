@@ -117,3 +117,54 @@ fn flashlight_toggle_inverts_what_on_and_off_left() {
     let led = i.take_led().expect("a LED request");
     assert_ne!(led.effect, 0, "off, then toggle, must switch the LEDs on");
 }
+
+/// `robot.look` answers in the contract's shape — `LookResult { head, clamped }`, which is what
+/// `robotctl robot look` decodes — and aims the gimbal: a point ahead-left and slightly below the
+/// trunk is a positive `head_yaw` (left) and a positive `head_pitch` (down), handed to the same
+/// slot `robot.head` feeds. Before the fix the route refused with an `IntentResult`, and `robotctl`
+/// failed with "missing field `head`" on the robot (2026-10-31).
+#[test]
+fn look_answers_a_look_result_and_aims_the_gimbal() {
+    let (s, i) = (State::new(100), Intents::new());
+    let r = result_json(&call(
+        &s,
+        &i,
+        proto::Call::RobotLook(proto::LookParams {
+            x: 1.0,
+            y: 0.5,
+            z: -0.1,
+            neck_pitch: 0.0,
+        }),
+    ));
+    let look: proto::LookResult = serde_json::from_value(r.clone())
+        .unwrap_or_else(|e| panic!("not a LookResult: {e}; answer was {r}"));
+    let yaw = 0.5f64.atan2(1.0);
+    let pitch = 0.1f64.atan2(1.0f64.hypot(0.5));
+    assert!((look.head.head_yaw - yaw).abs() < 1e-9, "{look:?}");
+    assert!((look.head.head_pitch - pitch).abs() < 1e-9, "{look:?}");
+    assert!(!look.clamped);
+    let snap = i.snapshot();
+    assert!(
+        (snap.head[2] - yaw).abs() < 1e-9,
+        "the gimbal was aimed: {:?}",
+        snap.head
+    );
+    assert!(snap.head_age < std::time::Duration::from_secs(1));
+    // Straight down is beyond the gimbal's −20° pitch travel: the closest gaze, and `clamped`.
+    let r = result_json(&call(
+        &s,
+        &i,
+        proto::Call::RobotLook(proto::LookParams {
+            x: 0.0,
+            y: 0.0,
+            z: -1.0,
+            neck_pitch: 0.0,
+        }),
+    ));
+    let look: proto::LookResult = serde_json::from_value(r).unwrap();
+    assert!(look.clamped, "{look:?}");
+    assert!(
+        (look.head.head_pitch - 20f64.to_radians()).abs() < 1e-9,
+        "{look:?}"
+    );
+}

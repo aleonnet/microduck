@@ -503,3 +503,201 @@ fn arming_frees_the_gimbal_from_the_chassis_once() {
         "freed before the first heartbeat"
     );
 }
+
+/// `s1.goto`: while the controller's position task runs, the loop sends the heartbeat and **no**
+/// wheel or follow frame — the frames that overwrote the task every tick on the floor
+/// (2026-10-31: goto accepted, odometry still). A twist that asks for motion takes the wheels back.
+#[test]
+fn a_position_task_owns_the_wheels_until_a_twist_takes_them_back() {
+    let path = std::env::temp_dir().join(format!("s1d-fake-goto-{}.bin", std::process::id()));
+    let mut body = FakeFile::create(&path).unwrap();
+    let state = Arc::new(State::new(100));
+    let intents = Arc::new(Intents::new());
+    intents.set_enabled(true);
+    intents.set_twist([0.0; 3]);
+    intents.start_position_task(Duration::from_secs(5));
+    let (s, i) = (Arc::clone(&state), Arc::clone(&intents));
+    let handle = std::thread::spawn(move || run(&mut body, s, i, Config::default()));
+    std::thread::sleep(Duration::from_millis(500));
+    let written_during_task = std::fs::metadata(&path).unwrap().len() as usize;
+    // A pad at rest streams zero twists: they must not cancel the task.
+    intents.set_twist([0.0; 3]);
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(
+        intents.position_task_active(),
+        "a zero twist leaves the task alone"
+    );
+    intents.set_twist([0.3, 0.0, 0.0]);
+    assert!(
+        !intents.position_task_active(),
+        "motion asked: the wheels are the driver's"
+    );
+    std::thread::sleep(Duration::from_millis(300));
+    state.shutdown.store(true, Ordering::Relaxed);
+    handle.join().unwrap();
+    let bytes = std::fs::read(&path).unwrap();
+    let _ = std::fs::remove_file(&path);
+    let during = Decoder::new().push(&bytes[..written_during_task]);
+    let heartbeats = during
+        .iter()
+        .filter(|f| (f.cmd_set, f.cmd_id) == id::HEARTBEAT)
+        .count();
+    assert!(
+        heartbeats >= 40,
+        "the heartbeat keeps the chassis armed: {heartbeats}"
+    );
+    let wheel_or_follow = during
+        .iter()
+        .filter(|f| {
+            (f.cmd_set, f.cmd_id) == id::CHASSIS_WHEEL_SPEED
+                || (f.cmd_set, f.cmd_id) == id::CHASSIS_FOLLOW
+        })
+        .count();
+    assert_eq!(
+        wheel_or_follow, 0,
+        "no wheel or follow frame while the task runs"
+    );
+    let after = Decoder::new().push(&bytes);
+    let moving = after
+        .iter()
+        .filter(|f| (f.cmd_set, f.cmd_id) == id::CHASSIS_WHEEL_SPEED && wheel_rpm(f) != [0; 4])
+        .count();
+    assert!(
+        moving >= 20,
+        "the twist drives again once it takes the wheels back: {moving}"
+    );
+}
+
+/// Where the gimbal leads the chassis, the head target goes out once per change: re-sent every
+/// 100 ms with its yaw relative to the chassis, it kept putting the target ahead of the body and
+/// the body turned to −120° without stopping on the floor (2026-10-31). In free mode the hold
+/// re-send stays; where the chassis leads, only the pitch axis is ours.
+#[test]
+fn the_head_target_is_sent_once_where_the_gimbal_leads_and_held_elsewhere() {
+    use s1d::intents::FollowMode;
+    let rotates = |follow: FollowMode, change: bool| -> Vec<Frame> {
+        let path = std::env::temp_dir().join(format!(
+            "s1d-fake-lead-{}-{:?}-{change}.bin",
+            std::process::id(),
+            follow
+        ));
+        let mut body = FakeFile::create(&path).unwrap();
+        let state = Arc::new(State::new(100));
+        let intents = Arc::new(Intents::new());
+        intents.set_follow(follow);
+        intents.set_enabled(true);
+        intents.set_head([0.0, 0.0, 45f64.to_radians(), 0.0]);
+        let (s, i) = (Arc::clone(&state), Arc::clone(&intents));
+        let handle = std::thread::spawn(move || run(&mut body, s, i, Config::default()));
+        std::thread::sleep(Duration::from_millis(500));
+        if change {
+            intents.set_head([0.0, 0.0, -30f64.to_radians(), 0.0]);
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        state.shutdown.store(true, Ordering::Relaxed);
+        handle.join().unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        Decoder::new()
+            .push(&bytes)
+            .into_iter()
+            .filter(|f| (f.cmd_set, f.cmd_id) == id::GIMBAL_ROTATE)
+            .collect()
+    };
+    let lead = rotates(FollowMode::GimbalLead, false);
+    assert_eq!(lead.len(), 1, "gimbal leads: the target once, not held");
+    let lead = rotates(FollowMode::GimbalLead, true);
+    assert_eq!(
+        lead.len(),
+        2,
+        "gimbal leads: once more when the target changes"
+    );
+    let free = rotates(FollowMode::Free, false);
+    assert!(
+        free.len() >= 4,
+        "free: the target is held every 100 ms: {}",
+        free.len()
+    );
+    assert!(
+        free.iter().all(|f| f.data[2] == 0x1d),
+        "free: both axes, coordinate 3"
+    );
+    let chassis = rotates(FollowMode::ChassisLead, false);
+    assert!(
+        chassis.iter().all(|f| f.data[2] == 0x1c),
+        "chassis leads: the yaw bit is cleared, pitch only"
+    );
+}
+
+/// `s1.gimbal speed` is a rate: re-sent every tick while fresh (one frame moved the gimbal about a
+/// degree on the robot, 2026-10-31), the angle hold silent meanwhile; `stop` sends one zero rate
+/// and the hold resumes; a rate older than the deadman ends the same way.
+#[test]
+fn a_gimbal_rate_is_streamed_until_stopped_and_the_angle_hold_waits() {
+    let path = std::env::temp_dir().join(format!("s1d-fake-rate-{}.bin", std::process::id()));
+    let mut body = FakeFile::create(&path).unwrap();
+    let state = Arc::new(State::new(100));
+    let intents = Arc::new(Intents::new());
+    let cfg = Config {
+        deadman: Duration::from_millis(300),
+        ..Config::default()
+    };
+    intents.set_enabled(true);
+    let (s, i) = (Arc::clone(&state), Arc::clone(&intents));
+    let handle = std::thread::spawn(move || run(&mut body, s, i, cfg));
+    std::thread::sleep(Duration::from_millis(150));
+    let before_rate = std::fs::metadata(&path).unwrap().len() as usize;
+    intents.set_gimbal_rate([30.0, -15.0]);
+    std::thread::sleep(Duration::from_millis(250));
+    let during_rate = std::fs::metadata(&path).unwrap().len() as usize;
+    intents.set_gimbal_rate([0.0; 2]);
+    std::thread::sleep(Duration::from_millis(250));
+    state.shutdown.store(true, Ordering::Relaxed);
+    handle.join().unwrap();
+    let bytes = std::fs::read(&path).unwrap();
+    let _ = std::fs::remove_file(&path);
+    // `(yaw, pitch, ctrl)`: DJI's moving frame carries its `accel_contral_flag` 0xdc, its stop
+    // carries 0x00 (`rm_ctrl.py` `_stop_rotate`).
+    let rate_frames = |frames: &[Frame]| -> Vec<(i16, i16, u8)> {
+        frames
+            .iter()
+            .filter(|f| (f.cmd_set, f.cmd_id) == id::GIMBAL_SPEED)
+            .map(|f| {
+                (
+                    i16::from_le_bytes([f.data[0], f.data[1]]),
+                    i16::from_le_bytes([f.data[4], f.data[5]]),
+                    f.data[6],
+                )
+            })
+            .collect()
+    };
+    let during = Decoder::new().push(&bytes[before_rate..during_rate]);
+    let rates = rate_frames(&during);
+    assert!(
+        rates.len() >= 15,
+        "the rate is streamed every tick: {}",
+        rates.len()
+    );
+    assert!(rates.iter().all(|r| *r == (300, -150, 0xdc)), "{rates:?}");
+    let holds = during
+        .iter()
+        .filter(|f| (f.cmd_set, f.cmd_id) == id::GIMBAL_ROTATE)
+        .count();
+    assert_eq!(holds, 0, "the angle hold is silent while the rate runs");
+    let after = Decoder::new().push(&bytes[during_rate..]);
+    // The file length was read between two ticks: a last moving frame may sit before the stop.
+    let zeros: Vec<_> = rate_frames(&after)
+        .into_iter()
+        .skip_while(|r| *r == (300, -150, 0xdc))
+        .collect();
+    assert_eq!(
+        zeros,
+        vec![(0, 0, 0x00)],
+        "stop: one zero rate with DJI's stop flag, then no more"
+    );
+    let holds_after = after
+        .iter()
+        .filter(|f| (f.cmd_set, f.cmd_id) == id::GIMBAL_ROTATE)
+        .count();
+    assert!(holds_after >= 2, "the angle hold resumes: {holds_after}");
+}
