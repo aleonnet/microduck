@@ -12,9 +12,13 @@ here from the polynomials (checked equal to the lab's tables, 2026-10-30 (night)
 
 Usage: scripts/s1/duml-strace.py <file.strace> [cmd ...]
        cmd names as in NAME below (e.g. dds_add_sub gimbal_push); `gimbal_push` also prints the
-       pitch/yaw extremes seen, to hold against the manual's limits.
+       pitch/yaw extremes seen, to hold against the manual's limits; `gimbal_vs_attitude` pairs
+       every gimbal push with the controller push nearest on their shared clock and prints how
+       ground yaw − chassis-relative yaw sits against the attitude yaw, and the two pitch fields
+       (offsets 0 and 2) against the attitude pitch — the stage `telemetry-free` report.
+       scripts/s1/duml-strace.py --selftest   checks the pairing over frames built here.
 """
-import re, sys, collections
+import re, struct, sys, collections, statistics
 
 def _table(poly, width):
     out = []
@@ -86,7 +90,88 @@ def frames(path):
         out[key] = found
     return out, trunc
 
+def encode(sender, receiver, seq, cmd_set, cmd_id, data, attri=0x00):
+    """A whole DUML frame with both CRCs, version 1 — for the self-test's synthetic straces."""
+    ln = 13 + len(data)
+    head = bytes([0x55, ln & 0xff, 0x04 | (ln >> 8)])
+    body = head + bytes([crc8(0x77, head), sender, receiver, seq & 0xff, seq >> 8, attri, cmd_set, cmd_id]) + bytes(data)
+    c = crc16(0x3692, body)
+    return body + bytes([c & 0xff, c >> 8])
+
+STOCK_PUSH_PAYLOAD = 161   # after sub_mode and msg_id; the controller's boot-time subscription
+AT_STOCK_TIME_MS = 0; AT_STOCK_ATTITUDE = 132   # `s1-duml/src/dds.rs::StockPush`
+
+def pair_gimbal_with_attitude(per_stream, max_dt_ms=30):
+    """[(t_ms, dt_ms, pitch0, pitch2, yaw4, yaw6, yaw8, att_yaw, att_pitch, att_roll)] — a gimbal
+    push and the controller push nearest to it on their shared millisecond clock, read side only."""
+    g = []; s = []
+    for (call, fd), frs in per_stream.items():
+        if call != 'read': continue
+        for b in frs:
+            d = b[11:-2]
+            if (b[9], b[10]) == (0x04, 0x05) and len(d) >= 40:
+                g.append((struct.unpack_from('<I', d, 12)[0],) + struct.unpack_from('<hhhhh', d, 0))
+            elif (b[9], b[10]) == (0x48, 0x08) and len(d) == 2 + STOCK_PUSH_PAYLOAD:
+                pl = d[2:]
+                s.append((struct.unpack_from('<I', pl, AT_STOCK_TIME_MS)[0],) + struct.unpack_from('<fff', pl, AT_STOCK_ATTITUDE))
+    s.sort(); keys = [x[0] for x in s]; rows = []
+    import bisect
+    for tms, p0, p2, y4, y6, y8 in g:
+        i = bisect.bisect_left(keys, tms); cands = [j for j in (i - 1, i) if 0 <= j < len(s)]
+        if not cands: continue
+        j = min(cands, key=lambda j: abs(keys[j] - tms)); dt = tms - keys[j]
+        if abs(dt) > max_dt_ms: continue
+        rows.append((tms, dt, p0 / 10, p2 / 10, y4 / 10, y6 / 10, y8 / 10) + s[j][1:])
+    return len(g), len(s), rows
+
+def wrap(a): return (a + 180) % 360 - 180
+
+def report_gimbal_vs_attitude(per_stream):
+    ng, ns, rows = pair_gimbal_with_attitude(per_stream)
+    out = [f"-- gimbal_vs_attitude: gimbal pushes {ng}, controller pushes {ns}, paired within 30 ms {len(rows)}"]
+    if not rows: return out
+    res = [wrap(r[4] - r[6] - r[7]) for r in rows]
+    out.append("   ground yaw(@4) - relative yaw(@8) - attitude yaw: median %+.2f  min %+.2f  max %+.2f deg" % (statistics.median(res), min(res), max(res)))
+    ap = [r[8] for r in rows]
+    out.append("   attitude: yaw %.1f..%.1f  pitch %.2f..%.2f  roll %.2f..%.2f deg" % (min(r[7] for r in rows), max(r[7] for r in rows), min(ap), max(ap), min(r[9] for r in rows), max(r[9] for r in rows)))
+    for name, idx in (("pitch@0", 2), ("pitch@2", 3)):
+        v = [r[idx] for r in rows]; d = [a - b for a, b in zip(v, ap)]
+        out.append("   %s: %.1f..%.1f deg; minus attitude pitch: median %+.2f range %+.2f..%+.2f" % (name, min(v), max(v), statistics.median(d), min(d), max(d)))
+    out.append("   field @6: %.1f..%.1f" % (min(r[5] for r in rows), max(r[5] for r in rows)))
+    return out
+
+def selftest():
+    """Two gimbal pushes and two controller pushes, 10 ms apart on the clock, with a 2.5° chassis
+    yaw and the ground yaw = relative + chassis: the report must pair both and read a residual of
+    zero; a pitch field put 7° from the attitude pitch must show as 7°."""
+    def gimbal(tms, p0, p2, y4, y8):
+        d = struct.pack('<hhhhh', p0, p2, y4, 0, y8) + bytes(2) + struct.pack('<I', tms) + bytes(8) + struct.pack('<ffff', 1, 0, 0, 0)  # 40 B: the real push's layout
+        return encode(0x04, 0xf1, 1, 0x04, 0x05, d)
+    def stock(tms, yaw, pitch):
+        # Literal offsets, not the constants above: a report built and read with the same wrong
+        # constant would agree with itself (the refutation script plants 120 and must see this fail).
+        pl = bytearray(161); struct.pack_into('<I', pl, 0, tms); struct.pack_into('<fff', pl, 132, yaw, pitch, 0.0)
+        return encode(0x03, 0x09, 1, 0x48, 0x08, bytes([0, 1]) + bytes(pl))
+    frames_ = [stock(1000, 2.5, -1.0), gimbal(1010, 60, 0, 925, 900), stock(1020, 2.5, -1.0), gimbal(1030, 60, 0, -1775, -1800)]
+    per = {('read', 16): frames_}
+    text = "\n".join(report_gimbal_vs_attitude(per))
+    want = ["paired within 30 ms 2", "median +0.00  min +0.00  max +0.00", "pitch@0: 6.0..6.0 deg; minus attitude pitch: median +7.00", "pitch@2: 0.0..0.0 deg; minus attitude pitch: median +1.00"]
+    bad = [w for w in want if w not in text]
+    # the strace text path too: the frames written as a read() line must decode to the same report
+    import tempfile, os
+    with tempfile.NamedTemporaryFile('w', suffix='.strace', delete=False) as f:
+        for fr in frames_:
+            f.write('1 00:00:00.000000 read(16, "%s", 256) = %d\n' % (''.join('\\x%02x' % b for b in fr), len(fr)))
+        path = f.name
+    per2, _ = frames(path); os.unlink(path)
+    if "\n".join(report_gimbal_vs_attitude(per2)) != text: bad.append("strace text path differs from the direct one")
+    if bad:
+        print("duml-strace selftest FAILED:", bad, "\n" + text, file=sys.stderr); return 1
+    print("duml-strace selftest: gimbal_vs_attitude pairs and reads as expected"); return 0
+
 def main():
+    if '--selftest' in sys.argv[1:]:
+        sys.exit(selftest())
     if len(sys.argv) < 2:
         print(__doc__); sys.exit(2)
     path = sys.argv[1]; want = set(sys.argv[2:])
@@ -113,6 +198,8 @@ def main():
             print("-- gimbal_push: none seen")
         else:
             print(f"-- gimbal_push extremes: pitch {ext[0] / 10:.1f}..{ext[1] / 10:.1f} deg (manual -20..+35)  yaw {ext[2] / 10:.1f}..{ext[3] / 10:.1f} deg (manual +-250)")
+    if 'gimbal_vs_attitude' in want:
+        for line in report_gimbal_vs_attitude(per_stream): print(line)
 
 if __name__ == '__main__':
     main()

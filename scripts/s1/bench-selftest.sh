@@ -103,6 +103,46 @@ asked telemetry "start dji_hdvt_uav"
 tail -c +"$((ASKED_FROM + 1))" "$ADB_SHIM_LOG" | grep -qE "s1d|s1ctl|robotctl|forward" && { echo "selftest: telemetry stage ran something of ours"; fail=1; } || echo "selftest: telemetry stage runs nothing of ours"
 run telemetry-gimbal
 asked telemetry-gimbal "strace -f -tt -e trace=read -s 256 -o /data/hdvt_gimbal.strace -p"
+# telemetry-free: the stock stopped and the daemons up as stages 4 and 5 do, s1d's reads under
+# strace, the driver pointed at a port that refuses — the stage records that and goes on.
+run telemetry-free
+asked telemetry-free "stop dji_hdvt_uav"
+asked telemetry-free "chroot /data/debian /usr/bin/env PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin /opt/robot/bin/s1d --port /dev/ttyS3 --baud 921600 --sounds /opt/robot/sounds"
+asked telemetry-free "strace -f -tt -e trace=read -s 256 -o /data/s1d_free.strace -p"
+grep -q "telemetry-free rc=2" "$WORK/telemetry-free.txt" && echo "selftest: telemetry-free recorded the unreachable daemon" || { echo "selftest: telemetry-free did NOT record the unreachable daemon"; fail=1; }
+# The two judges over cases built in the scripts themselves.
+python3 -I scripts/s1/telemetry-free.py --selftest || fail=1
+python3 -I scripts/s1/duml-strace.py --selftest || fail=1
+# And the driver end to end against s1d --fake fed the robot's own pushes (fixtures cut from the
+# 2026-10-30 captures): arm, sweep, sample, judge — the only part the shim cannot stand in for.
+cargo build -p s1d --bin s1d >/dev/null 2>&1 || { echo "selftest: cargo build s1d failed"; fail=1; }
+FAKE="$WORK/fake"; mkdir -p "$FAKE"; : > "$FAKE/in.bin"
+SOCK="$(mktemp -u /tmp/s1-free-XXXXXX).sock"
+RUST_LOG=info target/debug/s1d --fake "$FAKE/wire.bin" --fake-in "$FAKE/in.bin" --socket "$SOCK" > "$FAKE/s1d.log" 2>&1 &
+S1D_PID=$!
+for _ in $(seq 1 50); do [ -S "$SOCK" ] && break; sleep 0.1; done
+cat s1-duml/tests/fixtures/gimbal_push_yaw_max_2026-10-30.bin s1-duml/tests/fixtures/dds_push_stock_idle_2026-10-30.bin >> "$FAKE/in.bin"
+if scripts/s1/telemetry-free.py run --socket "$SOCK" --out "$FAKE/samples.ndjson" --sweep 2 --hold 1 --rate 10 > "$FAKE/verdict.txt" 2>&1; then
+    grep -q "^body_still" "$FAKE/verdict.txt" && grep -q "^yaw_relation" "$FAKE/verdict.txt" && echo "selftest: telemetry-free drove s1d --fake and judged the samples" || { echo "selftest: telemetry-free ran but judged nothing:"; fail=1; }
+    sed 's/^/selftest:   /' "$FAKE/verdict.txt"
+    # The arm the driver asked for must have put the gimbal in work mode 0 on the wire (0x04/0x4c
+    # 00 00) — the frame delivery 2 added, seen here through the driver's own robot.enable.
+    python3 -I - "$FAKE/wire.bin" <<'PY' || fail=1
+import sys
+b = open(sys.argv[1], 'rb').read(); i = 0; modes = []
+while True:
+    i = b.find(b'\x55', i)
+    if i < 0 or i + 13 > len(b): break
+    if b[i + 9] == 0x04 and b[i + 10] == 0x4c: modes.append(b[i + 11:i + 13].hex())
+    i += 1
+ok = modes[:1] == ['0000']
+print(('selftest: the arm put gimbal work mode 0 on the wire: %s' % modes) if ok else ('selftest: NO gimbal free mode on the wire at arm: %s' % modes))
+sys.exit(0 if ok else 1)
+PY
+else
+    echo "selftest: telemetry-free against s1d --fake FAILED:"; cat "$FAKE/verdict.txt"; tail -5 "$FAKE/s1d.log"; fail=1
+fi
+kill "$S1D_PID" 2>/dev/null; wait "$S1D_PID" 2>/dev/null || true; rm -f "$SOCK"
 run frames
 asked frames "|| mount -o bind /dev /data/debian/dev"
 grep -q "gst-launch-1.0 v4l2src" "$ADB_SHIM_LOG" && { echo "selftest: frames still streams with gst-launch"; fail=1; } || echo "selftest: frames stops before the stream"

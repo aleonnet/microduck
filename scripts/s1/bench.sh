@@ -9,7 +9,8 @@
 # that every artefact a record cites exists with the sha256 it claims.
 #
 # Usage: scripts/s1/bench.sh <stage> [args]      stages: help | capture | backup | exec | stop | drive |
-#        items | events | camera | audio | app | restore | frames | infer | telemetry | telemetry-gimbal | e2e |
+#        items | events | camera | audio | app | restore | frames | infer | telemetry | telemetry-gimbal |
+#        telemetry-free | e2e |
 #        verify-record <record.md>
 # Env:   S1_HOST (default 192.168.1.236:5555) · S1_OUT (default ~/Development/RoboMaster-S1/out/<date>-poc2)
 #        S1_CHROOT (default /data/debian) · S1_BAUD (from capture) · S1_ROOTFS (tar from build-rootfs.sh)
@@ -60,6 +61,12 @@ stages() {
              the gimbal up and down to its pitch stops and sweep it left and right (the body follows
              the gimbal in the app's driving mode: yaw has no stop) — the 0x04/0x05 push against the
              manual's pitch limits, and its yaw against the quaternion
+   telemetry-free  stock STOPPED, s1d armed (chassis work mode 1, gimbal work mode 0), WHEELS OFF
+             THE GROUND: the head is swept left/right by robot.head for 30 s while s1.telemetry is
+             sampled — the body must not follow (rpm 0, attitude yaw still) and ground yaw −
+             chassis-relative yaw must equal the attitude yaw; then 20 s with the head at zero in
+             which YOU tilt the robot nose-up ~15°, hold, nose-down, hold, level — which pitch field
+             of the 0x04/0x05 push moves with the chassis. s1d's UART reads under strace alongside.
    e2e       no robot: `s1-e2e fake` — the same items against s1d --fake, netpadd, robotctl and
              s1ctl on this Mac, judged on the wire bytes (the pre-test of stages 5 and 6)
    verify-record <md>   check every `artefato:` line of a record: path exists, sha256 matches
@@ -95,6 +102,21 @@ e2e_robot() { local log="$1"; shift
     if [ "$#" -gt 0 ]; then target/debug/s1-e2e robot --tcp "$TCP" --udp "$UDP" --log "$log" --only "$@"
     else target/debug/s1-e2e robot --tcp "$TCP" --udp "$UDP" --log "$log"; fi
 }
+# s1d and netpadd up in the chroot (stages 5 and telemetry-free). `setsid` + `nohup` + stdin from
+# /dev/null: measured on 2026-10-30, `nohup … &` alone left an empty log — the daemon died with the
+# adb shell that started it. `setsid` alone still lost the race with the pty closing (netpadd, same
+# day); the `sleep 1` inside the shell is what settles it. `--volume-control` only once stage 8's
+# `amixer contents` has named the speaker's control: until then `s1.volume` is refused by name and
+# the e2e item says so.
+start_daemons() {
+    : "${S1_BAUD:?S1_BAUD is the baud the capture stage measured with stty}"
+    sh_robot "($BB setsid $BB nohup $CHROOT_ENV /opt/robot/bin/s1d --port /dev/ttyS3 --baud $S1_BAUD --sounds /opt/robot/sounds ${S1_VOLUME_CONTROL:+--volume-control $S1_VOLUME_CONTROL} ${S1_ARGS:-} </dev/null >/data/s1d.log 2>&1 &); $BB sleep 1"
+    sleep 2
+    sh_robot "($BB setsid $BB nohup $CHROOT_ENV /opt/robot/bin/netpadd </dev/null >/data/netpadd.log 2>&1 &); $BB sleep 1"; sleep 1
+}
+# The stock body process and its monitor stopped, as stage 4 does; prints STILL_ALIVE or
+# hdvt_uav_stopped (the controller keeps pushing the stock's telemetry either way, 2026-10-30).
+STOP_STOCK="stop dji_hdvt_uav; stop dji_monitor; setprop ctl.stop dji_hdvt_uav; setprop ctl.stop dji_monitor; kill \$($BB pidof dji_hdvt_uav) 2>/dev/null; $BB sleep 1; $BB pidof dji_hdvt_uav >/dev/null && echo STILL_ALIVE || echo hdvt_uav_stopped"
 art() { # art <file>: print the record line for an artefact
     local f="$1"; [ -f "$f" ] || { say "MISSING artefact $f"; return 1; }
     echo "artefato: $f sha256=$(shasum -a 256 "$f" | cut -d' ' -f1)" | tee -a "$OUT/artefatos.txt"
@@ -172,21 +194,14 @@ case "$stage" in
 
   stop)
     need_robot; D=$(dir stop)
-    sh_robot "stop dji_hdvt_uav; stop dji_monitor; setprop ctl.stop dji_hdvt_uav; setprop ctl.stop dji_monitor; kill \$($BB pidof dji_hdvt_uav) 2>/dev/null; $BB sleep 1; $BB pidof dji_hdvt_uav >/dev/null && echo STILL_ALIVE || echo hdvt_uav_stopped" | tee "$D/stop.txt"
+    sh_robot "$STOP_STOCK" | tee "$D/stop.txt"
     sh_robot "for p in \$($BB ls /proc | $BB grep -E '^[0-9]+\$'); do $BB ls -l /proc/\$p/fd 2>/dev/null | $BB grep -q ttyS3 && echo \"ttyS3 held by \$p \$($BB cat /proc/\$p/comm)\"; done; echo owners_listed" | tee "$D/owners.txt"
     art "$D/stop.txt"; art "$D/owners.txt" ;;
 
   drive)
-    D=$(dir drive); need_chroot; : "${S1_BAUD:?S1_BAUD is the baud the capture stage measured with stty}"
-    say "starting s1d (baud $S1_BAUD) and netpadd in the chroot; WHEELS OFF THE GROUND"
-    # `setsid` + `nohup` + stdin from /dev/null: measured on 2026-10-30, `nohup … &` alone left an
-    # empty log — the daemon died with the adb shell that started it. `setsid` alone still lost the
-    # race with the pty closing (netpadd, same day); the `sleep 1` inside the shell is what settles it.
-    # `--volume-control` only once stage 8's `amixer contents` has named the speaker's control:
-    # until then `s1.volume` is refused by name and the e2e item says so.
-    sh_robot "($BB setsid $BB nohup $CHROOT_ENV /opt/robot/bin/s1d --port /dev/ttyS3 --baud $S1_BAUD --sounds /opt/robot/sounds ${S1_VOLUME_CONTROL:+--volume-control $S1_VOLUME_CONTROL} ${S1_ARGS:-} </dev/null >/data/s1d.log 2>&1 &); $BB sleep 1"
-    sleep 2
-    sh_robot "($BB setsid $BB nohup $CHROOT_ENV /opt/robot/bin/netpadd </dev/null >/data/netpadd.log 2>&1 &); $BB sleep 1"; sleep 1
+    D=$(dir drive); need_chroot
+    say "starting s1d (baud ${S1_BAUD:-unset}) and netpadd in the chroot; WHEELS OFF THE GROUND"
+    start_daemons
     # `robotctl health` exits non-zero on an unhealthy verdict; that is a result to record, not a
     # reason to stop the stage before the logs are pulled.
     sh_robot "$CHROOT_ENV /opt/robot/bin/robotctl health --json" > "$D/health.json" 2>&1 || say "robotctl health rc=$? — the verdict is in health.json"
@@ -353,6 +368,27 @@ case "$stage" in
     $A pull /data/hdvt_gimbal.strace "$D/hdvt_gimbal_reads.strace" >/dev/null
     scripts/s1/duml-strace.py "$D/hdvt_gimbal_reads.strace" gimbal_push | tee "$D/gimbal_pushes.txt"
     for f in "$D"/hdvt_gimbal_reads.strace "$D"/gimbal_pushes.txt; do art "$f"; done ;;
+
+  telemetry-free)
+    D=$(dir telemetry-free); need_chroot
+    # Item 1 of 2026-10-30 (night), third delivery: the gimbal freed from the chassis measured on
+    # the robot through s1d's own list. The stock is stopped (stage 4's line), the daemons come up
+    # (stage 5's), and `telemetry-free.py` arms, sweeps the head by robot.head, samples
+    # s1.telemetry and judges body_still / head_obeyed / yaw_relation / pitch_frame. s1d's reads of
+    # the UART run under strace alongside (the attach `telemetry-gimbal` proved, 60 s) so the raw
+    # 0x04/0x05 push — the pitch field at 2 is not in the list — is held against the attitude too.
+    sh_robot "$STOP_STOCK" | tee "$D/stop.txt"
+    start_daemons
+    $A forward "tcp:${TCP##*:}" localfilesystem:$CHROOT/run/robotd.sock >/dev/null
+    say "WHEELS OFF THE GROUND. 30 s: the head sweeps left and right on its own — the body must not try to follow."
+    say "then 20 s with the head at zero: TILT the robot nose-up ~15 deg, hold 5 s, nose-down, hold 5 s, level."
+    sh_robot "($BB timeout -t 60 strace -f -tt -e trace=read -s 256 -o /data/s1d_free.strace -p \$($BB pidof s1d) >/dev/null 2>&1 &); $BB sleep 1"
+    scripts/s1/telemetry-free.py run --tcp "$TCP" --out "$D/samples.ndjson" --sweep 30 --hold 20 | tee "$D/verdict.txt" || say "telemetry-free rc=$? — the verdict is in verdict.txt"
+    sleep 8   # the strace window outlasts the run by a few seconds
+    $A pull /data/s1d_free.strace "$D/s1d_free_reads.strace" >/dev/null 2>&1 || true
+    $A pull /data/s1d.log "$D/s1d.log" >/dev/null 2>&1 || true
+    [ -f "$D/s1d_free_reads.strace" ] && scripts/s1/duml-strace.py "$D/s1d_free_reads.strace" gimbal_vs_attitude | tee "$D/gimbal_vs_attitude.txt"
+    for f in "$D"/stop.txt "$D"/samples.ndjson "$D"/verdict.txt "$D"/s1d_free_reads.strace "$D"/gimbal_vs_attitude.txt "$D"/s1d.log; do [ -f "$f" ] && art "$f" || true; done ;;
 
   verify-record)
     md="${1:?usage: bench.sh verify-record <record.md>}"

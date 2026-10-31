@@ -18,6 +18,22 @@ before=$(shasum -a 256 "$SRC" | cut -d' ' -f1)
 grep -qF "$GOOD" "$SRC" || { echo "refute: $SRC no longer holds '$GOOD'" >&2; exit 1; }
 restore() { sed -i '' "s/$BAD/$GOOD/" "$SRC"; rm -f "$RUN"; }
 trap restore EXIT
+# plant <file> <good text> <bad text> <command> <word the failure must name>: the command must FAIL
+# with the bad text in place and pass again once the file is restored, which the hash proves.
+plant() {
+    local f="$1" good="$2" bad="$3" cmd="$4" word="$5" sha status
+    sha=$(shasum -a 256 "$f" | cut -d' ' -f1)
+    grep -qF "$good" "$f" || { echo "refute: $f no longer holds '$good'"; exit 1; }
+    python3 -I -c 'import pathlib,sys; p=pathlib.Path(sys.argv[1]); s=p.read_text(); assert s.count(sys.argv[2])==1; p.write_text(s.replace(sys.argv[2], sys.argv[3]))' "$f" "$good" "$bad"
+    echo "refute: planting '$bad' in $f"
+    $cmd > "$RUN" 2>&1 && status=0 || status=$?
+    python3 -I -c 'import pathlib,sys; p=pathlib.Path(sys.argv[1]); p.write_text(p.read_text().replace(sys.argv[3], sys.argv[2]))' "$f" "$good" "$bad"
+    [ "$(shasum -a 256 "$f" | cut -d' ' -f1)" = "$sha" ] || { echo "refute: $f NOT restored"; exit 1; }
+    if [ "$status" -eq 0 ]; then echo "refute: $cmd PASSED with the defect planted — it cannot fail"; exit 1; fi
+    grep -q "$word" "$RUN" || { echo "refute: the failure does not name $word:"; tail -10 "$RUN"; exit 1; }
+    $cmd > "$RUN" 2>&1 || { echo "refute: $cmd does not pass after the restore:"; tail -10 "$RUN"; exit 1; }
+    echo "refute: $f restored (sha256 equal); the defect was refused naming $word"
+}
 
 {
     echo "refute: planting '$BAD' in place of '$GOOD' in $SRC"
@@ -38,4 +54,9 @@ trap restore EXIT
     fi
     cargo test -p s1-duml --test stock_push > "$RUN" 2>&1 || { echo "refute: tests do not pass after the restore:"; tail -20 "$RUN"; exit 1; }
     echo "refute: the planted offset was refused; the layout tests can fail"
+    # The two judges of stage telemetry-free, each with its own defect: the head verdict with the
+    # duck/DJI sign dropped (a head that turned the wrong way would pass), and the pairing report
+    # with the attitude read twelve bytes early (inside the status word and the IMU).
+    plant scripts/s1/telemetry-free.py "errs.append((cmd, last, abs(wrap(last - (-cmd)))))" "errs.append((cmd, last, abs(wrap(last - cmd))))" "python3 -I scripts/s1/telemetry-free.py --selftest" "head_obeyed"
+    plant scripts/s1/duml-strace.py "AT_STOCK_ATTITUDE = 132" "AT_STOCK_ATTITUDE = 120" "python3 -I scripts/s1/duml-strace.py --selftest" "gimbal_vs_attitude"
 } | tee "$OUT"
