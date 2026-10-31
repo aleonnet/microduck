@@ -705,7 +705,9 @@ by hand with the owner watching the gimbal, then a 25 s tilt window.
   `dds_push_stock_relaunched_2026-10-30.bin` (10.675 V, 29 %, idle wheels, four clocks within 4
   counts). What remains for the robot is only to watch `robot.health.battery` through `s1d` on a
   live boot (`telemetry-free`), the daemon path having been run on the Mac over the real fixture
-  — the robot went off the network before that run tonight.
+  — the robot went off the network before that run tonight; that attempt still archived the
+  22:11 run's directory under its stamp (`telemetry-free-20261030-221150/`, the paths below) and
+  left an empty one, which is what a stage that dies before its first artefact does.
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-cleanboot/hdvt_cleanboot_reads.strace sha256=0d947e5051fc4758f568f444127f167aa4277d48d83e58245b1fc7616f2e880f
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-cleanboot/battery_check.txt sha256=2bd58a761ec94dbddc133ea1f417d894ef3bc3754e71798de4461b734d4b4d67
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-cleanboot/hdvt_app_connected_reads.strace sha256=210d82bcbdeb567605a91ac42d78eafca6a8815b74642c195bf4a72d9536707e
@@ -716,17 +718,17 @@ by hand with the owner watching the gimbal, then a 25 s tilt window.
   two bytes early (the real battery-first push stops reading as `BatteryThenEsc`); the judge
   calling the body still without wheel speeds.
 
-- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-free/stop.txt sha256=93993a72aca42aaa5d68f7f5908a965278cb4465616b8ad9b55f1e7cef566425
-- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-free/daemons.txt sha256=7412236579166ee86683b4c1b6fc13f9f8cbe0054d0f2e5569b94436e1d8a760
-- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-free/samples.ndjson sha256=36248af30dc4253c403cfad26ab654e0f1cd2174b8937185f030d451a0a07870
-- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-free/verdict.txt sha256=238782f67d38fd7af912a7f49b1fdd939295f83bc19a11bf73d3935d6f08c7bd
-- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-free/s1d_free_reads.strace sha256=eafeefd37155996146842ad8bad62c26fe36b79297c2c464e55646ac251ae7bd
-- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-free/gimbal_vs_attitude.txt sha256=451aaa6bb62abae0248ac844a9ecc56511a2ca446c0214d18a0d01d47f75e45e
-- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-free/s1d.log sha256=1ac5b2327ef194dd30f78ddfc25d30e0db8018a8e8165f4495e5f0006fe42c73
-- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-free/tilt.ndjson sha256=e52b17f8fab5d50870a434294e69b56ece5e491d2f6a5c5d9c3f974e78753a4f
-- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-free/tilt_verdict.txt sha256=ba1e4132b74e0b378a28c34436f70579b67e4223ce20ee082fc5454e0f1bd305
-- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-free/s1d_tilt_reads.strace sha256=967e5117009f37bd0634e1c0dbbc1340b21c277ccfc52dbf4b8ed03ef5847a88
-- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-free/tilt_gimbal_vs_attitude.txt sha256=d62b4154c67fbb13feef09c98035444e4ae3d0fa56040a479c53ddba2684b7e8
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-free-20261030-221150/stop.txt sha256=93993a72aca42aaa5d68f7f5908a965278cb4465616b8ad9b55f1e7cef566425
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-free-20261030-221150/daemons.txt sha256=7412236579166ee86683b4c1b6fc13f9f8cbe0054d0f2e5569b94436e1d8a760
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-free-20261030-221150/samples.ndjson sha256=36248af30dc4253c403cfad26ab654e0f1cd2174b8937185f030d451a0a07870
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-free-20261030-221150/verdict.txt sha256=238782f67d38fd7af912a7f49b1fdd939295f83bc19a11bf73d3935d6f08c7bd
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-free-20261030-221150/s1d_free_reads.strace sha256=eafeefd37155996146842ad8bad62c26fe36b79297c2c464e55646ac251ae7bd
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-free-20261030-221150/gimbal_vs_attitude.txt sha256=451aaa6bb62abae0248ac844a9ecc56511a2ca446c0214d18a0d01d47f75e45e
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-free-20261030-221150/s1d.log sha256=1ac5b2327ef194dd30f78ddfc25d30e0db8018a8e8165f4495e5f0006fe42c73
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-free-20261030-221150/tilt.ndjson sha256=e52b17f8fab5d50870a434294e69b56ece5e491d2f6a5c5d9c3f974e78753a4f
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-free-20261030-221150/tilt_verdict.txt sha256=ba1e4132b74e0b378a28c34436f70579b67e4223ce20ee082fc5454e0f1bd305
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-free-20261030-221150/s1d_tilt_reads.strace sha256=967e5117009f37bd0634e1c0dbbc1340b21c277ccfc52dbf4b8ed03ef5847a88
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-free-20261030-221150/tilt_gimbal_vs_attitude.txt sha256=d62b4154c67fbb13feef09c98035444e4ae3d0fa56040a479c53ddba2684b7e8
 
 ## Corrections after the cold reader (2026-10-30 18:29 -0300) — this section supersedes the hand-off's open-items table
 
