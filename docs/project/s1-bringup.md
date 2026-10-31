@@ -1558,3 +1558,49 @@ The app and our daemons cannot drive the body at the same time — both would wr
 but they alternate by boot: a flag file in `/data` chooses, and the app stays whole because it is
 also the maintenance door (its Lab is how root adb is re-enabled after every power cycle).
 Firmware updates happen only in the app's mode, with root adb off.
+
+## Floor session, part 2 (2026-10-31, 14:3x–14:5x): the lift capture — a floor-only baseline and one real lift, both with the wheels turning
+
+Two drives at `robot.move` 0.15 m/s with the owner cued by the robot's own chirp through the
+socket (`robot.sound`, volume set to 100 %). The owner lifted ~10 cm by hand and set the robot
+back down; the DJI pick-up bit never set (as on 2026-10-30).
+
+- **Run 1 is a floor-only baseline, 25 s, 3.7 m.** The owner waited for a "quack" and did not
+  lift (the chirp is a synthesised "blim", not a duck). My Mac-side loop also ran 25 s instead
+  of 12: each `robot.move` call plus `sleep 0.1` cost ~0.2 s, the same drift as part 1's
+  "~2 s longer". The robot stopped at 4.86 m of odometry, near the end of the 5 m track. Lesson
+  applied in run 2: loop by wall clock, cues through the socket (no adb latency).
+- **Run 2 is the real lift, with the time marks confirmed by the owner:** 180° turn in place
+  (delta −175.6°), then 12.09 s at 0.15 m/s back along the track (4.84 → 3.01 m). Cue 1 at
+  3.00 s (one chirp), cue 2 at 7.11 s (two chirps); the owner lifted at the double chirp and set
+  the robot down 2.5 s after the wheels stopped.
+- **What the push shows, floor vs hand (0.5 s bins, 25 pushes each):**
+  - floor, 0.15 m/s (run 1 whole; run 2 0–7 s): accelerometer deviation from 1 g p50 0.024–0.029,
+    p90 0.04–0.08; pitch/roll ≤ 2°; no DJI status flag; fused-velocity vs wheel-speed mismatch
+    ≤ 0.13 m/s;
+  - lift at 7.5 s: one jolt (acc_z −1.29 g, 0.51 rad/s), then **in hand, wheels turning,
+    8–12 s:** deviation p50 0.10–0.13, p90 0.16; pitch 3–8°, roll to 7°; DJI `on_slope` true
+    from 8.0 s (continuously 9.1–12.7 s), `down_hill`/`up_hill` flickering; the controller's
+    fused velocity runs away from 0.19 to 1.29 m/s against 0.15 m/s of wheel speed (mismatch
+    > 0.4 m/s from 9.0 s, 1.5 s after the lift; same runaway as on the stand on 2026-10-30
+    with the wheels stopped);
+  - in hand, wheels stopped, 12–14.5 s: deviation 0.07–0.15, fused velocity still 0.6 m/s;
+    set-down at 14.5 s: `impact_z` true once, acc_z −1.71 g; then still (0.014).
+- **What this decides for the wheels-stop rule (to implement with the robot off):** the
+  accelerometer deviation separates "in hand" from "floor at 0.15 m/s" (0.10 vs 0.025) but not
+  from "floor at 0.3 m/s" (0.045/0.12 in part 1) and not "in the air on a stand" (0.002 above
+  still on 2026-10-30). The one signal present in all three lifted cases measured so far (stand
+  with wheels stopped, hand with wheels turning, hand with wheels stopped) is the disagreement
+  between the controller's fused velocity and the velocity the four wheel speeds imply; on the
+  floor it stays ≤ 0.13 m/s. The owner's direction of 2026-10-31 00:1x ("never the controller
+  velocity") was about trusting that velocity as motion; using its *disagreement* with the
+  wheels as the lift signal is a different use and needs his word — asked. Whatever the signal,
+  the wheel-side velocity must come from the mecanum kinematics of the four rpm (a turn in place
+  has wheel speed and no body velocity), with the geometry from a cited source, and the
+  thresholds from these captures plus the 0.3 m/s floor drive and the gimbal_lead turn.
+- Not done in this session yet: F5 fold confirmation by eye, F12 (no load), restore stage with
+  artefact.
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/floor/lift_telemetry.ndjson sha256=fadace100074b9a627ba745aecbc9acbc3fe470c34bd93d5ba4dccf9eb7ffaa4
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/floor/lift_marks.txt sha256=19d8882c4c6ca673f47a7e5b2abaeca9931ac2e51253bb4afeb19d200213e7a2
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/floor/lift2_telemetry.ndjson sha256=3cd04529db54dc641bba42f6c7112d37c818d99cf73ed3f061d83017a90393ad
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/floor/lift2_marks.txt sha256=9df859d4843b07fc1e07877edec2a63a9831a2a8a0b0b8f7776eb70f8266ef70
