@@ -1229,6 +1229,16 @@ it off.
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/mic-lab/kernel_codec_event_handler.txt sha256=ab2799a08c3e0e6e630ae4c0c6c28547bea6c70d7d06d33c40555a53af1603af
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/mic-lab/gpio_holders_stock_stopped.txt sha256=10ef6fac789dd4f88a0ef6df51752baa8e8e1aa431282d3a32ff717584cab462
 
+**Confirmed end to end on the robot (10:3x), nothing of DJI's running:** the robot played its cue
+sound, recorded 12 s (`echo_test.wav`; the owner spoke in seconds 5–10: the left channel rose from
+−51 to −40 dB and fell back), and then played the left channel back through its own speaker,
+raised 18 dB. The owner: "Funcionou", quieter than expected — the playback side: the speaker
+control sits at the stock's 20 of 31 and the clip was lifted only 18 dB; `s1.volume` is the lever,
+not the microphone. **Item 3 closed on the robot, the owner the witness twice** (the Mac playback
+of the 02:31 recording and the robot's own echo).
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/mic-lab/echo_test.wav sha256=1cdc12be424ca41213f258130fa714c7f6bc2aac30cd1874fb45905f55f2f9d6
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/mic-lab/echo_test_left_plus18dB.wav sha256=4b2c902fb19928985c00a1249b41aa2ee910bf8f1db3a72d32c06f6028fd3be1
+
 ## Corrections after the cold reader (2026-10-30 18:29 -0300) — this section supersedes the hand-off's open-items table
 
 A cold reader resumed from `docs/plans/2026-10-30-1905-handoff-s1-fase1-bateria2.md` alone and found
