@@ -25,3 +25,5 @@ plant() { # plant <file> <good> <bad> <command> <word>
 }
 plant scripts/s1/bench.sh 'stop dji_camera; setprop ctl.stop dji_camera; $BB sleep 1; $BB rm -f' '$BB sleep 1; $BB rm -f' scripts/s1/bench-selftest.sh 'NEVER asked: stop dji_camera'
 plant scripts/s1/bench.sh 'art "$D/stream_60s.txt"; exit 2 ;;' 'art "$D/stream_60s.txt" ;;' scripts/s1/bench-selftest.sh 'PASSED with the device busy'
+# The channel: plant the left file cut from the RIGHT channel and demand the self-test fail naming mic_left.
+plant scripts/s1/bench.sh 'for ch in left:c0 right:c1; do' 'for ch in left:c1 right:c1; do' scripts/s1/bench-selftest.sh 'mic_left.wav is not the left channel'

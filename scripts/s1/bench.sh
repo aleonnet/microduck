@@ -299,12 +299,13 @@ case "$stage" in
     [ -f "$D/route.sh" ] && sh_robot "$(cat "$D/route.sh")"
     # The microphone is capture device 0 of card 0 — the stock camera process opens `pcmC0D0c`
     # (its strace from start, 2026-10-30); `hw:0,1` answered "read error: Invalid argument". The
-    # device accepts S16_LE, 1–2 channels, 8–48 kHz (`arecord --dump-hw-params`), and the
-    # microphone is on the RIGHT channel: a stereo probe measured channel 0 as a constant (RMS =
-    # peak = −50.1 dB) and channel 1 as signal (mixer: `MIC2 Boost` on, `Dual-Mic` off). A mono
-    # recording takes channel 0 and hears nothing — so: stereo at 48 kHz, the right channel split
-    # off on the Mac. Paths given to the chroot's arecord are the chroot's ($CHROOT/tmp on the
-    # robot); the tee runs outside.
+    # device accepts S16_LE, 1–2 channels, 8–48 kHz (`arecord --dump-hw-params`). Recorded in
+    # stereo at 48 kHz, as the stock does; both channels are measured and the LEFT one is kept as
+    # the microphone: on 2026-10-31 the owner's voice sat there at −38..−44 dB over a −51 dB floor
+    # (the path the stock boosts), with the same voice 25 dB lower on the right. (The 2026-10-30
+    # run that made this stage keep the right channel saw a constant on the left — a boot state
+    # after the camera process had been killed twice under strace, not reproduced since.) Paths
+    # given to the chroot's arecord are the chroot's ($CHROOT/tmp on the robot).
     # The capture device is single-client and the stock camera process holds it from boot (fd 84 on
     # pcmC0D0c, measured 2026-10-31), so it is stopped first, as stage 7 does. The previous recording
     # is removed before arecord runs and the stage stops on arecord's own failure: on 2026-10-31
@@ -316,10 +317,14 @@ case "$stage" in
       *ARECORD_OK*) $A pull "$CHROOT/tmp/mic.wav" "$D/mic.wav" >/dev/null ;;
       *) say "arecord FAILED, nothing pulled, no recording artefact: $rec $(cat "$D/stream_60s.txt" 2>/dev/null)"; art "$D/stream_60s.txt"; exit 2 ;;
     esac
-    [ -f "$D/mic.wav" ] && ffmpeg -loglevel error -y -i "$D/mic.wav" -af "pan=mono|c0=c1" "$D/mic_right.wav" && ffmpeg -hide_banner -loglevel info -i "$D/mic_right.wav" -af "astats=metadata=1:reset=0" -f null - 2>&1 | grep -E "RMS level|Peak level" | tee -a "$D/stream_60s.txt"
+    for ch in left:c0 right:c1; do
+        ffmpeg -loglevel error -y -i "$D/mic.wav" -af "pan=mono|c0=${ch#*:}" "$D/mic_${ch%%:*}.wav" || continue
+        echo "${ch%%:*} channel:" | tee -a "$D/stream_60s.txt"
+        ffmpeg -hide_banner -loglevel info -i "$D/mic_${ch%%:*}.wav" -af "astats=metadata=1:reset=0" -f null - 2>&1 | grep -E "RMS level|Peak level" | tee -a "$D/stream_60s.txt"
+    done
     say "aplay while driving: run stage drive in another terminal, then this plays 20 s and samples top"
     sh_robot "$BB chroot $CHROOT /usr/bin/aplay -D hw:0,0 /tmp/mic.wav & for i in 1 2 3 4; do top -n 1 -m 8; $BB sleep 5; done" > "$D/cpu_play_drive.txt" 2>&1 || true
-    for f in "$D"/aplay_stock_sounds.txt "$D"/mic.wav "$D"/mic_right.wav "$D"/stream_60s.txt "$D"/cpu_play_drive.txt; do [ -f "$f" ] && art "$f"; done ;;
+    for f in "$D"/aplay_stock_sounds.txt "$D"/mic.wav "$D"/mic_left.wav "$D"/mic_right.wav "$D"/stream_60s.txt "$D"/cpu_play_drive.txt; do [ -f "$f" ] && art "$f"; done ;;
 
   app)
     D=$(dir app); say "with hdvt_uav/monitor stopped: open the app, note connect/video/control. Type notes, Ctrl-D:"; cat > "$D/obs.txt"; art "$D/obs.txt" ;;

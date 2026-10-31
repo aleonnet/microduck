@@ -27,6 +27,9 @@ case "$1" in
   pull) case "$2" in
           # A whole black 720p frame, so the camera stage's PNG conversion has real bytes to chew.
           *frame_00*.nv12|*frame.nv12|*frame.raw) head -c 1382432 /dev/zero > "$3" ;;
+          # The recording: one second, a 1 kHz tone on the LEFT channel only — the microphone's channel as
+          # measured on 2026-10-31 (the owner's voice there; the right 25 dB down) — so the stage's split is checked.
+          *mic.wav) ffmpeg -loglevel error -y -f lavfi -i "sine=frequency=1000:sample_rate=48000:duration=1" -af "pan=stereo|c0=c0|c1=0*c0" -c:a pcm_s16le "$3" ;;
           *) echo "shim" > "$3" ;;
         esac ;;
   shell)
@@ -105,15 +108,23 @@ grep -qE -- "--set-fmt-video|--stream-mmap" "$ADB_SHIM_LOG" && { echo "selftest:
 [ -f "$S1_OUT/camera/blocked.txt" ] && { echo "selftest: camera recorded a refusal although s1-cam is installed"; fail=1; } || echo "selftest: camera ran s1-cam instead of refusing"
 # Stage 8 with the device busy (the stock camera process holds it): the stage must FAIL and record
 # no recording — on 2026-10-31 it pulled the day-before's mic.wav as today's and played it back.
-ASKED_FROM=$(wc -c < "$ADB_SHIM_LOG" 2>/dev/null || echo 0)
-if SHIM_ARECORD_BUSY=1 scripts/s1/bench.sh audio > "$WORK/audio-busy.txt" 2>&1; then echo "selftest: audio stage PASSED with the device busy"; fail=1; else echo "selftest: audio stage fails when arecord cannot open the device"; fi
-grep -q "audio/mic.wav" "$S1_OUT/artefatos.txt" 2>/dev/null && { echo "selftest: audio recorded a mic.wav artefact although arecord failed"; fail=1; } || echo "selftest: audio recorded no recording artefact on the failure"
+# The busy run gets its own output tree: its artefact line would otherwise name a path the normal run
+# re-fills (dir() archives the earlier run aside), and verify-record would then compare the wrong file.
+mkdir -p "$WORK/out-busy"
+if SHIM_ARECORD_BUSY=1 S1_OUT="$WORK/out-busy" scripts/s1/bench.sh audio > "$WORK/audio-busy.txt" 2>&1; then echo "selftest: audio stage PASSED with the device busy"; fail=1; else echo "selftest: audio stage fails when arecord cannot open the device"; fi
+grep -q "audio/mic.wav" "$WORK/out-busy/artefatos.txt" 2>/dev/null && { echo "selftest: audio recorded a mic.wav artefact although arecord failed"; fail=1; } || echo "selftest: audio recorded no recording artefact on the failure"
 grep -q "Device or resource busy" "$WORK/audio-busy.txt" && echo "selftest: audio names arecord's error" || { echo "selftest: audio does not name arecord's error"; fail=1; }
 run audio
 asked audio "stop dji_camera"
 asked audio "rm -f /data/debian/tmp/mic.wav"
 asked audio "arecord -D hw:0,0 -f S16_LE -r 48000 -c 2 -d 60 /tmp/mic.wav"
 asked audio "aplay -D hw:0,0 /mnt/system/audio/sound/engine_start.wav"
+# The microphone is the LEFT channel (2026-10-31): mic_left.wav must hold the shim's tone (ffmpeg's sine source is
+# about -21 dB RMS; the silent right channel measures below -90), so the bar is -30 dB.
+if [ -f "$S1_OUT/audio/mic_left.wav" ]; then
+    rms=$(ffmpeg -hide_banner -loglevel info -i "$S1_OUT/audio/mic_left.wav" -af "astats=metadata=1:reset=0" -f null - 2>&1 | grep -m1 "RMS level dB" | awk '{print $NF}')
+    awk -v r="$rms" 'BEGIN{exit !(r > -30)}' && echo "selftest: audio kept the left channel as the microphone (mic_left RMS $rms dB)" || { echo "selftest: audio mic_left.wav is not the left channel (RMS $rms dB)"; fail=1; }
+else echo "selftest: audio did not produce mic_left.wav"; fail=1; fi
 run telemetry
 # The stock controller process relaunched under strace from its first write, then init's service restored.
 asked telemetry "strace -f -tt -e trace=write -s 256 -o /data/hdvt_exec.strace /system/bin/dji_hdvt_uav -g"
