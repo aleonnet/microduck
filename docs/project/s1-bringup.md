@@ -1823,3 +1823,17 @@ O caminho, para um sênior que olha CI/CD, merges, extensibilidade, documentaç�
 - **Video**: the duck encodes with Rockchip's `mpph264enc`, absent on the S1. `s1-cam` becomes a `mediad` source; software H.264 is
   measured first, then the Hantro encoder the stock uses (`hx280enc`) as a plugin if the CPU cannot carry it.
 - The 3D model in `~/Development/RoboMaster-S1/3D` (Sketchfab, visual only, 267 nodes, no articulation) is phase 5's input, not this front's.
+
+## State at the end of 2026-10-31 (19:0x), for the next window
+
+Robot ON on the floor (track clear ahead), USB cable in, root adb ACTIVE over Wi-Fi (`uid=0` at 19:0x, enabled from the Mac with the lab
+tool as the memory's "Conectar ao S1" says). **Today's binaries are NOT on the robot yet**: `s1-push.sh` failed earlier for lack of adb;
+the robot still runs the stock. Nothing of ours was started on it in this boot. Next acts, in order, all mine: `scripts/s1/s1-push.sh`;
+`S1_HOST=192.168.1.236:5555 S1_BAUD=921600 scripts/s1/bench.sh up`; the cable off; `scripts/s1/bench.sh floor` with the owner only
+watching and answering the prompts; record the run. Before calling anything delivered: the cold reader over the diff `f746b2e..HEAD`
+(rule 0b, not yet run), and four sentences of the audit ledger to correct because they claim more than was read — D1 "DJI's `ChassisCtrl.move`
+sends no wheel speeds during the task" (not read; inferred from the symptom), D2 "coordinates 3/4/5 are yaw relative to the car" (the
+DJI file says it of 4 and 5; of 3 it says only "pitch NED"; the chassis-relative yaw of 3 is inferred from the floor behaviour), D3 "the
+app re-sends the rate continuously" (not seen in any capture; inferred from the ~1° per frame measured), D7 the release threshold (0.15 m/s
+for 500 ms) is a design choice, not a measurement. The owner is not a developer: every command is mine to run; what is his is to watch the
+robot and answer the prompts. The eighth gate needs his decision on the two hand-offs in `docs/plans/`.
