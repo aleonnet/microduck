@@ -1120,6 +1120,52 @@ Then ours, stage 8, twice:
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/mic-lab/codec_state_during_our_arecord.txt sha256=e57aeb53c9a67c306f35440a4dee566bc8b9538b6337b75c5eb0a707a09b0bbc
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/mic-lab/codec_state_after_our_arecord.txt sha256=cacbab5bf41d65f61c61430ba19ddbb308ee005f5bf8b948a7e333b024ab3906
 
+## Item 3, the microphone: register 0x31 read out of the kernel — the capture path never enables it, the playback path does (2026-10-31, morning, robot off)
+
+The owner's condition for the last test: no trial and error; read whatever code can be read. The
+codec driver's source (`arch/arm/plat-lc/drivers/sound/codecs/lc1160_codec.c`) is in no tree we
+hold and no public one found, so the kernel image inflated from `backup/bk/normal.img` was read
+directly (load base `0xc0008000`, verified: all 22 mixer-control name strings resolve as pointers).
+
+- **No mixer control writes register 0x31.** The control table decoded from the image
+  (`snd_kcontrol_new` → `soc_mixer_control`): `ADC1 Gain` → reg `0x0e`, `ADC2 Gain` → `0x17`,
+  `MIC1 Volume`/`MIC1 Boost` → `0x0f` (bits 0–5 / bit 6), `MIC2 Volume`/`Boost` → `0x18`,
+  `Speaker Volume` → `0x08`, `Dual-Mic` → `0x0b` bit 6, `Pcm To Codec` → `0x58`, `I2S Loop Back`
+  → `0x09` bit 7, and so on — `0x31` nowhere. So the stock's `adc_reg` tinymix write cannot be
+  what sets it, and yesterday's "the stock writes it directly" is withdrawn.
+- **Register 0x31 is written by the codec DAI's own operations, and only for a playback stream.**
+  The `comip_hifi` DAI driver (`snd_soc_dai_driver` at `0xc05f7850`, ops at `0xc05f79d0`)
+  has exactly two code sites in the whole image that address register `0x31`
+  (`mov r1,#0x31`: `0xc00597ac`, `0xc00598e4`; a third hit at `0xc0592d40` is cache
+  initialisation, unrelated):
+  - ops[11] at `0xc005965c` (rate handling — 8000…48000 compared, `clk_set_rate` — then the
+    register write): `if substream->stream == PLAYBACK: snd_soc_write(codec, 0x31, 0x32) else
+    snd_soc_write(codec, 0x14, 0x22)`. This is the parameter-setting operation.
+  - ops[10] at `0xc0059898`: `snd_soc_update_bits(codec, stream == PLAYBACK ? 0x31 : 0x14,
+    mask 0x0f, value 0x0f)` — the low nibble back to `0xf` when the stream is torn down. `0x3f` is
+    therefore `0x32` with its low nibble released: the idle value.
+  (`substream->stream` is the word at `+0x30` of `struct snd_pcm_substream` in 3.10; 0 = playback.)
+- **This explains every reading of the night.** With the stock, `dji_hdvt_uav` keeps the
+  playback stream open from boot (pcm0p held by pid 233) → `0x31 = 0x32` → the capture's data
+  flows. Stage 8 stops the stock, the playback stream closes → `0x31 → 0x3f`; our capture's own
+  setup writes only `0x14 := 0x22`, never `0x31` → the SoC's capture DMA runs (hw_ptr advanced at
+  48 kHz) over a codec whose interface is in its idle state → the right channel's samples are
+  mostly exact zeros (astats "noise floor −inf", RMS −73 dB), the left channel the free noise of an
+  unterminated ADC2. The microphone, bias, gains and routes were all right; the codec's I2S/DAC-side
+  register that the capture path depends on was never programmed. **Mechanism read from code;
+  what remains hypothesis is only that the capture *depends* on it, which the next test measures.**
+- **The test, no longer blind (next power-on):** (1) stop the stock as stage 8 does; start
+  `arecord` alone: read `0x31` (expected `0x3f`), the right channel zeros; (2) with the capture
+  still running, start a 48 kHz playback (`aplay` of a stock wav or silence): read `0x31` (expected
+  `0x32`); the right channel must now carry the room (noise floor around −75 dB, not −inf); (3) the
+  owner speaks: the right channel at the stock's −31..−43 dB closes the item. Then stage 8 and the
+  daemon hold a silent playback stream for the whole capture — the state DJI's own software keeps —
+  with the register read before and after as the stage's own check. No register is written by hand.
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/mic-lab/kernel_codec_dai_ops_disasm.txt sha256=1b07ba68ed8a4781ade7664aaebfbbd869fb601fa8fabdc9414f342fa2714b36
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/mic-lab/codec_dai_disasm.py sha256=bee7e289b540cedd7771cda5d7d38805b3429f7e5d3a97bc28865aac81c54f00
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/mic-lab/kernel_codec_controls_regs.txt sha256=4085b28be5fac68662d6c74bfd05fb648d7ac3b23590b14474880b6e122cc703
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/mic-lab/codec_controls_regs.py sha256=7b36f4f3373c58b9968a962a76003721590429a458a401861d44c640a55ce1c8
+
 ## Corrections after the cold reader (2026-10-30 18:29 -0300) — this section supersedes the hand-off's open-items table
 
 A cold reader resumed from `docs/plans/2026-10-30-1905-handoff-s1-fase1-bateria2.md` alone and found
