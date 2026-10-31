@@ -917,13 +917,15 @@ change. **The Coral's LED stayed dark in the second attempt too** (owner): the d
 owner plugged the Coral in twice (02:0x):** the device list never changed (bus 2: the Genesys hub
 and the Wi-Fi only; bus 1: the root hub), the kernel log had no USB event at all, the OTG state
 stayed `DEVICE` — that connector carries no USB data to either of the SoC's buses; its 5 V (the
-Coral's LED lit there yesterday) is power only. **So, as the hardware stands: the micro-USB has
+Coral's LED lit there again tonight, the owner watching during the window) is power only. **So, as the hardware stands: the micro-USB has
 the data lines and a host mode but no bus power, the USB-C has power and no data.** The one path
 that needs no board change is the standard one for a host port without VBUS: a **self-powered USB
 hub** between the micro-USB (host forced, or a true OTG plug) and the Coral — the hub feeds the
 Coral (which wants up to 900 mA anyway, more than any OTG port gives) and the robot supplies only
-data. Not tried tonight (no powered hub at hand). Open; the inference number (stage 12) is what
-makes it worth pursuing.
+data. The robot's side of that hub still has to be a micro-B OTG plug (ID grounded) — so the one
+piece to buy is a **micro-USB OTG hub with external power** (a phone-style OTG hub with its own
+supply). Not tried tonight (none at hand). Open; the inference number (stage 12) is what makes it
+worth pursuing.
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/usb-coral/usbc_hotplug_watch.txt sha256=ad5bec22cb827a6f5a1e2099cd5e3f6149f482c71e2fea9dd379c241f231d043
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/usb-coral/kmsg_usbc.txt sha256=1263821bdb268098c14aa4b629e0a51253d657340fa31234167744cd5b2d73dc
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/usb-coral/host_forced_coral_on_microusb_otg2.txt sha256=33bbee9d058fa1e01817b424b83972d67898e0261f84597db5e65917518b5258
