@@ -418,6 +418,26 @@ fn our_push(seq: u16) -> Frame {
     )
 }
 
+/// The stock's push with the given wheel speeds and fused body velocity (`StockPush::synthesize`),
+/// as the controller sends it (msg id 1, the 2026-10-30 afternoon boot).
+fn stock_push(seq: u16, rpm: [i16; 4], body: [f32; 3]) -> Frame {
+    let mut data = vec![0u8, 1u8];
+    data.extend_from_slice(&dds::StockPush::synthesize(u32::from(seq) * 20, rpm, body));
+    Frame::request(
+        host::MOTION_CONTROLLER,
+        host::BASE,
+        seq,
+        id::DDS_PUSH.0,
+        id::DDS_PUSH.1,
+        data,
+    )
+}
+
+/// The shortest signed difference `b − a` of two headings in degrees.
+fn yaw_delta_deg(a: f64, b: f64) -> f64 {
+    ((b - a + 540.0) % 360.0) - 180.0
+}
+
 fn armor_hit_frame() -> Frame {
     Frame::request(3, 9, 0, 0x3f, 0x02, vec![0x31, 0x34, 0x12, 0x02, 0x00])
 }
@@ -1119,6 +1139,103 @@ mod fake {
             }
         );
         item!(
+            "lifted: the wheels stop",
+            "the robot lifted while driving: the wheels stop within the trip time and robot.state says picked_up",
+            {
+                // Driving at 0.15 m/s with the controller agreeing (the floor), then the fused
+                // velocity running away while the wheels still read 0.15 (a hand): pushes at the
+                // stock's 50 Hz, the twist kept fresh the whole time.
+                let mut seq = 0u16;
+                let end = Instant::now() + Duration::from_millis(400);
+                while Instant::now() < end {
+                    seq += 1;
+                    feed(&d, &[stock_push(seq, [27, -26, -33, 31], [0.16, 0.0, 0.0])])
+                        .map_err(|e| e.to_string())?;
+                    client
+                        .call("robot.move", json!({"vx": 0.15, "vy": 0.0, "vyaw": 0.0}))
+                        .map_err(|e| e.to_string())?;
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                let end = Instant::now() + Duration::from_millis(700);
+                while Instant::now() < end {
+                    seq += 1;
+                    feed(&d, &[stock_push(seq, [27, -26, -33, 31], [0.9, 0.0, 0.0])])
+                        .map_err(|e| e.to_string())?;
+                    client
+                        .call("robot.move", json!({"vx": 0.15, "vy": 0.0, "vyaw": 0.0}))
+                        .map_err(|e| e.to_string())?;
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                let (ok, out) = robotctl(&d, &["health", "--json"]);
+                if !ok {
+                    return Err(out);
+                }
+                let r = client
+                    .call("robot.subscribe", json!({"hz": 10}))
+                    .map_err(|e| e.to_string())?;
+                let frames = client.notifications("robot.state", Duration::from_millis(400));
+                let picked = frames
+                    .iter()
+                    .any(|f| f["safety"]["picked_up"] == json!(true));
+                if !picked {
+                    return Err(format!(
+                        "robot.state never said picked_up ({r}; {} frames)",
+                        frames.len()
+                    ));
+                }
+                let lifted_wheels = wheels_of(&wire.all());
+                let zero_while_lifted = lifted_wheels.iter().rev().take(20).all(|w| *w == [0; 4]);
+                // Set down: the controller agrees again for the release time, and the twist drives.
+                let end = Instant::now() + Duration::from_millis(800);
+                while Instant::now() < end {
+                    seq += 1;
+                    feed(&d, &[stock_push(seq, [27, -26, -33, 31], [0.16, 0.0, 0.0])])
+                        .map_err(|e| e.to_string())?;
+                    client
+                        .call("robot.move", json!({"vx": 0.15, "vy": 0.0, "vyaw": 0.0}))
+                        .map_err(|e| e.to_string())?;
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                let frames = client.notifications("robot.state", Duration::from_millis(300));
+                let released = frames
+                    .last()
+                    .is_some_and(|f| f["safety"]["picked_up"] == json!(false));
+                client
+                    .call("robot.subscribe", json!({"hz": 0}))
+                    .map_err(|e| e.to_string())?;
+                if !zero_while_lifted || !released {
+                    return Err(format!(
+                        "wheels zero while lifted: {zero_while_lifted}; released after agreement: {released}"
+                    ));
+                }
+                Ok("picked_up, wheels zero while lifted, released after the set-down".to_owned())
+            },
+            |f: &[Frame]| {
+                // Driving, then a run of zero frames while lifted (≥ 20 ticks), then driving again.
+                let wheels = wheels_of(f);
+                let moving = wheels.iter().filter(|w| **w != [0; 4]).count();
+                let (mut zero_run, mut longest_before_resume, mut resumed) =
+                    (0usize, 0usize, false);
+                for w in &wheels {
+                    if *w == [0; 4] {
+                        zero_run += 1;
+                    } else {
+                        if zero_run >= 20 {
+                            resumed = true;
+                            longest_before_resume = longest_before_resume.max(zero_run);
+                        }
+                        zero_run = 0;
+                    }
+                }
+                (
+                    moving >= 30 && resumed,
+                    format!(
+                        "{moving} moving wheel frames; a lifted run of {longest_before_resume} zero frames, then driving again: {resumed}"
+                    ),
+                )
+            }
+        );
+        item!(
             "F1 follow gimbal_lead",
             "chassis follows the gimbal: a forward twist leaves as the follow command, not wheel speeds",
             {
@@ -1244,6 +1361,42 @@ mod fake {
                 let (a, pa) = find_hex(f, "551a04b1c9c30000403f25070800006400ceff8403322c016440");
                 let (b, pb) = find_hex(f, "55170438c9c30000403f2507010000000000000000406c");
                 (a && b, format!("{pa}; {pb}"))
+            }
+        );
+        item!(
+            "robot.look (duck route)",
+            "the gimbal aims at a point ahead-left and slightly below; the answer is the contract's LookResult",
+            {
+                let r = client
+                    .call("robot.look", json!({"x": 1.0, "y": 0.5, "z": -0.1}))
+                    .map_err(|e| e.to_string())?;
+                let look: duck_ipc_proto::LookResult = serde_json::from_value(r.clone())
+                    .map_err(|e| format!("not a LookResult: {e}; answer {r}"))?;
+                let want = 0.5f64.atan2(1.0);
+                if (look.head.head_yaw - want).abs() > 1e-6 || look.clamped {
+                    return Err(format!("{look:?}"));
+                }
+                std::thread::sleep(Duration::from_millis(150));
+                Ok(format!("LookResult head_yaw {:.4} rad", look.head.head_yaw))
+            },
+            |f: &[Frame]| {
+                let (yaw, pitch) = s1d::tick::gimbal_ddeg([
+                    0.0,
+                    0.1f64.atan2(1.0f64.hypot(0.5)),
+                    0.5f64.atan2(1.0),
+                    0.0,
+                ]);
+                let hit = f.iter().any(|x| {
+                    (x.cmd_set, x.cmd_id) == id::GIMBAL_ROTATE
+                        && i16::from_le_bytes([x.data[3], x.data[4]]) == yaw
+                        && i16::from_le_bytes([x.data[7], x.data[8]]) == pitch
+                });
+                (
+                    hit,
+                    format!(
+                        "a gimbal angle frame with yaw {yaw} pitch {pitch} (tenths, DJI's signs): {hit}"
+                    ),
+                )
             }
         );
         item!(
@@ -1564,7 +1717,11 @@ mod fake {
                 let (ok, out) = s1ctl(&d, &["telemetry"]);
                 let v: Value = serde_json::from_str(&out).map_err(|e| e.to_string())?;
                 let r = &v["result"];
-                let good = r["pushes"] == json!(1)
+                // Ours is the one push that is not the stock's (the lifted item fed the stock's
+                // own by the dozen before this).
+                let ours =
+                    r["pushes"].as_u64().unwrap_or(0) - r["stock_pushes"].as_u64().unwrap_or(0);
+                let good = ours == 1
                     && r["battery"]["percent"] == json!(77)
                     && r["gimbal_deg"] == json!([90.0, -15.0])
                     && r["status"]["picked_up"] == json!(true)
@@ -2040,37 +2197,164 @@ mod robot {
             }
         );
         item!(
-            "F1 follow gimbal_lead",
-            "chassis follows the gimbal: with a forward twist the chassis drives after the gimbal's heading (turn the gimbal by hand 45°)",
+            "lifted: the wheels stop",
+            "ON THE FLOOR: the robot drives at 0.15 m/s for 12 s; at the first chirp LIFT it 10 cm, at the double chirp SET IT DOWN — the wheels stop within 1.5 s of the lift and spin again after the set-down",
             {
-                s1ctl(&["follow", "gimbal_lead"])?;
-                for _ in 0..30 {
+                println!("  FLOOR: drive 12 s; one chirp = LIFT 10 cm, two chirps = SET DOWN");
+                let t0 = Instant::now();
+                let mut cue1 = false;
+                let mut cue2 = false;
+                let mut picked_at: Option<Duration> = None;
+                let mut stopped_at: Option<Duration> = None;
+                let mut released = false;
+                let mut last_sample = Instant::now();
+                while t0.elapsed() < Duration::from_secs(12) {
                     call(
                         &mut client,
                         "robot.move",
-                        json!({"vx": 0.2, "vy": 0.0, "vyaw": 0.0}),
+                        json!({"vx": 0.15, "vy": 0.0, "vyaw": 0.0}),
                     )?;
-                    std::thread::sleep(Duration::from_millis(100));
+                    let el = t0.elapsed();
+                    if !cue1 && el >= Duration::from_secs(3) {
+                        cue1 = true;
+                        call(&mut client, "robot.sound", json!({"tag": "chirp"}))?;
+                    }
+                    if !cue2 && el >= Duration::from_secs(7) {
+                        cue2 = true;
+                        call(&mut client, "robot.sound", json!({"tag": "chirp"}))?;
+                        std::thread::sleep(Duration::from_millis(250));
+                        call(&mut client, "robot.sound", json!({"tag": "chirp"}))?;
+                    }
+                    if last_sample.elapsed() >= Duration::from_millis(100) {
+                        last_sample = Instant::now();
+                        let t = call(&mut client, "s1.telemetry", json!({}))?;
+                        let rpm = t["wheels_rpm"]
+                            .as_array()
+                            .map(|a| {
+                                a.iter()
+                                    .filter_map(Value::as_i64)
+                                    .map(i64::abs)
+                                    .max()
+                                    .unwrap_or(0)
+                            })
+                            .unwrap_or(0);
+                        let st = client
+                            .call("robot.subscribe", json!({"hz": 10}))
+                            .map_err(|e| e.to_string())?;
+                        let _ = st;
+                        let frames =
+                            client.notifications("robot.state", Duration::from_millis(120));
+                        let picked = frames
+                            .last()
+                            .is_some_and(|f| f["safety"]["picked_up"] == json!(true));
+                        if picked && picked_at.is_none() {
+                            picked_at = Some(el);
+                        }
+                        if picked_at.is_some() && stopped_at.is_none() && rpm <= 10 {
+                            stopped_at = Some(el);
+                        }
+                        if picked_at.is_some() && !picked && el > Duration::from_secs(8) {
+                            released = true;
+                        }
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
                 }
-                call(&mut client, "robot.stop", json!({}))?;
-                Ok("gimbal_lead, vx 0.2 for 3 s".to_owned())
+                call(
+                    &mut client,
+                    "robot.move",
+                    json!({"vx": 0.0, "vy": 0.0, "vyaw": 0.0}),
+                )?;
+                let picked_at =
+                    picked_at.ok_or("robot.state never said picked_up: was the robot lifted?")?;
+                let stopped_at =
+                    stopped_at.ok_or("picked_up, but the wheels never read ≤ 10 rpm")?;
+                let lag = stopped_at.saturating_sub(picked_at);
+                if lag > Duration::from_millis(1500) {
+                    return Err(format!("the wheels took {lag:?} to stop after picked_up"));
+                }
+                Ok(format!(
+                    "picked_up at {:.1} s, wheels stopped {lag:?} later, released again: {released}",
+                    picked_at.as_secs_f64()
+                ))
+            }
+        );
+        item!(
+            "F1 follow gimbal_lead",
+            "ON THE FLOOR: chassis follows the gimbal — the head is sent 45° left and the body turns left about 45° and STOPS (2026-10-31 it turned without end); then the head back to zero",
+            {
+                s1ctl(&["follow", "gimbal_lead"])?;
+                let yaw_of = |t: &Value| t["attitude_deg"][0].as_f64().unwrap_or(0.0);
+                let t0 = call(&mut client, "s1.telemetry", json!({}))?;
+                let yaw0 = yaw_of(&t0);
+                call(
+                    &mut client,
+                    "robot.head",
+                    json!({"head_yaw": 45f64.to_radians(), "head_pitch": 0.0}),
+                )?;
+                let mut turned = Vec::new();
+                for _ in 0..35 {
+                    std::thread::sleep(Duration::from_millis(200));
+                    let t = call(&mut client, "s1.telemetry", json!({}))?;
+                    turned.push((
+                        yaw_delta_deg(yaw0, yaw_of(&t)),
+                        t["gimbal_yaw_vs_chassis_deg"].as_f64().unwrap_or(99.0),
+                    ));
+                }
+                call(
+                    &mut client,
+                    "robot.head",
+                    json!({"head_yaw": 0.0, "head_pitch": 0.0}),
+                )?;
+                std::thread::sleep(Duration::from_secs(3));
+                s1ctl(&["follow", "free"])?;
+                let last = &turned[turned.len() - 10..];
+                let (min, max) = last.iter().fold((f64::MAX, f64::MIN), |(lo, hi), (d, _)| {
+                    (lo.min(*d), hi.max(*d))
+                });
+                let final_turn = last[last.len() - 1].0;
+                let gvc = last[last.len() - 1].1;
+                // DJI yaw is clockwise positive: left is a negative attitude change.
+                let ok =
+                    (-final_turn - 45.0).abs() <= 15.0 && (max - min) <= 5.0 && gvc.abs() <= 8.0;
+                if !ok {
+                    return Err(format!(
+                        "turn {final_turn:.1}° (want −45±15), last 2 s spread {:.1}°, gimbal-vs-chassis {gvc:.1}°",
+                        max - min
+                    ));
+                }
+                Ok(format!(
+                    "turned {final_turn:.1}°, settled (spread {:.1}°), gimbal-vs-chassis {gvc:.1}°",
+                    max - min
+                ))
             }
         );
         item!(
             "F1 follow chassis_lead",
-            "the gimbal follows the chassis as it turns (vyaw 2 s)",
+            "the gimbal follows the chassis as it turns (vyaw 2 s): it lags, then realigns to within 5°",
             {
                 s1ctl(&["follow", "chassis_lead"])?;
-                for _ in 0..20 {
+                let mut lag = 0f64;
+                let end = Instant::now() + Duration::from_secs(2);
+                while Instant::now() < end {
                     call(
                         &mut client,
                         "robot.move",
                         json!({"vx": 0.0, "vy": 0.0, "vyaw": 0.6}),
                     )?;
+                    let t = call(&mut client, "s1.telemetry", json!({}))?;
+                    lag = lag.max(t["gimbal_yaw_vs_chassis_deg"].as_f64().unwrap_or(0.0).abs());
                     std::thread::sleep(Duration::from_millis(100));
                 }
                 call(&mut client, "robot.stop", json!({}))?;
-                Ok("chassis_lead, turned 2 s".to_owned())
+                std::thread::sleep(Duration::from_secs(2));
+                let t = call(&mut client, "s1.telemetry", json!({}))?;
+                let gvc = t["gimbal_yaw_vs_chassis_deg"].as_f64().unwrap_or(99.0);
+                if gvc.abs() > 5.0 {
+                    return Err(format!(
+                        "gimbal-vs-chassis {gvc:.1}° after the turn (lag seen {lag:.1}°)"
+                    ));
+                }
+                Ok(format!("lag up to {lag:.1}°, realigned to {gvc:.1}°"))
             }
         );
         item!(
@@ -2101,34 +2385,118 @@ mod robot {
         });
         item!(
             "F3 gimbal speed 30 -15, then stop",
-            "the gimbal sweeps yaw right at 30 °/s and pitch down 15 °/s for 1 s, then stops",
+            "the gimbal sweeps yaw right at 30 °/s and pitch down 15 °/s for 1 s (about 30° and 15°), then stops and holds",
             {
+                let before = call(&mut client, "s1.telemetry", json!({}))?;
+                let g0 = before["gimbal_yaw_vs_chassis_deg"].as_f64().unwrap_or(0.0);
+                let p0 = before["gimbal_deg"][1].as_f64().unwrap_or(0.0);
                 s1ctl(&["gimbal", "speed", "30", "-15"])?;
                 std::thread::sleep(Duration::from_secs(1));
                 s1ctl(&["gimbal", "stop"])?;
-                std::thread::sleep(Duration::from_millis(500));
-                Ok("accepted".to_owned())
+                std::thread::sleep(Duration::from_millis(800));
+                let after = call(&mut client, "s1.telemetry", json!({}))?;
+                let dy = after["gimbal_yaw_vs_chassis_deg"].as_f64().unwrap_or(0.0) - g0;
+                let dp = after["gimbal_deg"][1].as_f64().unwrap_or(0.0) - p0;
+                std::thread::sleep(Duration::from_millis(700));
+                let held = call(&mut client, "s1.telemetry", json!({}))?;
+                let drift = held["gimbal_yaw_vs_chassis_deg"].as_f64().unwrap_or(0.0)
+                    - after["gimbal_yaw_vs_chassis_deg"].as_f64().unwrap_or(0.0);
+                // 2026-10-31, one frame: ~1°. A streamed rate must give tens of degrees.
+                if dy < 15.0 || dp > -7.0 || drift.abs() > 3.0 {
+                    return Err(format!(
+                        "yaw moved {dy:.1}° (want ≥ 15), pitch {dp:.1}° (want ≤ −7), drift after stop {drift:.1}°"
+                    ));
+                }
+                s1ctl(&["gimbal", "recenter"])?;
+                std::thread::sleep(Duration::from_secs(2));
+                Ok(format!(
+                    "yaw +{dy:.1}°, pitch {dp:.1}°, held after stop (drift {drift:.1}°)"
+                ))
             }
         );
         item!(
             "F5 gimbal sleep, wake",
-            "the gimbal folds down for 3 s, then levels",
+            "the gimbal folds down for 3 s, then levels — the gimbal's acknowledgement (retcode) and its pitch say so (2026-10-31: accepted, nothing moved, ack lost)",
             {
+                let before = call(&mut client, "s1.telemetry", json!({}))?;
+                let p0 = before["gimbal_deg"][1].as_f64().unwrap_or(0.0);
+                let acks0 = before["acks"].as_u64().unwrap_or(0);
                 s1ctl(&["gimbal", "sleep"])?;
                 std::thread::sleep(Duration::from_secs(3));
+                let asleep = call(&mut client, "s1.telemetry", json!({}))?;
+                let p1 = asleep["gimbal_deg"][1].as_f64().unwrap_or(0.0);
+                let ack = asleep["last_ack"].clone();
+                let acked = asleep["acks"].as_u64().unwrap_or(0) > acks0;
                 s1ctl(&["gimbal", "wake"])?;
-                std::thread::sleep(Duration::from_secs(2));
-                Ok("accepted".to_owned())
+                std::thread::sleep(Duration::from_secs(3));
+                let awake = call(&mut client, "s1.telemetry", json!({}))?;
+                let p2 = awake["gimbal_deg"][1].as_f64().unwrap_or(0.0);
+                if (p1 - p0).abs() < 10.0 {
+                    return Err(format!(
+                        "the gimbal did not fold: pitch {p0:.1} → {p1:.1} → {p2:.1}; ack received: {acked}, last ack {ack}"
+                    ));
+                }
+                Ok(format!(
+                    "pitch {p0:.1} → {p1:.1} (asleep) → {p2:.1} (awake); ack {ack}"
+                ))
             }
         );
         item!(
             "F6 goto 1 -0.5 -90, then --stop",
-            "wheels run the pattern of 1 m forward, 0.5 m right, 90° clockwise, then stop on their own; --stop after 6 s",
+            "ON THE FLOOR (1.5 m free ahead and right): the chassis runs 1 m forward, 0.5 m right and turns 90° clockwise on its own (2026-10-31: accepted, never moved); --stop after 8 s",
             {
+                let before = call(&mut client, "s1.telemetry", json!({}))?;
+                let p0 = before["position_m"].clone();
+                let yaw0 = before["attitude_deg"][0].as_f64().unwrap_or(0.0);
                 s1ctl(&["goto", "1", "-0.5", "-90"])?;
-                std::thread::sleep(Duration::from_secs(6));
+                std::thread::sleep(Duration::from_secs(8));
+                let after = call(&mut client, "s1.telemetry", json!({}))?;
                 s1ctl(&["goto", "--stop"])?;
-                Ok("accepted".to_owned())
+                let dx =
+                    after["position_m"][0].as_f64().unwrap_or(0.0) - p0[0].as_f64().unwrap_or(0.0);
+                let dy =
+                    after["position_m"][1].as_f64().unwrap_or(0.0) - p0[1].as_f64().unwrap_or(0.0);
+                let moved = dx.hypot(dy);
+                let turned = yaw_delta_deg(yaw0, after["attitude_deg"][0].as_f64().unwrap_or(0.0));
+                if moved < 0.7 || (turned - 90.0).abs() > 25.0 {
+                    return Err(format!(
+                        "moved {moved:.2} m (want ≥ 0.7), turned {turned:.1}° (want +90 clockwise ± 25)"
+                    ));
+                }
+                Ok(format!("moved {moved:.2} m, turned {turned:.1}°"))
+            }
+        );
+        item!(
+            "robot.look (duck route)",
+            "the gimbal aims ahead-left and slightly down (robot.look 1 0.5 −0.1 → 26.6° left, 5.7° down), answered as the contract's LookResult",
+            {
+                let r = call(
+                    &mut client,
+                    "robot.look",
+                    json!({"x": 1.0, "y": 0.5, "z": -0.1}),
+                )?;
+                let look: duck_ipc_proto::LookResult = serde_json::from_value(r.clone())
+                    .map_err(|e| format!("not a LookResult: {e}; answer {r}"))?;
+                std::thread::sleep(Duration::from_secs(2));
+                let t = call(&mut client, "s1.telemetry", json!({}))?;
+                // DJI's signs: right and up positive; the duck's left 26.6° is DJI's −26.6°.
+                let gvc = t["gimbal_yaw_vs_chassis_deg"].as_f64().unwrap_or(99.0);
+                let pitch = t["gimbal_deg"][1].as_f64().unwrap_or(99.0);
+                call(
+                    &mut client,
+                    "robot.head",
+                    json!({"head_yaw": 0.0, "head_pitch": 0.0}),
+                )?;
+                std::thread::sleep(Duration::from_secs(1));
+                if (gvc + 26.6).abs() > 4.0 || (pitch + 5.7).abs() > 4.0 {
+                    return Err(format!(
+                        "gimbal at yaw {gvc:.1}° (want −26.6), pitch {pitch:.1}° (want −5.7); {look:?}"
+                    ));
+                }
+                Ok(format!(
+                    "gimbal yaw {gvc:.1}°, pitch {pitch:.1}°; clamped {}",
+                    look.clamped
+                ))
             }
         );
         item!(
@@ -2365,6 +2733,6 @@ mod tests {
             .cloned()
             .collect();
         assert_eq!(robot, expected);
-        assert_eq!(fake.len(), 40, "{fake:?}");
+        assert_eq!(fake.len(), 42, "{fake:?}");
     }
 }

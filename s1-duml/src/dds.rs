@@ -471,6 +471,36 @@ pub struct StockPush {
 }
 
 impl StockPush {
+    /// A push shaped like the stock's, for a test or the bench: the four wheel speeds (rpm, the
+    /// wire's order and signs), the fused body velocity, a plausible pack (11.9 V, 80 %), ESC
+    /// clocks a few counts apart, one g down, everything else zero — ESC before battery, the
+    /// 2026-10-30 17:05 order. `time_ms` is the controller's clock.
+    pub fn synthesize(time_ms: u32, esc_rpm: [i16; 4], body_velocity: [f32; 3]) -> Vec<u8> {
+        let mut d = vec![0u8; Self::LEN];
+        d[0..4].copy_from_slice(&time_ms.to_le_bytes());
+        d[4..8].copy_from_slice(&(time_ms * 1000).to_le_bytes());
+        for (i, v) in body_velocity.iter().enumerate() {
+            let at = Self::AT_VELOCITY + 12 + 4 * i;
+            d[at..at + 4].copy_from_slice(&v.to_le_bytes());
+        }
+        for (i, r) in esc_rpm.iter().enumerate() {
+            let at = Self::AT_ESC + 2 * i;
+            d[at..at + 2].copy_from_slice(&r.to_le_bytes());
+        }
+        for i in 0..4 {
+            let at = Self::AT_ESC + 16 + 4 * i;
+            d[at..at + 4].copy_from_slice(&(1000 + i as u32).to_le_bytes());
+        }
+        let b = Self::AT_BATTERY;
+        d[b..b + 2].copy_from_slice(&11_900u16.to_le_bytes());
+        d[b + 2..b + 4].copy_from_slice(&300i16.to_le_bytes());
+        d[b + 4..b + 8].copy_from_slice(&(-1000i32).to_le_bytes());
+        d[b + 8] = 80;
+        let z = Self::AT_IMU + 8;
+        d[z..z + 4].copy_from_slice(&(-1.0f32).to_le_bytes());
+        d
+    }
+
     /// Bytes of subjects after `sub_mode` and `msg_id`.
     pub const LEN: usize = 161;
     const AT_GIMBAL_YAW: usize = 8;

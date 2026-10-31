@@ -10,7 +10,7 @@
 #
 # Usage: scripts/s1/bench.sh <stage> [args]      stages: help | capture | backup | exec | stop | drive |
 #        items | events | camera | audio | app | restore | frames | infer | telemetry | telemetry-gimbal |
-#        telemetry-free | e2e |
+#        telemetry-free | e2e | up | floor |
 #        verify-record <record.md>
 # Env:   S1_HOST (default 192.168.1.236:5555) · S1_OUT (default ~/Development/RoboMaster-S1/out/<date>-poc2)
 #        S1_CHROOT (default /data/debian) · S1_BAUD (from capture) · S1_ROOTFS (tar from build-rootfs.sh)
@@ -72,6 +72,13 @@ stages() {
              of the 0x04/0x05 push moves with the chassis. s1d's UART reads under strace alongside.
    e2e       no robot: `s1-e2e fake` — the same items against s1d --fake, netpadd, robotctl and
              s1ctl on this Mac, judged on the wire bytes (the pre-test of stages 5 and 6)
+   up        ONE command from a cold robot (adb over USB or Wi-Fi, S1_HOST): mounts, stock stopped,
+             daemons up with the stock's mixer state restored and the speaker control named,
+             health, the socket forwarded; the four microphone/speaker controls checked against
+             deploy/s1/asound.state.stock. Nothing moves. (s1-push.sh installs; this starts.)
+   floor     ON THE FLOOR, the daemons up (`up`): the floor items of `s1-e2e robot`, judged by
+             telemetry and by you at the prompt — lifted (wheels stop), F1 both ways, F3 rate,
+             F5 sleep (with the gimbal's acknowledgement), F6 goto, robot.look, volume
    verify-record <md>   check every `artefato:` line of a record: path exists, sha256 matches
 LIST
 }
@@ -247,6 +254,46 @@ case "$stage" in
     $A forward "tcp:${TCP##*:}" localfilesystem:$CHROOT/run/robotd.sock >/dev/null
     say "the body's items through the daemons already up; WHEELS OFF THE GROUND; answer each prompt"
     e2e_robot "$D/e2e.log" "$@" | tee "$D/e2e_console.txt" || say "s1-e2e rc=$? — the verdict per item is in e2e_console.txt"
+    $A pull /data/s1d.log "$D/s1d.log" >/dev/null
+    for f in "$D"/e2e.log "$D"/e2e_console.txt "$D"/s1d.log; do art "$f"; done ;;
+
+  up)
+    D=$(dir up); need_chroot
+    say "stock body process and monitor stopped; daemons up; nothing moves"
+    sh_robot "$STOP_STOCK" | tee "$D/stop.txt"
+    start_daemons
+    sh_robot "$CHROOT_ENV /opt/robot/bin/robotctl health --json" > "$D/health.json" 2>&1 || say "robotctl health rc=$? — the verdict is in health.json"
+    cat "$D/health.json"
+    $A forward "tcp:${TCP##*:}" localfilesystem:$CHROOT/run/robotd.sock >/dev/null
+    # The mixer as the daemon restored it, against the state it was asked to restore: the speaker
+    # and the three microphone-path controls that decide whether the voice reaches the recording.
+    # A control the robot does not answer leaves no line (the check below then names it), and
+    # does not end the stage: `pipefail` would otherwise stop at the first missing value.
+    for c in "Speaker Volume" "MIC2 Boost" "MIC2 Volume" "ADC1 Gain"; do
+        { sh_robot "$CHROOT_ENV /usr/bin/amixer -c 0 cget name='$c'" | tr -d '\r' | grep -E "^ *: values=" | sed "s/^ *: values=/$c=/"; } || echo "$c=ABSENT"
+    done > "$D/mixer.txt"
+    python3 -I - deploy/s1/asound.state.stock "$D/mixer.txt" <<'PY' | tee "$D/mixer_check.txt"
+import re, sys
+state = open(sys.argv[1]).read()
+got = dict(l.strip().split('=', 1) for l in open(sys.argv[2]) if '=' in l)
+bad = 0
+for name, value in got.items():
+    m = re.search(r"name '%s'.*?\n(.*?)\n\t\}" % re.escape(name), state, re.S)
+    if not m: print('UNKNOWN', name); bad += 1; continue
+    # `value N` per channel (`value.0`, `value.1` on stereo controls); `dbvalue` lines are not values.
+    want = re.findall(r"^\s*value(?:\.\d+)? (\S+)", m.group(1), re.M)
+    want = ','.join('on' if v == 'true' else 'off' if v == 'false' else v for v in want)
+    print(('OK  ' if value == want else 'DIFF'), name, 'robot', value, 'state', want)
+    bad += value != want
+sys.exit(1 if bad else 0)
+PY
+    for f in "$D"/stop.txt "$D"/daemons.txt "$D"/health.json "$D"/mixer.txt "$D"/mixer_check.txt; do art "$f"; done ;;
+
+  floor)
+    need_robot; D=$(dir floor)
+    $A forward "tcp:${TCP##*:}" localfilesystem:$CHROOT/run/robotd.sock >/dev/null
+    say "ON THE FLOOR, 1.5 m free around the robot; answer each prompt; one chirp = lift, two = set down"
+    e2e_robot "$D/e2e.log" "robot.enable arms (socket)" "lifted: the wheels stop" "F1 follow gimbal_lead" "F1 follow chassis_lead" "F1 follow free" "F3 gimbal speed 30 -15, then stop" "F5 gimbal sleep, wake" "F6 goto 1 -0.5 -90, then --stop" "robot.look (duck route)" "volume 50" "robot.enable off disarms (socket)" | tee "$D/e2e_console.txt" || say "s1-e2e rc=$? — the verdict per item is in e2e_console.txt"
     $A pull /data/s1d.log "$D/s1d.log" >/dev/null
     for f in "$D"/e2e.log "$D"/e2e_console.txt "$D"/s1d.log; do art "$f"; done ;;
 

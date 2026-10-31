@@ -738,27 +738,14 @@ fn an_ack_to_a_one_shot_is_kept_with_its_retcode() {
     );
 }
 
-/// A stock push (161 bytes, ESC then battery) with the given wheel speeds and fused body velocity,
-/// the rest plausible and still — what the controller pushes on the floor and in the hand.
+/// A stock push with the given wheel speeds and fused body velocity, as a frame on the wire.
 fn stock_push(seq: u16, rpm: [i16; 4], body: [f32; 3]) -> Vec<u8> {
-    let mut d = vec![0u8; 161];
-    d[0..4].copy_from_slice(&(u32::from(seq) * 20).to_le_bytes());
-    for (i, v) in body.iter().enumerate() {
-        d[22 + 12 + 4 * i..22 + 12 + 4 * i + 4].copy_from_slice(&v.to_le_bytes());
-    }
-    for (i, r) in rpm.iter().enumerate() {
-        d[46 + 2 * i..46 + 2 * i + 2].copy_from_slice(&r.to_le_bytes());
-    }
-    for i in 0..4 {
-        d[46 + 16 + 4 * i..46 + 16 + 4 * i + 4].copy_from_slice(&1000u32.to_le_bytes());
-    }
-    d[82..84].copy_from_slice(&11_900u16.to_le_bytes());
-    d[84..86].copy_from_slice(&300i16.to_le_bytes());
-    d[86..90].copy_from_slice(&(-1000i32).to_le_bytes());
-    d[90] = 80;
-    d[104 + 8..104 + 12].copy_from_slice(&(-1.0f32).to_le_bytes());
     let mut data = vec![0u8, 1u8];
-    data.extend_from_slice(&d);
+    data.extend_from_slice(&s1_duml::dds::StockPush::synthesize(
+        u32::from(seq) * 20,
+        rpm,
+        body,
+    ));
     Frame::request(
         host::MOTION_CONTROLLER,
         host::BASE,

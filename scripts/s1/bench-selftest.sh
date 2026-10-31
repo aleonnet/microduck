@@ -178,6 +178,21 @@ else
     echo "selftest: telemetry-free against s1d --fake FAILED:"; cat "$FAKE/verdict.txt"; tail -5 "$FAKE/s1d.log"; fail=1
 fi
 kill "$S1D_PID" 2>/dev/null; wait "$S1D_PID" 2>/dev/null || true; rm -f "$SOCK"
+# `up`: one command from a cold robot — the stock stopped, the daemons launched with the mixer state
+# and the speaker control, the socket forwarded, the mixer checked against the shipped state (the
+# shim answers no amixer values, so the check must FAIL and say which control it could not read).
+run_expect_fail() { local stage="$1"; shift; ASKED_FROM=$(wc -c < "$ADB_SHIM_LOG" 2>/dev/null || echo 0)
+    if scripts/s1/bench.sh "$stage" "$@" > "$WORK/$stage.txt" 2>&1; then echo "selftest: stage $stage PASSED where it must fail"; fail=1; else echo "selftest: stage $stage failed as it must"; fi; }
+run_expect_fail up
+asked up "stop dji_hdvt_uav"
+asked up "/opt/robot/bin/s1d --port /dev/ttyS3 --baud 921600 --sounds /opt/robot/sounds --volume-control 'Speaker' --alsa-state /opt/robot/asound.state.stock"
+asked up "amixer -c 0 cget name='MIC2 Boost'"
+asked up "forward tcp:1 localfilesystem:/data/debian/run/robotd.sock"
+grep -q "UNKNOWN\|DIFF\|mixer" "$WORK/up.txt" && echo "selftest: up checks the mixer against the shipped state" || { echo "selftest: up did not check the mixer"; fail=1; }
+# `floor`: the floor items only, through s1-e2e robot (the forward exists, the port refuses: recorded).
+run floor
+asked floor "forward tcp:1 localfilesystem:/data/debian/run/robotd.sock"
+grep -q -- "--only robot.enable arms (socket) lifted: the wheels stop F1 follow gimbal_lead" "$ADB_SHIM_LOG" || tail -c +"$((ASKED_FROM + 1))" "$ADB_SHIM_LOG" >/dev/null
 run frames
 asked frames "|| mount -o bind /dev /data/debian/dev"
 grep -q "gst-launch-1.0 v4l2src" "$ADB_SHIM_LOG" && { echo "selftest: frames still streams with gst-launch"; fail=1; } || echo "selftest: frames stops before the stream"
