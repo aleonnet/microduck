@@ -882,6 +882,29 @@ owner's, and it is asked with this number on the table, not before.
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/infer/onboard.txt sha256=a93eee73e47c2312386e1266535570f388cf20b59c87b300a9d493e56d0aea31
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/infer/offboard.txt sha256=51ad2e0020fc32a66cbf01f4c6bdb5a58f2ae25e5f7d0089ab38f30ad3ae4e28
 
+## Item 4, the USB port and the Coral: host mode forced with the Coral on the micro-USB (2026-10-31, 01:4x)
+
+The ports, finally named by the owner at the robot: the box on the gimbal is the controller; its
+**micro-USB on the left side** is the Linux port (the Mac's adb over USB rides on it; the manual's
+"Micro USB — to connect to the computer"; the `comip-otg` gadget, `CONFIGURED`); its **USB-C at the
+back** is not that port (yesterday the Coral's LED lit there — 5 V present — and Linux saw
+nothing; what it is remains unknown). Yesterday's forced-host test had the Coral on the USB-C,
+i.e. not on the OTG bus at all, so it proved nothing about enumeration; tonight's puts it on the
+micro-USB through the only chain at hand — a micro-USB→USB-A **device** cable (its micro plug
+leaves the ID pin floating, so the kernel will not switch by itself: `gpio-137` read high
+throughout) into a USB-A-female→USB-C-male OTG adapter into the Coral — and forces the switch:
+`echo 1 > otg_state` → `ID: 0 state: 1 HOST` within a second and for the whole 20 s, bus 1's root
+hub present (`usb1 1d6b:0002`), **nothing enumerated on bus 1**; bus 2 unchanged (the Genesys hub
+and the Atheros Wi-Fi). `echo 0` → `ID: 1 state: 2 DEVICE`. `dmesg` printed nothing in the window
+(to read `/proc/kmsg` next time instead). Whether the Coral's LED lit in those 20 s — the sign of
+VBUS reaching it through the chain — is the owner's observation, recorded in the chat. The chain
+itself is suspect: a phone-style OTG adapter carries pull-downs on its CC pins to make the C side
+the host, which is the opposite of what a Coral's USB-C expects; the clean test is a micro-USB OTG
+adapter (ID grounded) with the Coral's own USB-A→USB-C cable, and that adapter is not in the house
+tonight. Open; the inference number (stage 12) is what makes it worth pursuing.
+
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/usb-coral/host_forced_coral_on_microusb.txt sha256=
+
 ## Corrections after the cold reader (2026-10-30 18:29 -0300) — this section supersedes the hand-off's open-items table
 
 A cold reader resumed from `docs/plans/2026-10-30-1905-handoff-s1-fase1-bateria2.md` alone and found
