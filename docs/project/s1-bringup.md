@@ -1604,3 +1604,84 @@ back down; the DJI pick-up bit never set (as on 2026-10-30).
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/floor/lift_marks.txt sha256=19d8882c4c6ca673f47a7e5b2abaeca9931ac2e51253bb4afeb19d200213e7a2
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/floor/lift2_telemetry.ndjson sha256=3cd04529db54dc641bba42f6c7112d37c818d99cf73ed3f061d83017a90393ad
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/floor/lift2_marks.txt sha256=9df859d4843b07fc1e07877edec2a63a9831a2a8a0b0b8f7776eb70f8266ef70
+
+## Audit ledger, 2026-10-31 15:2x: every route against the code, and the fixes it owes (owner's order: "read all the code, validate 100 %, every command ready for the UI and the intelligence phase, no shortcuts")
+
+Base `f746b2e`. Nothing is fixed before this ledger; each fix comes with the test that fails first, the fix, the planted
+defect refused, and one floor run through the bench. The owner's bar: "no sandy ground for phase 2 or the UI".
+
+**Read whole in this front** (the command's data path, contract → daemon → frame → wire): `s1d/src/api.rs` (490),
+`ipc.rs` (732), `tick.rs` (807), `intents.rs` (313), `state.rs` (446), `body.rs`, `main.rs`, `button.rs`, `sound.rs`,
+`bin/s1ctl.rs`, `tests/fake_body.rs` (505), `s1-duml/src/cmd.rs` (590); DJI's `rm_module.py` (`Gimbal`), `rm_ctrl.py`
+(`GimbalCtrl`), `rm_define.py` (coordinates, modes); `duck-ipc-proto` `HeadParams`/`LookParams`/`LookResult`/
+`IntentResult`. **Still to read whole** (closed items with artefacts, but the order is 100 %): `cam.rs`, `v4l2.rs`,
+`bin/s1-cam.rs`, `bin/s1-infer.rs`, `bin/s1-e2e.rs`, `s1-duml/src/{frame,dds,events,crc}.rs`, both crates' other tests,
+`scripts/s1/*.sh`, `deploy/s1/*`.
+
+**D1 `s1.goto` accepted, no motion** (floor 14:0x, `goto1_telemetry.ndjson`: odometry still, |rpm| ≤ 31). Cause,
+`tick.rs` 366–423: while armed every tick sends a wheel-speed or follow frame, zero twist included, over the controller's
+position task (`0x3f/0x25`); DJI's `ChassisCtrl.move` sends no wheel speeds during the task. Fix: a `position_task` slot
+in `Intents` (set by `s1.goto`, cleared by `--stop`, by a non-zero `robot.move`/`s1.wheels`, or by a timeout from
+distance/speed plus slack); while set, the loop sends the heartbeat and no wheel/follow frame. Failing test first
+(`fake_body.rs`): goto active for 0.5 s → zero `0x3f/0x20`/`0x22` frames, ≥ 40 heartbeats. Counter-proof: guard
+removed → the test counts wheel frames.
+
+**D2 `s1.follow gimbal_lead`: the body turns and never stops** (floor 14:0x, `f1_gimbal_lead_head_telemetry.ndjson`:
+head +45° → body to −120°, gimbal-vs-chassis −5..+1°). Cause: `tick.rs` 425–435 re-sends `gimbal_angles(target)` every
+100 ms, and `cmd.rs::gimbal_angles` uses coordinate 3 (`0x1d`); `rm_define.py` 185–190: coordinates 3/4/5 are
+**yaw relative to the car**, 0 is NED. With the chassis chasing the gimbal (follow offset 0°) each re-send puts the
+target 45° ahead of the chassis's new heading. In free mode the re-send is harmless (±60° measured 2026-10-30). Fix:
+in `GimbalLead` the head target goes out once per change (no hold re-send), as DJI's `set_degree_ctrl` is one task; in
+`ChassisLead` the yaw axis bit is masked (`rm_ctrl.py` 1669–1672: "gimbal_yaw_follow_mode, the yaw ctrl invalid").
+Failing test first: GimbalLead, constant head, 0.5 s → exactly one `0x3f/0xb0`; Free → ≥ 4; ChassisLead → yaw bit off.
+
+**D3 `s1.gimbal speed` moves ~1° and stops** (floor 14:0x). Cause: `ipc.rs` 324–327 sends one `0x04/0x0c` (no ack);
+the controller applies a rate for one short period. DJI's `set_accel_ctrl` is also one frame per call (NO_ACK), and
+the app/pad re-send it continuously — it is a rate, like the stick. Fix: `speed` becomes a stamped continuous intent
+(`gimbal_rate`) re-sent every tick while fresher than the deadman; `stop` zeroes it. Failing test first: speed 30/−15
+for 0.3 s → ≥ 20 frames with 300/−150; none after the deadman (today: 1 frame).
+
+**D4 `robot.look` answers in the wrong shape** (14:5x: `robotctl robot look 1 0.5 -0.1` → "missing field `head`";
+gimbal 0°). Cause: `ipc.rs` 656–658 refuses with `IntentResult`; the contract's answer is `LookResult { head, clamped }`
+(`lib.rs` 2305–2313) and `robotctl::run_look` decodes that. Fix: serve it on the gimbal — `head_yaw = atan2(y, x)`,
+`head_pitch = −atan2(z, hypot(x, y))` in the duck's trunk frame (x forward, y left, z up; positive pitch looks down),
+clamped to the manual's travel (`clamped: true` when it saturates), handed to the same slot `robot.head` feeds;
+`neck_pitch` accepted and ignored (two axes). Failing test first (`tests/dispatch.rs`): the answer decodes as
+`LookResult` with `head_yaw = atan2(0.5, 1)`; today it decodes as `IntentResult { accepted: false }`.
+
+**D5 `s1.gimbal sleep/wake`: accepted, no fold** (14:3x, `f5_sleep_wake.ndjson`; owner: "nada mexeu"). The frame is
+byte for byte DJI's (`cmd.rs::gimbal_suspend_resume` = `rm_module.py` 501–514: same payload, sender 0xC9,
+`NEED_ACK_NO_FINISH`); `rm_ctrl.py` 1438 sends nothing before it. The gimbal's ack is not read (trace level). Verdict:
+**cause not determined by code**. Fix needs measurement: (a) every ack to an S1 one-shot logged at `info` with its
+retcode (class fix, not only DDS answers); (b) a capture of the stock doing a gimbal sleep (Lab block) in the next
+capture script. No new frame goes to the robot on a hypothesis (owner, 2026-10-30). Stays 🟡 with the cause open.
+
+**D6 mic mixer and ALSA state at start.** The mic works only because the stock ran first (its four mixer controls
+persist); `s1.volume` depends on a hand-passed control name; `bench.sh`/selftest still say `Speaker Volume`. Fix:
+`s1d --alsa-state <file>` runs `alsactl restore -f` at start when the file exists (the 14:0x `asound.state.stock`
+artefact); bench and selftest say `Speaker`; the `up` stage installs the state file. Proof: `amixer contents` after
+restore equals the saved state; selftest refutes `Speaker Volume`.
+
+**D7 the wheels-stop rule is absent.** Data (14:3x–14:4x, `lift*_telemetry.ndjson`): on the floor at 0.15 and 0.3 m/s
+the disagreement |v_fused − v_wheels| ≤ 0.13 m/s; lifted (stand 2026-10-30 wheels stopped; hand wheels turning; hand
+wheels stopped) it runs past 0.4 m/s within 1.5 s. Signal authorised by the owner (14:5x). Fix in `tick.rs`: v_wheels by
+the mecanum forward kinematics of the four rpm (`wheel_radius_m`, `half_sum_lw_m` already in `Config`), v_fused from the
+push's `velocity_body`; `lifted` when the disagreement exceeds 0.4 m/s for ≥ 0.3 s; while lifted the wheel frame is
+zero (heartbeat, gimbal, sounds, lights, perception go on); released below 0.15 m/s for ≥ 0.5 s; published as
+`robot.state.safety.picked_up`. Failing test first with real pushes cut from `lift2` (lifted → wheels zero from the push
+that crosses 0.4) and from run 1 (floor → never zeroed by the detector). Counter-proof: threshold planted at 2.0 → the
+lifted test fails.
+
+**D8 the bench depends on scripts in the chat.** Fix: an `up` stage (root adb by USB or Wi-Fi, mounts, stop the stock,
+install, daemons with `--volume-control Speaker --alsa-state`, health) and a `floor` stage (the floor items as
+`s1-e2e robot` items judged by telemetry: F1 both ways, F5, F6, speed, look, volume, lifted with the sound cue), both
+in the selftest; every command loop by wall clock.
+
+**Routes, verdict by code.** The deliberate refusals (`ipc.rs` 636–700: pose, mouth, set_mode, chorale, vetbook, model,
+theremin, rest/shutdown, policies and skills) answer `IntentResult` with a reason, which is what those clients decode.
+`robot.look` is the one refusal in the wrong shape (D4). `robot.remote_session_active` answers a raw `{"active": false}`:
+its shape in the contract is to be checked when `lib.rs` is read for it.
+
+**Order:** D4 → D1 → D2 → D3 → D6 → D7 → D8 → D5 (ack log + capture script) → the rest of the reading → runbook, reuse
+map, README, lychee → gates → one floor run → close. The runbook and the reuse map live in this record while the front's
+scope does not include `docs/robot/` (widening the scope is the owner's act, in plan mode).
