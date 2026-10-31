@@ -64,7 +64,7 @@ stages 5, 6 and 8.
 | 2 | `backup` | every partition dumped, SHA on robot == SHA on Mac | **done 2026-10-30** (below): 14 on the card, 11 pulled, SHA equal |
 | 3 | `exec` | a binary of ours runs on the robot (`/data`, or `setenforce 0` by the owner, or the microSD); the chroot answers `uname -a` and `ldd --version` | **done 2026-10-30** (below) — gate passed |
 | 4 | `stop` | `hdvt_uav` and `monitor` stopped; nobody holds `ttyS3` | **done 2026-10-30** (below) |
-| 5 | `drive` + `items` | `s1d` + `netpadd` + `robotctl health` in the chroot; `s1-e2e robot` from the Mac: the pad over UDP into `netpadd` (wheels, turn, strafe, gimbal, lights, sounds, arm/disarm), the S1 list through `s1ctl --tcp`, telemetry | **wheels and gimbal done 2026-10-30** (below, owner's witness); **every item pre-tested on the Mac** (`s1-e2e fake`, 40 of 40, below); the robot session runs the same program minus the two wire-only items (a test holds the two lists equal); telemetry: the controller's own boot-time push and the gimbal's `0x04/0x05` decoded by layout and held to two real captures (2026-10-30 (night), below); robot confirmation = stage `telemetry` |
+| 5 | `drive` + `items` | `s1d` + `netpadd` + `robotctl health` in the chroot; `s1-e2e robot` from the Mac: the pad over UDP into `netpadd` (wheels, turn, strafe, gimbal, lights, sounds, arm/disarm), the S1 list through `s1ctl --tcp`, telemetry | **wheels and gimbal done 2026-10-30** (below, owner's witness); **every item pre-tested on the Mac** (`s1-e2e fake`, 40 of 40, below); the robot session runs the same program minus the two wire-only items (a test holds the two lists equal); telemetry **done 2026-10-30 (night)**: the controller's own boot-time push and the gimbal's `0x04/0x05` decoded by layout, held to two real captures and confirmed on the robot (stages `telemetry`, `telemetry-gimbal`, below) |
 | 6 | `events` | `robotctl flashlight` lights the LEDs; every effect of the real `0x3f/0x32`; armour hits, IR and the button as `s1.event` | pre-tested on the Mac (events fed to the fake body reach `s1ctl events`; the button through a FIFO); pending on the robot |
 | 7 | `camera` | formats listed; the frame waits for `s1-cam` (a generic stream rebooted the robot twice, 2026-10-30) | **measured 2026-10-30**, frame pending |
 | 8 | `audio` | mic as a 60 s stream through `arecord`; `aplay` while driving, CPU sampled | speaker **proven** (owner, four times); mic: device `hw:0,0` right channel, no signal yet (2026-10-30) |
@@ -72,7 +72,7 @@ stages 5, 6 and 8.
 | 10 | `restore` | reboot brings the stock back; the app drives | measured twice 2026-10-30 (stock back, app drove), artefact pending |
 | 11 | `frames` | frames at 720p and 360p: fps and CPU — by `s1-cam` over the stock's own call sequence (no `gst-launch v4l2src`: same generic path that rebooted the robot) | pending — **gates the port** (360p was never captured from the stock; a 360p `S_FMT` is a hypothesis and does not go to the robot) |
 | 12 | `infer` | `s1-infer` (the detector's ONNX path) on the S1 with `libonnxruntime` armv7 and on the Mac over the same frames: ms/frame on both tiers | pending on the robot; the Mac tier ran tonight on a synthetic frame (below) — **gates the port** (one tier suffices) |
-| — | `telemetry` | with the stock alive and nothing of ours on the UART: the stock controller process relaunched under `strace` from its first write (its boot-time DDS subscription, the subject list of the 176 B push) and 40 s of UART reads while the owner drives the gimbal to its stops (the `0x04/0x05` push against the manual's limits) | part (a) **done 2026-10-30 20:55** (subject list captured, below); part (b) `telemetry-gimbal` pending |
+| — | `telemetry` | with the stock alive and nothing of ours on the UART: the stock controller process relaunched under `strace` from its first write (its boot-time DDS subscription, the subject list of the 176 B push) and 40 s of UART reads while the owner drives the gimbal to its stops (the `0x04/0x05` push against the manual's limits) | **done 2026-10-30, 20:55 and 21:0x** (subject list captured; gimbal push confirmed at the pitch stops, below) |
 
 The `items` stage is `s1-e2e robot` alone, with the daemons already up; `e2e` is the same program
 with no robot (`s1-e2e fake`), the pre-test every stage-5 and stage-6 item passes before the robot
@@ -611,8 +611,19 @@ ends the tracee itself.
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry/hdvt_exec_writes.strace sha256=adae9b91c641ee3637693b6a975f33fb13e403c3fc9ce199b551ca4f80fc9e41
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry/dds_requests.txt sha256=779f4156981597a184490772363accd7aac97658c06bd8988d9e813d5a935842
 
-**Still to confirm on the robot (stage `telemetry-gimbal`):** the gimbal's `0x04/0x05` at the
-stops, against the manual's limits. The DJI on-board runtime (`dji_scratch`) subscribes only when a script starts
+**Confirmed on the robot (2026-10-30, 21:0x, stage `telemetry-gimbal`, app connected, the owner
+driving the gimbal to its stops for 40 s):** 1388 `0x04/0x05` pushes in 35.8 s (38.7 Hz in this
+window; 21 Hz in the 17:05 capture — the rate varies). Pitch field −21.2°..+36.8° against the
+manual's −20°/+35° (the mechanical stops sit a degree or two past the published figures), first
+excursion of yaw negative when the owner was asked to go left first (DJI's sign: right positive),
+yaw −95.1°..+121.4° (the yaw stops at ±250° were not reached in the window). The quaternion agrees
+with the yaw field to within 1.2° at both yaw extremes (−94.7° for −95.1°, 122.6° for 121.4°). The
+yaw at 8 stayed near 0° while the yaw at 4 held 92°–100°: the chassis was following the gimbal, so
+8 is the gimbal relative to the chassis and 4 is the ground frame — as read from the 17:05 data.
+`events::GimbalPush` is confirmed field by field; telemetry is closed.
+
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-gimbal/hdvt_gimbal_reads.strace sha256=cefd0ab0a759b8339ac1e4788f2989e6638cf172cd884b8a753cd6db1e3d45e7
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-gimbal/gimbal_pushes.txt sha256=a0ceece4b79f30366f6d13f500470e23789feb42cead8900fa0837a792d2aea4 The DJI on-board runtime (`dji_scratch`) subscribes only when a script starts
 (`script_framework.py:94`): node `0xC9`, msg 0, flags 0, ten subjects at 50 Hz, accepting retcode
 `0` or `0x23` (`rm_module.py:1300`, `rm_ctrl.py:5184`).
 
