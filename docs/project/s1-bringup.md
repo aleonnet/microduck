@@ -912,7 +912,20 @@ the next thing to measure, and the Coral's LED is the owner's meter (first attem
 that lights by itself — a pendrive with an LED, a USB lamp — in the forced-host window is the
 decisive check that needs no adapter: lit and enumerated → the port hosts and the Coral chain is
 the problem; dark → VBUS does not reach the connector and this port cannot host without a hardware
-change. Open; the inference number (stage 12) is what makes it worth pursuing.
+change. **The Coral's LED stayed dark in the second attempt too** (owner): the driver's "vbus power
+1" does not put 5 V on the micro-USB connector. **The USB-C at the back, watched for 40 s while the
+owner plugged the Coral in twice (02:0x):** the device list never changed (bus 2: the Genesys hub
+and the Wi-Fi only; bus 1: the root hub), the kernel log had no USB event at all, the OTG state
+stayed `DEVICE` — that connector carries no USB data to either of the SoC's buses; its 5 V (the
+Coral's LED lit there yesterday) is power only. **So, as the hardware stands: the micro-USB has
+the data lines and a host mode but no bus power, the USB-C has power and no data.** The one path
+that needs no board change is the standard one for a host port without VBUS: a **self-powered USB
+hub** between the micro-USB (host forced, or a true OTG plug) and the Coral — the hub feeds the
+Coral (which wants up to 900 mA anyway, more than any OTG port gives) and the robot supplies only
+data. Not tried tonight (no powered hub at hand). Open; the inference number (stage 12) is what
+makes it worth pursuing.
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/usb-coral/usbc_hotplug_watch.txt sha256=ad5bec22cb827a6f5a1e2099cd5e3f6149f482c71e2fea9dd379c241f231d043
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/usb-coral/kmsg_usbc.txt sha256=1263821bdb268098c14aa4b629e0a51253d657340fa31234167744cd5b2d73dc
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/usb-coral/host_forced_coral_on_microusb_otg2.txt sha256=33bbee9d058fa1e01817b424b83972d67898e0261f84597db5e65917518b5258
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/usb-coral/kmsg_otg2.txt sha256=84322dad3664a6ca2d2e7f308cbeeee14fddfaf65e70f2beae02b53f105e5f0a
 
