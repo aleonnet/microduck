@@ -31,6 +31,8 @@ pad-map = { path = "../pad-map" }
 # built (`scripts/s1/build-onnxruntime.sh`), so nothing links at build time.
 duck-detect = { path = "../duck-detect" }
 anyhow = "1"
+# `s1-cam`: the camera through `ioctl`/`mmap`/`poll` with the ARM32 UAPI layouts (`s1d::v4l2`).
+libc = "0.2"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "time", "io-util", "signal", "sync"] }

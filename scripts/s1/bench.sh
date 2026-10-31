@@ -47,7 +47,8 @@ stages() {
              (follow, gimbal, goto, lights, blaster, armour, PWM, volume), telemetry, events
    items     `s1-e2e robot` alone, daemons already up; `items F2 F10` for some
  6 events    LEDs via robotctl flashlight in the chroot; the events window of s1-e2e; event0 in hex
- 7 camera    stop dji_camera; v4l2-ctl formats; one frame to a file; PNG on the Mac
+ 7 camera    stop dji_camera; v4l2-ctl formats; s1-cam replays the stock's sequence: 3 frames to files,
+             10 s of rate; PNG on the Mac (no generic stream: it rebooted the robot twice)
  8 audio     amixer route; arecord 60 s stream; aplay while driving, top alongside
  9 app       observe what the app does with the stock stopped (notes)
 10 restore   reboot; the app drives again; capture repeated shows hdvt_uav alive
@@ -274,11 +275,20 @@ case "$stage" in
     # rebooted the robot both times. The frame comes from `s1-cam`, which replays the stock camera
     # process's own call sequence (`camera/dji_camera_v4l2_decoded.strace`); until that binary exists
     # the stage records the refusal and stops here.
+    # `s1-cam` (s1-push.sh installs it) replays the stock camera process's own sequence — input,
+    # the three private controls, the format with its field and colourspace, five MMAP buffers —
+    # holding every answer to the recording and switching the stream on only when all matched; a
+    # divergence is JSON on stdout, exit 3, nothing streamed. Three frames saved, then 10 s of
+    # rate. Paths named to it are the chroot's. Without the binary the stage records the refusal.
     if $A shell "test -x $CHROOT/opt/robot/bin/s1-cam" 2>/dev/null; then
-        say "s1-cam present: its run is not wired into this stage yet — wire it, with the self-test, before trusting a frame"
+        sh_robot "$CHROOT_ENV /opt/robot/bin/s1-cam --device /dev/video0 --frames 3 --seconds 10 --out /tmp/cam" | tee "$D/s1-cam.json" || say "s1-cam rc=$? — the report is in s1-cam.json"
+        for i in 0 1 2; do $A pull "$CHROOT/tmp/cam/frame_00$i.nv12" "$D/frame_00$i.nv12" >/dev/null 2>&1 || true; done
+        # NV12 720p as the driver declared it (1920 bytes a line, 1382432 a frame); the owner judges the PNG
+        [ -f "$D/frame_000.nv12" ] && ffmpeg -loglevel error -y -f rawvideo -pix_fmt nv12 -s "$geo" -i "$D/frame_000.nv12" "$D/frame.png" || true
+    else
+        echo "stage 7 stops before the stream: a generic V4L2 stream rebooted the robot twice (2026-10-30); s1-cam is not installed (s1-push.sh)" | tee "$D/blocked.txt"
     fi
-    echo "stage 7 stops before the stream: a generic V4L2 stream rebooted the robot twice (2026-10-30); the frame waits for s1-cam" | tee "$D/blocked.txt"
-    for f in "$D"/formats.txt "$D"/fmt.txt "$D"/blocked.txt "$D"/frame.nv12 "$D"/frame.png; do [ -f "$f" ] && art "$f" || true; done ;;
+    for f in "$D"/formats.txt "$D"/fmt.txt "$D"/blocked.txt "$D"/s1-cam.json "$D"/frame_000.nv12 "$D"/frame_001.nv12 "$D"/frame_002.nv12 "$D"/frame.png; do [ -f "$f" ] && art "$f" || true; done ;;
 
   audio)
     D=$(dir audio); need_chroot

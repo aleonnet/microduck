@@ -26,7 +26,7 @@ case "$1" in
   forward|push) ;;
   pull) case "$2" in
           # A whole black 720p frame, so the camera stage's PNG conversion has real bytes to chew.
-          *frame.nv12|*frame.raw) head -c 1382400 /dev/zero > "$3" ;;
+          *frame_00*.nv12|*frame.nv12|*frame.raw) head -c 1382432 /dev/zero > "$3" ;;
           *) echo "shim" > "$3" ;;
         esac ;;
   shell)
@@ -35,6 +35,7 @@ case "$1" in
       *"dd if="*) echo "0000000000000000000000000000000000000000000000000000000000000001  /sdcard/bk/system.img" ;;
       *getenforce*) echo Disabled; echo EXEC_IN_DATA_OK ;;
       *"test -"*) exit 0 ;;
+      *"/opt/robot/bin/s1-cam "*) echo '{"streamed": true, "rate": {"fps": 29.9}, "frames_saved": [], "stalled": false}' ;;
       *"echo s1d_already_up"*) ;;
       *"echo s1d_up"*) echo s1d_up ;;
       *gst-launch-1.0*num-buffers=300*) echo "Execution ended after 0:00:12.500000000" ;;
@@ -93,9 +94,12 @@ asked events "robotctl flashlight on --color red"
 asked events "cat /dev/input/event0"
 run camera
 asked camera "v4l2-ctl -d /dev/video0 --list-formats-ext"
+# The frame comes from s1-cam replaying the stock's sequence (three frames, ten seconds of rate), never from a generic tool.
+asked camera "/opt/robot/bin/s1-cam --device /dev/video0 --frames 3 --seconds 10 --out /tmp/cam"
+[ -f "$S1_OUT/camera/frame.png" ] && echo "selftest: camera converted the frame to PNG" || { echo "selftest: camera did NOT produce frame.png"; fail=1; }
 # Stage 7 must NOT stream with a generic tool (it rebooted the robot twice): no S_FMT, no mmap stream.
 grep -qE -- "--set-fmt-video|--stream-mmap" "$ADB_SHIM_LOG" && { echo "selftest: camera still streams with v4l2-ctl"; fail=1; } || echo "selftest: camera stops before the stream"
-[ -f "$S1_OUT/camera/blocked.txt" ] && echo "selftest: camera recorded the refusal" || { echo "selftest: camera did NOT record the refusal"; fail=1; }
+[ -f "$S1_OUT/camera/blocked.txt" ] && { echo "selftest: camera recorded a refusal although s1-cam is installed"; fail=1; } || echo "selftest: camera ran s1-cam instead of refusing"
 run audio
 asked audio "arecord -D hw:0,0 -f S16_LE -r 48000 -c 2 -d 60 /tmp/mic.wav"
 asked audio "aplay -D hw:0,0 /mnt/system/audio/sound/engine_start.wav"

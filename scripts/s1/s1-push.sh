@@ -29,16 +29,16 @@ rustup target list --installed 2>/dev/null | grep -q '^armv7-unknown-linux-gnuea
 echo "[s1-push] cargo s1 -p s1d -p netpadd -p robotctl"
 cargo s1 -p s1d -p netpadd -p robotctl
 BIN=target/armv7-unknown-linux-gnueabihf/release
-for b in s1d s1ctl netpadd robotctl; do
+for b in s1d s1ctl s1-cam netpadd robotctl; do
     file "$BIN/$b" | grep -q "ELF 32-bit.*ARM" || { echo "$BIN/$b is not an ARM 32-bit ELF" >&2; exit 1; }
 done
-echo "[s1-push] built: $(ls -la $BIN/s1d $BIN/s1ctl $BIN/netpadd $BIN/robotctl | awk '{print $5, $9}' | tr '\n' ' ')"
+echo "[s1-push] built: $(ls -la $BIN/s1d $BIN/s1ctl $BIN/s1-cam $BIN/netpadd $BIN/robotctl | awk '{print $5, $9}' | tr '\n' ' ')"
 [ "$BUILD_ONLY" = no ] || exit 0
 
 A="adb -s $HOST"
 $A shell "test -d $CHROOT/bin" || { echo "no chroot at $CHROOT on $HOST; run bench.sh exec first" >&2; exit 1; }
 $A shell "mkdir -p $CHROOT/opt/robot/bin $CHROOT/etc/robot $CHROOT/run $CHROOT/var/lib/robot"
-for b in s1d s1ctl netpadd robotctl; do
+for b in s1d s1ctl s1-cam netpadd robotctl; do
     $A push "$BIN/$b" "$CHROOT/opt/robot/bin/$b" >/dev/null
 done
 $A push deploy/s1/robotd.toml "$CHROOT/etc/robot/robotd.toml" >/dev/null

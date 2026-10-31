@@ -8,11 +8,13 @@
 pub mod api;
 pub mod body;
 pub mod button;
+pub mod cam;
 pub mod intents;
 pub mod ipc;
 pub mod sound;
 pub mod state;
 pub mod tick;
+pub mod v4l2;
 
 /// Socket mode, as every daemon in this workspace: owner and group, nothing for others.
 pub const SOCKET_MODE: u32 = 0o660;

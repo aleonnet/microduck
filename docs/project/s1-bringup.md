@@ -66,7 +66,7 @@ stages 5, 6 and 8.
 | 4 | `stop` | `hdvt_uav` and `monitor` stopped; nobody holds `ttyS3` | **done 2026-10-30** (below) |
 | 5 | `drive` + `items` | `s1d` + `netpadd` + `robotctl health` in the chroot; `s1-e2e robot` from the Mac: the pad over UDP into `netpadd` (wheels, turn, strafe, gimbal, lights, sounds, arm/disarm), the S1 list through `s1ctl --tcp`, telemetry | **wheels and gimbal done 2026-10-30** (below, owner's witness); **every item pre-tested on the Mac** (`s1-e2e fake`, 40 of 40, below); the robot session runs the same program minus the two wire-only items (a test holds the two lists equal); telemetry **done 2026-10-30 (night)**: the controller's own boot-time push and the gimbal's `0x04/0x05` decoded by layout, held to two real captures and confirmed on the robot (stages `telemetry`, `telemetry-gimbal`, below) |
 | 6 | `events` | `robotctl flashlight` lights the LEDs; every effect of the real `0x3f/0x32`; armour hits, IR and the button as `s1.event` | **done 2026-10-30 (night)**, the owner watching: five body-LED effects, the launcher's trail light, 23 armour hits on the four plates, two button presses and the infrared hits as `s1.event` (section "Robot session") |
-| 7 | `camera` | formats listed; the frame waits for `s1-cam` (a generic stream rebooted the robot twice, 2026-10-30) | **measured 2026-10-30**, frame pending |
+| 7 | `camera` | formats listed; `s1-cam` replays the stock camera process's own sequence (input, three private controls, the format, five MMAP buffers), holds every answer to the recording and streams only when all matched: three frames to files and ten seconds of rate | **`s1-cam` built and pre-tested on the Mac 2026-10-31 00:xx** (section "Item 2"); the frame waits for the next power-on |
 | 8 | `audio` | mic as a 60 s stream through `arecord`; `aplay` while driving, CPU sampled | speaker **proven** (owner, four times); mic: device `hw:0,0` right channel, no signal yet (2026-10-30) |
 | 9 | `app` | what the DJI app does with the stock stopped | pending (informative) |
 | 10 | `restore` | reboot brings the stock back; the app drives | measured twice 2026-10-30 (stock back, app drove), artefact pending |
@@ -787,6 +787,51 @@ by hand with the owner watching the gimbal, then a 25 s tilt window.
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-free-20261030-221150/tilt_verdict.txt sha256=ba1e4132b74e0b378a28c34436f70579b67e4223ce20ee082fc5454e0f1bd305
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-free-20261030-221150/s1d_tilt_reads.strace sha256=967e5117009f37bd0634e1c0dbbc1340b21c277ccfc52dbf4b8ed03ef5847a88
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-free-20261030-221150/tilt_gimbal_vs_attitude.txt sha256=d62b4154c67fbb13feef09c98035444e4ae3d0fa56040a479c53ddba2684b7e8
+
+## Item 2, the camera: `s1-cam` built on the Mac, the robot's turn next (2026-10-31, 00:4x–01:3x)
+
+The owner's design decision (00:4x): 720p NV12 mirrors the duck (`mediad` captures 1280×720 and
+letterboxes it into the detector's 320×320 in one pass, `mediad/src/detect.rs`); what a viewer or
+the simulator receives is the configured quality, phase 3's business through the chip's H.264
+encoder the stock already uses (`hx280enc`, the fd the stock camera thread writes between its
+dequeue and its requeue); no resolution the stock never showed goes to the robot.
+
+- **The oracle.** `scripts/s1/v4l2-oracle.c` built and run by `v4l2-oracle.sh` in a
+  `linux/arm/v7` bookworm container: 76 values — every size, offset, ioctl number and constant
+  `s1-cam` uses, as the ARM 32-bit compiler sees them — in `s1d/tests/fixtures/v4l2_arm32.json`.
+  `v4l2_buffer` is 68 bytes (32-bit `timeval`, the `*_TIME32` the robot's strace named),
+  `v4l2_format` 204, `VIDIOC_QUERYBUF` `0xc0445609`, `VIDIOC_S_FMT` `0xc0cc5605`. `s1d/src/v4l2.rs`
+  holds each `#[repr(C)]` type and constant to that file (two tests, 74 comparisons).
+- **The sequence.** `s1d/src/cam.rs`: the stock's 27 steps (`SCRIPT`, strace lines 312–510 and
+  the five `mmap2` of `dji_camera_start.strace` l.1056–1064) replayed through a `Video` trait;
+  every answer held to the recording — driver `comip`, input 0 `ov5695`, no input 1, `CROPCAP`
+  with the stock's type 0 answering 2592×1944, `G_INPUT` answering 1, the three controls echoing
+  their values, `S_FMT` answering interlaced/1920/1382432, five buffers of 1384448 at page
+  offsets 0, 0x152, 0x2a4, 0x3f6, 0x548 — and the stream switched on only after all 27 matched;
+  a different answer is a `Divergence` naming the step and both values, and nothing past it is
+  sent. Beyond the recording: `poll` before each dequeue (the stock never saw `EAGAIN` on a
+  non-blocking fd, so it waits where the trace did not look) and `STREAMOFF` + unmap at the end
+  (the stock was killed mid-stream in every capture; the UAPI's teardown, not a frame of DJI's).
+  Tests on a scripted stand-in that answers with the recording's literal numbers: the whole
+  sequence in order and nothing else; frames out of the five buffers in queue order with their
+  own bytes; a driver answering another size stops at `SetFormat` with both sizes named; a second
+  input stops at the third step with no `STREAMON` ever sent.
+- **The binary.** `s1d/src/bin/s1-cam.rs` (`--frames 3 --seconds 10 --out /tmp/cam`): frames as
+  raw NV12 files, then the rate from the driver's sequence numbers (gaps are drops) and the
+  process's CPU time, one JSON line; a divergence is JSON and exit 3, nothing streamed. Cross-built
+  for the robot (`cargo s1 -p s1d --bin s1-cam`, ELF 32-bit ARM); `s1-push.sh` installs it.
+- **The bench.** Stage `camera` runs it when installed and converts the first frame to PNG on the
+  Mac (`ffmpeg -f rawvideo -pix_fmt nv12 -s 1280x720`); without it the stage records the refusal
+  as before. `bench-selftest.sh` asserts the exact `s1-cam` line and the PNG, and still that no
+  generic stream is asked. `scripts/s1/cam-refute.sh`: the recording's frame size planted wrong →
+  the sequence tests fail naming `1382432`; `VIDIOC_S_FMT` planted wrong → the oracle test fails
+  naming it; both files restored by hash.
+- **Not done:** the robot. It was powered off when the code was ready; the next power-on is the
+  clean boot the stage wants (`/dev/video0` answered `ENODEV` after the stock camera process was
+  killed twice on 2026-10-30), and the run is `s1-push.sh` then `bench.sh camera`: three frames,
+  a PNG the owner judges, and the rate. Out of scope: the 1 Hz private control the stock issues
+  after the stream (`+0x1928`, four values; sensor register reads by the look of it) and any
+  other resolution.
 
 ## Corrections after the cold reader (2026-10-30 18:29 -0300) — this section supersedes the hand-off's open-items table
 
