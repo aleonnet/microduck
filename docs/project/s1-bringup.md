@@ -1685,3 +1685,76 @@ its shape in the contract is to be checked when `lib.rs` is read for it.
 **Order:** D4 → D1 → D2 → D3 → D6 → D7 → D8 → D5 (ack log + capture script) → the rest of the reading → runbook, reuse
 map, README, lychee → gates → one floor run → close. The runbook and the reuse map live in this record while the front's
 scope does not include `docs/robot/` (widening the scope is the owner's act, in plan mode).
+
+## The fixes of the audit ledger, done in code (2026-10-31, 15:3x–17:3x): D1–D8 with their failing tests and planted defects; the robot proof is one floor run away
+
+Every defect of the ledger above is fixed in the daemon or the bench, each with the test that failed first, the fix, and the planted
+defect the test refused (restored by copy and hash — never by `git checkout`, which wiped an uncommitted fix once this afternoon).
+Suites: `cargo test -p s1-duml -p s1d` green (the e2e fake run 42 of 42), clippy `-D warnings` and `fmt` clean, the bench
+self-test green, the four refutation scripts green over the changed code (artefacts below). Nothing has yet been proved on the robot:
+that is the floor run, one command (`bench.sh up`, then `bench.sh floor`), with the owner watching and answering the prompts.
+
+| D | fix (commit) | failing test, then green | planted defect refused |
+|---|---|---|---|
+| D4 `robot.look` | served on the gimbal (atan2 in the duck's frame, clamped to the manual's travel), answered as `LookResult` (2faf204) | `dispatch.rs::look_answers_a_look_result_and_aims_the_gimbal` — failed with the robot's own "missing field `head`" | `clamped` always false → the out-of-reach case fails |
+| D1 `s1.goto` | the controller's position task owns the wheels: no wheel/follow frame until `--stop`, a non-zero twist or the distance/speed timeout (2faf204) | `fake_body.rs::a_position_task_owns_the_wheels_until_a_twist_takes_them_back` | guard removed → 51 wheel frames during the task |
+| D2 gimbal_lead | the head target once per change where the gimbal leads (coordinate 3's yaw is chassis-relative); pitch only where the chassis leads (2faf204) | `fake_body.rs::the_head_target_is_sent_once_where_the_gimbal_leads_and_held_elsewhere` | hold forced on → 5 frames instead of 1 |
+| D3 gimbal rate | `speed` is a streamed intent under the deadman; `stop` is DJI's zero rate with ctrl 0x00; the angle hold waits and then adopts the gimbal's real angle (2faf204) | `fake_body.rs::a_gimbal_rate_is_streamed_until_stopped_and_the_angle_hold_waits` | one frame only → the stream count fails |
+| D5 acks | every acknowledgement to a one-shot kept in `s1.telemetry` (`acks`, `last_ack` with the retcode) and said at `info`; DDS answers unchanged (3c33456) | `fake_body.rs::an_ack_to_a_one_shot_is_kept_with_its_retcode` | ack dropped → `last_ack` None |
+| D6 mixer | `deploy/s1/asound.state.stock` pushed by `s1-push.sh`, restored by `s1d --alsa-state` with `alsactl restore`; bench and self-test on the simple control `Speaker` (3c33456) | `alsa.rs` (the stand-in is asked `-f <file> restore`; a missing file refused before any spawn) | bench back to `Speaker Volume` → the self-test fails naming it |
+| D7 wheels-stop rule | `LiftDetector` on the disagreement fused velocity × wheel kinematics, 0.4 m/s for 300 ms trips, 0.15 m/s for 500 ms releases; lifted = zero wheel frame every tick, `safety.picked_up`, `limited_by: lifted` (f2e0f5a) | `tick.rs` unit tests (kinematics on the real sample, persistence both ways) and `fake_body.rs::lifted_stops_the_wheels_and_the_floor_does_not` with synthetic stock pushes | trip level planted at 2.0 → the lifted test fails |
+| D8 bench | `bench.sh up` (one command from a cold robot, USB or Wi-Fi) and `bench.sh floor` (the floor items of `s1-e2e robot`); e2e items `lifted: the wheels stop` and `robot.look (duck route)` in both modes; telemetry judges in F1 both ways, F3, F5 (with the ack), F6 (c29adbc) | the e2e fake run 42/42; the self-test asks `up` for the stop, the launch line, the mixer check and the forward | the mixer check: a planted wrong value → DIFF, an absent control named |
+
+**What the floor run must show, item by item** (`bench.sh floor`, judged by telemetry, the owner at the prompt): lifted → wheels at
+≤ 10 rpm within 1.5 s of `picked_up`, driving again after the set-down; F1 gimbal_lead → the body turns about 45° left and **stops**;
+F1 chassis_lead → gimbal realigned within 5°; F3 → ≥ 15° of yaw sweep in 1 s, held after stop; F5 → the gimbal's ack with its retcode
+in `last_ack` and a pitch change ≥ 10° (if the pitch does not change, the item fails and the retcode is the measurement D5 waited
+for); F6 → ≥ 0.7 m and +90° by odometry; robot.look → gimbal at −26.6° yaw, −5.7° pitch; volume 50 accepted.
+
+**Read whole in this front, in addition to the ledger's list:** `cam.rs`, `v4l2.rs` (structures and constants; its tests hold them to
+the ARM oracle), `bin/s1-cam.rs`, `bin/s1-infer.rs`, `s1-duml/src/{frame,dds,events,crc}.rs`, `s1-duml/tests/{dji_oracle,stock_push}.rs`,
+`s1d/tests/{dispatch,e2e,params,s1_api}.rs`, the four refutation scripts, `build-rootfs.sh`, `s1-push.sh`, `bench-selftest.sh`,
+`deploy/s1/*`. No further defect found there. **Not read whole** (said plainly): about a third of `bin/s1-e2e.rs` (the pad items of
+both modes), the body of `s1-duml/tests/real_frames.rs`, the test bodies of `v4l2.rs`, `dji-oracle.py`, `duml-strace.py`,
+`telemetry-free.py`, `v4l2-oracle.{c,sh}`, and the capture/backup/audio/camera/frames/infer/telemetry stages of `bench.sh` — all of
+them with their own refutation or artefact in this record, none on the command path a UI will drive.
+
+### Runbook: the S1 today, from a cold robot to the floor
+
+1. **Robot on, cable in.** USB (micro-USB to the Mac) or Wi-Fi: `adb devices` lists it either way (2026-10-31: both at once). Over
+   Wi-Fi after a reboot, root adb is enabled from the app's Lab (pierluigizagaria/robomaster-s1-hacks); over USB it is there at boot.
+   `S1_HOST` names the one to use (default `192.168.1.236:5555`; the USB serial is `0123456789ABCDEF`).
+2. **Install (only after a build):** `scripts/s1/s1-push.sh` — cross-builds `s1d`, `s1ctl`, `s1-cam`, `netpadd`, `robotctl`, pushes
+   them with `robotd.toml`, `asound.conf`, `asound.state.stock`, and links the sound bank.
+3. **Up:** `S1_BAUD=921600 scripts/s1/bench.sh up` — mounts, stock body process stopped, `s1d` + `netpadd` up (`--volume-control
+   Speaker --alsa-state /opt/robot/asound.state.stock`), health, the socket forwarded to `127.0.0.1:9000`, the four mixer controls
+   checked against the shipped state. Nothing moves.
+4. **Bench items, wheels in the air:** `scripts/s1/bench.sh items` (every item) or `items F2 F10` (some).
+5. **Floor:** `scripts/s1/bench.sh floor` — the robot on the floor with 1.5 m free; the prompts say what to watch; one chirp = lift
+   the robot 10 cm, two chirps = set it down. The verdict per item is in `floor/e2e_console.txt`, the daemon's log in `floor/s1d.log`.
+6. **From a shell:** `s1ctl --tcp 127.0.0.1:9000 <telemetry|follow|gimbal|goto|wheels|lights|blaster|armor|pwm|volume|events|frame>`;
+   on the robot, `robotctl <health|quack|flashlight|monitor|robot enable|robot look>` inside the chroot
+   (`adb shell /system/xbin/busybox chroot /data/debian /usr/bin/env PATH=/usr/bin:/bin /opt/robot/bin/robotctl …`).
+7. **Off:** power the robot off. The stock comes back by itself at the next boot; nothing of ours persists across it.
+8. **No robot:** `scripts/s1/bench.sh e2e` (every item on the wire), `scripts/s1/bench-selftest.sh` (every stage against a stand-in
+   adb), the four `*-refute.sh`.
+
+### Reuse map: what the S1 takes from the duck as it is, what it needs anew, read off `s1d/src/ipc.rs`
+
+| duck mechanism | on the S1 | state |
+|---|---|---|
+| `duck-ipc-proto` contract, JSON-RPC/NDJSON on `/run/robotd.sock`, `hello`, `robot.health`, `robot.state` (+ subscribe), `robot.move`, `robot.head`, `robot.look`, `robot.stop`, `robot.enable/init/relax`, `robot.sound`, `robot.flashlight`, `robot.mode` (`roller`), `robot.policies`, `robot.skills`, `pad.bindings`, `robot.safe_to_restart`, `robot.model_api` | served by `s1d` in the contract's shapes, same socket, same clients (`robotctl`, `netpadd`, the pad) | reused as is |
+| `robot.pose`, `robot.mouth`, `robot.set_mode`, `robot.theremin`, `robot.chorale`, `chorale.subscribe`, `robot.vetbook*`, `robot.model`, `robot.rest`, `robot.shutdown`, `robot.do`, policies/skills loading, `robot.reboot_motors` | refused with a reason (legs, mouth, voice, vet book, URDF, skills: not on this body) — the clients decode the refusal | not applicable, correctly refused |
+| `netpadd` + `pad-map` (the gamepad over UDP) | unchanged binary, `[pad_roller]` opened for the strafe | reused as is |
+| `robotctl` | unchanged binary in the chroot | reused as is |
+| `robotd`'s voice bank (`aplay` per tag, the held wheee) | `s1d::sound`, the same rules; the stock's wavs under the duck's tags until phase 2 gives the S1 a voice | mechanism reused, sounds to make |
+| `pet-detect` (16 kHz mono mic → scratch classifier) | runs live on the S1 through `micleft`; the duck's model does not fire on the S1's mic (max 0.31) | pipeline reused, **model to retrain in the dojo with S1 recordings** |
+| `duck-detect` ONNX path (`mediad` on a board without NPU) | 1741 ms per 320×320 frame with NEON, 2 inferences/s wanted | pipeline reused, **model needs INT8/Edge TPU or a smaller input** (owner's decision, phase 2) |
+| `mediad` camera (V4L2 720p, H.264 WebRTC) | `s1-cam` gives 720p NV12 at 30 fps through the stock's own sequence; no Rockchip encoder on the S1 | capture reused in kind, **software or Hantro H.264 encoder needed for the browser console** |
+| the duck's RL walking policy, ToF depth, BLE, the mouth servo | no legs, no depth sensor, no BLE, no mouth on the S1 | not applicable |
+| S1-only: follow modes, gimbal rate/recentre/sleep, goto, per-wheel rpm, lights, blaster, armour, PWM, volume, telemetry, events, raw frame | the S1 list (`s1.*`, `S1_API_VERSION` 1), `s1ctl` | new, documented in "The S1's own list" |
+
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/refute/e2e-refute.txt sha256=d265d16ae7a1b8f14fc4d94381481d6800cfb1dbd968e0c1608784de285b4e7f
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/refute/telemetry-refute.txt sha256=3872acd4deeb1c145be7c6cbc8a351f7a1800108ff8f09560b40c2ad4488d16e
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/refute/audio-refute.txt sha256=9e471908e26afb7ad47e1703b6b7d3c0f156b2f50326da2cc1455b7bd49521ef
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/refute/cam-refute.txt sha256=4d7e048fa041d293410fc7126ef81037bee4c7e8f9b7d348eace795b5edeabf6
