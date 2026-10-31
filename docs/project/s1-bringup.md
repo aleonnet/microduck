@@ -712,6 +712,29 @@ by hand with the owner watching the gimbal, then a 25 s tilt window.
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-cleanboot/battery_check.txt sha256=2bd58a761ec94dbddc133ea1f417d894ef3bc3754e71798de4461b734d4b4d67
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-cleanboot/hdvt_app_connected_reads.strace sha256=210d82bcbdeb567605a91ac42d78eafca6a8815b74642c195bf4a72d9536707e
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-cleanboot/battery_check_app.txt sha256=ea31b681429e0f678e46a517c2d7b4c3a3063659a24e1c78764de834288f0086
+- **Live through the duck's own calls (23:5x, a fresh boot, `s1d` with both orders installed,
+  sha equal on both sides).** `robot.health`: `healthy: true`, battery 10.776 V / 34 %, loop
+  99.99 Hz; `robot.state` (one frame of `robotctl monitor`): `odom.yaw` 1.53° = the quaternion's
+  heading 1.53°, gravity `[0.056, 0.003, −1.004]`, gyro ~0, head `[0, 0, 0.1°, 0]`, policy `held`
+  after the stage disarmed. The stage itself (`telemetry-free`, 467 samples): head +60 → relative
+  −60.0 (error 0.0°), ground − relative − attitude +0.09° (both IMUs aligned on a fresh boot; the
+  +6.2° of 22:xx was that boot's drift), battery 10.905 → 10.895 V / 42 → 41 % over 50 s, wheel rpm
+  published, ≤ 25 at rest (the judge's 20 rpm tolerance is tighter than the ESC's idle jitter on
+  this boot; its `body_still NO` line is that, not the body). Then a 40 s window with the owner's
+  hands (`pickup.ndjson`, 372 samples): lifted 3 s, laid on one side, levelled, laid on the other,
+  back on the stand. `roll_over` set on both sides (101 samples from t = 6.85 s; roll −81° and
+  +95°) — `safety.fallen` is proven; `is_pick_up` **never set** while the robot hung in the air at
+  rest (0 of 372) — DJI's bit wants a condition lifting alone does not meet (the simulator does
+  not implement it either; `robomaster_sim` `SaStatusSubject::update` computes no pick-up), so
+  `safety.picked_up` from this bit is not something phase 2 can lean on; a pick-up of its own from
+  the accelerometer and the wheels is the way, if phase 2 wants one.
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-free/stop.txt sha256=93993a72aca42aaa5d68f7f5908a965278cb4465616b8ad9b55f1e7cef566425
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-free/daemons.txt sha256=fc64af67d505f7370e340a6d113ed164058555ca0c9b7bb967aa83380f807492
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-free/samples.ndjson sha256=bf99cf4818f851f4a11bf818a365174c3c65a5ed2cea0fcdeb12941afc6aa241
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-free/verdict.txt sha256=32596350eccc5e5671aaec558529bda14496671682c4f04b7a0c8d32cd466451
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-free/s1d.log sha256=6b8246fda86ebf4ec3bbc7a0cc36f994ae3b791da49374e107d6fe8b4a3dea69
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-free/pickup.ndjson sha256=123c2773deac619de943f067fb648acab4f70ae2aae4d27bc406dcca34408a96
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-free/pickup_bits.txt sha256=4d03612e7957dd3b7fa03aa6c0b3170bc18c8a8c66743d32fb2b29df7ee68aaf
 - Refutations (`telemetry-refute.sh`, six plants, all refused, sources restored by hash): the
   battery offset; the head verdict without the duck/DJI sign; the attitude offset in the strace
   report; the plausibility window opened (49 mV would pass as a pack); the second order's ESC
