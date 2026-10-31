@@ -1273,6 +1273,30 @@ stock stopped by the stages (the playback device is held by the stock until then
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/pet/live_petting_run2.txt sha256=e365f75f65783464b925233c905d6dcba55a3e79765cb5af4f9480a2436ddd0d
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/pet/pet_run2.wav sha256=771664e6210752998ff9a3210872a6f662e5c8b31a460ceeffabe8502b7d9a21
 
+## Stage 12, the NEON lever measured (2026-10-31, 12:3x–12:5x)
+
+`build-onnxruntime.sh` takes `ORT_ARCH_FLAGS` now, on the cmake command line (its first form, a
+toolchain `*_INIT`, was silently overridden by `-DCMAKE_C_FLAGS`: that build came out
+byte-identical to the baseline, same hash — caught because the proof was the hash, not the log).
+The NEON build (`-march=armv7-a -mfpu=neon-vfpv4 -mfloat-abi=hard`, 1070 generated rules carry
+the flags, library `687f8f69…`, 19 188 004 bytes against the baseline's 19 179 636) was pushed by
+stage 12 and run over the real 720p frame (`camera/frame.png`), stock stopped:
+
+| runtime | p50 per 320×320 inference | p95 | CPU per frame |
+|---|---|---|---|
+| S1, baseline (2026-10-30, no NEON) | 2341.8 ms | 2613.1 ms | ≈ wall (one core) |
+| **S1, NEON (today)** | **1740.9 ms** | 1918.3 ms | 2213.3 ms (≈1.3 cores) |
+| Mac, reference | 12.0 ms | 12.2 ms | — |
+
+NEON buys 26 %. The duck's own pace is two inferences a second (≤ 500 ms each, a tenth of a core
+on its NPU, `npu-bringup.md`); the S1's Cortex-A7 is 3.5× away from it with this FP32 model at
+320×320, and threads do not close the gap (1.3 cores busy for one inference). The levers left are
+on the model side — an INT8 quantisation of `duck_detect` (ONNX Runtime's ARM NEON int8 kernels),
+a smaller input — or off the S1's CPU: the Coral through the OTG Y cable (ordered), or the Mac.
+That choice is the owner's phase-2 decision; the numbers are on the table. **The robot restarted by
+itself twice during the morning** (uptime 63 s at 12:4x after a second drop; adb refused, the Lab
+re-enabled it): to watch the battery level at the next power-on before reading more into it.
+
 ## Corrections after the cold reader (2026-10-30 18:29 -0300) — this section supersedes the hand-off's open-items table
 
 A cold reader resumed from `docs/plans/2026-10-30-1905-handoff-s1-fase1-bateria2.md` alone and found
