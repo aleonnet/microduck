@@ -57,7 +57,9 @@ stages() {
              strace from its first instruction, 45 s — its boot-time DDS subscription (the subject
              list of the 176 B push). The app disconnects; no action needed from you.
    telemetry-gimbal  with the stock ALIVE and the app OPEN: 40 s of the UART reads while YOU drive
-             the gimbal to its stops — the gimbal's 0x04/0x05 push against the manual's limits
+             the gimbal up and down to its pitch stops and sweep it left and right (the body follows
+             the gimbal in the app's driving mode: yaw has no stop) — the 0x04/0x05 push against the
+             manual's pitch limits, and its yaw against the quaternion
    e2e       no robot: `s1-e2e fake` — the same items against s1d --fake, netpadd, robotctl and
              s1ctl on this Mac, judged on the wire bytes (the pre-test of stages 5 and 6)
    verify-record <md>   check every `artefato:` line of a record: path exists, sha256 matches
@@ -341,10 +343,12 @@ case "$stage" in
 
   telemetry-gimbal)
     need_robot; D=$(dir telemetry-gimbal)
-    # The gimbal's own attitude push, read off the UART while the owner drives the gimbal to every
-    # stop: the values must reach the manual's limits (pitch −20°/+35°, yaw ±250°). The owner is
-    # told in the chat before this stage starts; the window is 40 s from the first line below.
-    say "WINDOW OPEN: 40 s — drive the gimbal to its STOPS: full left, full right, full up, full down, then recentre"
+    # The gimbal's own attitude push, read off the UART while the owner drives the gimbal: pitch to
+    # both stops (the manual's −20°/+35°; measured −21.2°/+36.8° on 2026-10-30), yaw swept left and
+    # right — the chassis follows the gimbal in the app's driving mode, so yaw has no stop and is
+    # held to the quaternion instead. The owner is told in the chat before this stage starts; the
+    # window is 40 s from the first line below.
+    say "WINDOW OPEN: 40 s — gimbal full UP, full DOWN, then sweep LEFT and RIGHT (the body will follow), then recentre"
     sh_robot "$BB timeout -t 40 strace -f -tt -e trace=read -s 256 -o /data/hdvt_gimbal.strace -p \$($BB pidof dji_hdvt_uav)" || true
     $A pull /data/hdvt_gimbal.strace "$D/hdvt_gimbal_reads.strace" >/dev/null
     scripts/s1/duml-strace.py "$D/hdvt_gimbal_reads.strace" gimbal_push | tee "$D/gimbal_pushes.txt"

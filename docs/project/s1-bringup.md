@@ -612,14 +612,16 @@ ends the tracee itself.
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry/dds_requests.txt sha256=779f4156981597a184490772363accd7aac97658c06bd8988d9e813d5a935842
 
 **Confirmed on the robot (2026-10-30, 21:0x, stage `telemetry-gimbal`, app connected, the owner
-driving the gimbal to its stops for 40 s):** 1388 `0x04/0x05` pushes in 35.8 s (38.7 Hz in this
+driving the gimbal up and down to its pitch stops and sweeping it left and right for 40 s):** 1388 `0x04/0x05` pushes in 35.8 s (38.7 Hz in this
 window; 21 Hz in the 17:05 capture — the rate varies). Pitch field −21.2°..+36.8° against the
 manual's −20°/+35° (the mechanical stops sit a degree or two past the published figures), first
 excursion of yaw negative when the owner was asked to go left first (DJI's sign: right positive),
-yaw −95.1°..+121.4° (the yaw stops at ±250° were not reached in the window). The quaternion agrees
-with the yaw field to within 1.2° at both yaw extremes (−94.7° for −95.1°, 122.6° for 121.4°). The
-yaw at 8 stayed near 0° while the yaw at 4 held 92°–100°: the chassis was following the gimbal, so
-8 is the gimbal relative to the chassis and 4 is the ground frame — as read from the 17:05 data.
+yaw −95.1°..+121.4°. There is no yaw stop to reach: in the app's driving mode the chassis follows
+the gimbal (owner, 2026-10-30), so a yaw sweep turns the whole robot and the ground-frame yaw at 4
+is the robot turning — the yaw at 8 stayed near 0° while the yaw at 4 held 92°–100°, which is
+exactly that following, and names the two fields: 8 relative to the chassis, 4 in the ground frame.
+The yaw field is confirmed by the quaternion, which agrees with it to within 1.2° at both extremes
+(−94.7° for −95.1°, 122.6° for 121.4°).
 `events::GimbalPush` is confirmed field by field; telemetry is closed.
 
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-gimbal/hdvt_gimbal_reads.strace sha256=cefd0ab0a759b8339ac1e4788f2989e6638cf172cd884b8a753cd6db1e3d45e7
