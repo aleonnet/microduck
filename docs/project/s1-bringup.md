@@ -44,7 +44,7 @@ never committed), the ONNX Runtime and rootfs builds — each cited here by path
 | A Debian armhf userland for the chroot | **built on the Mac** (222 packages; tar and list among the artefacts) — `scripts/s1/build-rootfs.sh`: docker `linux/arm/v7` `debian:bookworm-slim` runs natively here (`uname -m` → `armv7l`, `ldd --version` → `GLIBC 2.36-9+deb12u14`) |
 | ONNX Runtime for armv7 | **built** — `scripts/s1/build-onnxruntime.sh` (v1.28.0, cross per onnxruntime.ai's "Cross compiling on Linux"): `libonnxruntime.so.1.28.0`, 19179636 bytes, `ELF 32-bit LSB shared object, ARM, EABI5`; the first attempt died on `-Werror=restrict` (GCC 12, `char_traits`, 32-bit) and the script now passes cmake `--compile-no-warning-as-error`, which is what ORT's own `build.py` does |
 | The detector's CPU path runs over that library | **on the Mac, on a synthetic frame** — `s1-infer` (the ONNX measurement `duck-bench` does not make: that binary is the NPU path, and the S1 has no NPU) over `duck_detect.onnx` from the Hub: p50 13.1 ms at 320×320 on this Mac with the macOS ORT 1.28.0 release; the S1's own number is stage 12 |
-| Everything the robot has to answer | **pending** — stages 1–12 below |
+| Everything the robot has to answer | as of 2026-10-31 00:xx: stages 1–6 done on the robot, telemetry closed (item 1, every delivery proven live), 7 and 8 measured but the frame and the microphone pending (`s1-cam`, mixer route), 9–12 pending — the stage table and the dated sections below are the truth, this row only points at them |
 
 ## The bench, stage by stage
 
@@ -65,7 +65,7 @@ stages 5, 6 and 8.
 | 3 | `exec` | a binary of ours runs on the robot (`/data`, or `setenforce 0` by the owner, or the microSD); the chroot answers `uname -a` and `ldd --version` | **done 2026-10-30** (below) — gate passed |
 | 4 | `stop` | `hdvt_uav` and `monitor` stopped; nobody holds `ttyS3` | **done 2026-10-30** (below) |
 | 5 | `drive` + `items` | `s1d` + `netpadd` + `robotctl health` in the chroot; `s1-e2e robot` from the Mac: the pad over UDP into `netpadd` (wheels, turn, strafe, gimbal, lights, sounds, arm/disarm), the S1 list through `s1ctl --tcp`, telemetry | **wheels and gimbal done 2026-10-30** (below, owner's witness); **every item pre-tested on the Mac** (`s1-e2e fake`, 40 of 40, below); the robot session runs the same program minus the two wire-only items (a test holds the two lists equal); telemetry **done 2026-10-30 (night)**: the controller's own boot-time push and the gimbal's `0x04/0x05` decoded by layout, held to two real captures and confirmed on the robot (stages `telemetry`, `telemetry-gimbal`, below) |
-| 6 | `events` | `robotctl flashlight` lights the LEDs; every effect of the real `0x3f/0x32`; armour hits, IR and the button as `s1.event` | pre-tested on the Mac (events fed to the fake body reach `s1ctl events`; the button through a FIFO); pending on the robot |
+| 6 | `events` | `robotctl flashlight` lights the LEDs; every effect of the real `0x3f/0x32`; armour hits, IR and the button as `s1.event` | **done 2026-10-30 (night)**, the owner watching: five body-LED effects, the launcher's trail light, 23 armour hits on the four plates, two button presses and the infrared hits as `s1.event` (section "Robot session") |
 | 7 | `camera` | formats listed; the frame waits for `s1-cam` (a generic stream rebooted the robot twice, 2026-10-30) | **measured 2026-10-30**, frame pending |
 | 8 | `audio` | mic as a 60 s stream through `arecord`; `aplay` while driving, CPU sampled | speaker **proven** (owner, four times); mic: device `hw:0,0` right channel, no signal yet (2026-10-30) |
 | 9 | `app` | what the DJI app does with the stock stopped | pending (informative) |
@@ -365,7 +365,10 @@ Telemetry, three defects found and two fixed on the bench, one open:
    cycle**, so `s1d` never sends one (`fake_body.rs`, F18 item). Under the script runtime's node
    `0xC9` on a fresh boot (reboot, 2026-10-30 15:54) the answers are the same `02 03` / `21 03`
    as under node 9. Next lead: how DJI's runtime subscribes (`rm_module.py`, msg ids and the
-   `0x48` requests it sends through the stock controller).
+   `0x48` requests it sends through the stock controller). **Answered 2026-10-30 (night):** the
+   runtime subscribes only when a script runs, and the controller already pushes the stock's own
+   subscription, which `s1d` decodes — ours stays refused and is no longer needed (section
+   "Telemetry, read off the pushes that already flow").
 
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/exec/exec.txt sha256=3d38161894241b029aa2db218b42271da30344015b1e236c1e0f6cf1364d96a0
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/stop/stop.txt sha256=93993a72aca42aaa5d68f7f5908a965278cb4465616b8ad9b55f1e7cef566425
@@ -406,7 +409,8 @@ no answer and no push either — a reset leaves the bus dead until a power cycle
 one now, and registers DJI's script node `0xC9` instead of the stock's 9; on a fresh boot (reboot,
 15:54) the answers are the same `02 03` to add-node and `21 03` to subscribe as under node 9. Next
 lead: the runtime's own subscription path in `rm_module.py` (node `0xC9`, msg id 0, through the
-stock controller), and the stock's live DDS traffic in `capture/hdvt_fire.strace`.
+stock controller), and the stock's live DDS traffic in `capture/hdvt_fire.strace`. **Closed the
+same night:** the stock's push is decoded as it flows (telemetry section); F18 is done.
 
 **The muzzle flash, and two errors of method.** `s1.blaster` fires (six infrared-hit events per
 three shots, reflected by the wall, 330 ms apart) but showed no light and no sound: DJI's runtime
@@ -555,7 +559,8 @@ holding on the 2026-10-29 idle push too — `dds::StockPush`, `s1-duml/tests/sto
 `0..8` time (ms, then µs) · `8..22` one subject the SDK does not name: a float that tracks the
 gimbal yaw in whole degrees (0, −1, −178 against the gimbal's own −179.6°) and ten zero bytes ·
 `22..46` velocity (world xyz, body xyz) · `46..82` ESC (rpm, angle, timer, state ×4) · `82..92`
-battery (mV, 0.1 °C, mA, %, recv) · `92..104` position · `104..128` IMU (acc in g, gyro in rad/s) ·
+battery (mV, 0.1 °C, mA, %, recv) — **superseded 2026-10-30 23:xx: those two subjects come in
+either order between boots, read off the bytes (`BlockOrder`, "Item 1 closed on the robot" below)** · `92..104` position · `104..128` IMU (acc in g, gyro in rad/s) ·
 `128..132` status word · `132..144` attitude (yaw, pitch, roll, degrees) · `144..161` 17 zero bytes
 (the servo subject). Physical agreement is the proof: 11.94 V / 31.6 °C / −1060 mA / 80 % at 17:05
 and 11.862 V / 33.2 °C / −1129 mA / 77 % on 2026-10-29; acc_z = −1.00 g on both; on 2026-10-29
@@ -633,7 +638,8 @@ is the robot turning — the yaw at 8 stayed near 0° while the yaw at 4 held 92
 exactly that following, and names the two fields: 8 relative to the chassis, 4 in the ground frame.
 The yaw field is confirmed by the quaternion, which agrees with it to within 1.2° at both extremes
 (−94.7° for −95.1°, 122.6° for 121.4°).
-`events::GimbalPush` is confirmed field by field; telemetry is closed.
+`events::GimbalPush` is confirmed field by field; telemetry is closed — **reopened by the owner at
+~21:15 and closed again with every delivery proven live, "Item 1 closed on the robot" below.**
 
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-gimbal/hdvt_gimbal_reads.strace sha256=cefd0ab0a759b8339ac1e4788f2989e6638cf172cd884b8a753cd6db1e3d45e7
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-gimbal/gimbal_pushes.txt sha256=a0ceece4b79f30366f6d13f500470e23789feb42cead8900fa0837a792d2aea4 The DJI on-board runtime (`dji_scratch`) subscribes only when a script starts
@@ -897,6 +903,13 @@ Physical commands the inventory lacked — proposed for phase 1, awaiting the ow
 | F14 | DDS subjects not asked for: gimbal position, chassis mode, move mode, sticks | uids `GIMBAL_POS`, `GIMBAL_BASE`, `CHASSIS_MODE`, `MOVE_MODE`, `STICK` | 8 bytes each in the request | 7 subjects asked; the gimbal's real angle is what F1/F3 need |
 | F15 | chassis work mode (sent at arm: mode 1) | `0x3f/0x19` | 1 byte | done; other values unproven |
 
+The "in the code" column is as of the sweep (2026-10-30, afternoon). **Every F-item above has since
+been built** (`s1-duml/src/cmd.rs`: `gimbal_recenter`, `gimbal_speed`, `gimbal_workmode`,
+`gimbal_suspend_resume`, `chassis_position`, `chassis_stick_overlay`, `gun_led`, `armor_sensitivity`,
+`chassis_pwm`), each held to DJI's own packer byte for byte (`s1-duml/tests/dji_oracle.rs`), served
+by the S1's own list below and run end to end on the Mac (40 items) and on the robot (section "Robot
+session"); the column is left as the sweep wrote it so the gap it found stays on record.
+
 Already assigned elsewhere by the owner (2026-10-29), kept: blaster fire `0x3f/0x51` (type<<4\|times;
 IR by default, gel only with the key and the tank removed) → phase 3; the stock's video stream control
 `0x3f/0xd2` → phase 3 (`mediad` replaces it); DJI's on-board detection `0x0a/0xa3…0xab` (person,
@@ -964,10 +977,11 @@ not guessed:
   AAC for the app. The `/system/audio/*.apu` files are not mixer tables but profiles for DJI's audio
   algorithms (`testAPUmodeName1`, 48000 Hz, floats). So the mic route for `arecord` is the mixer
   state the stock leaves behind: the capture stage dumps every control while the stock runs
-  (`amixer -c 0 contents` through the chroot) and stage 8 replays it. The speaker's volume is not a
-  mixer control: `dji_hdvt_uav` sets it through a kernel device, `/dev/speaker0`
-  (`duss_hal_speaker_set_volume`); the capture stage traces that ioctl while the owner changes the
-  volume in the app, and `s1.volume` follows what it shows.
+  (`amixer -c 0 contents` through the chroot) and stage 8 replays it. The speaker's volume, as the
+  stock sets it, goes through a kernel device, `/dev/speaker0` (`duss_hal_speaker_set_volume`);
+  stage 8 then found that the mixer control `Speaker Volume` (value 20 in `amixer_contents.txt`)
+  does drive the speaker under `aplay`, and that is what `s1.volume` uses (`--volume-control
+  'Speaker Volume'`) — two paths to one speaker, the stock's untraced and unneeded.
 - **Power.** DJI's common command set has `0x00/0x45` sleep control, `0x00/0x46` shutdown
   notification, `0x00/0x47` power state and `0x00/0x0b` device reboot, and the battery its own set
   (`0x0d`). Which one `dji_sys` sends on the button is what the capture stage records (`strace` on
