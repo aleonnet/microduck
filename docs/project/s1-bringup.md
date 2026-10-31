@@ -1065,6 +1065,61 @@ Wi-Fi, the DJI app closed until the last step. Artefacts in `out/2026-10-31-poc2
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/mic-lab/mic_lab_applause.py sha256=5591b57bec4940bfb423d67db2acf2defe9cef68ccce5c3d3b9a13bb5c26b692
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/mic-lab/usb_card_handover_watch.txt sha256=c0024b806d5dcb68b7d94cb5abea69e2bc47c344843ba61599b1d778d5bbd0a7
 
+## Item 3, the microphone: the stock hears the owner, our capture does not — one codec register apart (2026-10-31, 02:0x–02:4x)
+
+The owner power-cycled the robot with **nothing on the micro-USB**: the app saw the card at once
+(the hypothesis of the section above holds in behaviour; the mechanism is still to be read) and
+recorded a 6.8 s video while speaking. Root adb re-enabled through the Lab (app closed), the file
+pulled: `DJI_0005.MP4`, audio AAC **mono 48 kHz**, peak −17 dB, RMS −46 dB, noise floor −80 dB,
+the per-frame level a quiet −75 dB with the voice at −31..−43 dB. **The robot's microphone hears a
+voice through the stock's pipeline; that is the reference level.**
+
+Then ours, stage 8, twice:
+
+- **02:11, the stage as it was: no recording happened.** `arecord` answered `audio open error:
+  Device or resource busy` — the stop stage only stops `dji_hdvt_uav` and `dji_monitor`, and
+  `dji_camera` kept fd 84 on the device — and the stage then pulled the robot's **stale**
+  `/data/debian/tmp/mic.wav` of 2026-10-30 (same hash as stage 8's artefact, `6419…b738`), named it
+  today's, and played it to the owner. Fixed in `ec09d56`: the stage stops `dji_camera` first,
+  removes the previous file, and stops on `arecord`'s own failure with its text and no recording
+  artefact; `bench-selftest.sh` runs the stage once with the device "busy" (it failed on four
+  counts against the old stage) and `audio-refute.sh` plants both defects and sees them refused,
+  `bench.sh` restored by hash. The stale run is archived as `audio-20261031-021147/`, cited nowhere.
+- **02:31, the fixed stage: the recording happened and holds no voice.** 60 s, stereo, fresh file.
+  Right channel (`mic_right.wav`, the stock's MIC1 → ADC1 path): peak −46 dB, RMS −73.6 dB, the
+  per-second level a smooth −76..−69 dB drift with no speech bursts, the owner speaking for the
+  first 20 s. Left channel (`mic_left.wav`, ADC2, the path the stock keeps off): peak −19 dB, RMS
+  −47 dB, noise floor −44 dB — broadband noise from an unterminated input, no speech dynamics. The
+  owner heard nothing played back.
+- **The codec during our capture is the stock's, except one register.** A 15 s probe with the
+  power map read mid-stream: `Capture`, `MIC1`, `MIC1 Pga`, `Adc1 Mixer`, `ADC1 Pga`, `MICB1` all
+  On, the MIC2/ADC2 widgets Off — identical to the stock's app run. All 90 codec registers diffed
+  between the stock running and ours running: `0x01` and `0x47` differ only by the playback bits
+  (the stock had its playback stream open: DACs, Aux mixer), and **`0x31` is `0x32` whenever the
+  stock holds the device (armed at boot, running under the app) and `0x3f` whenever we do (during
+  and after our capture)**. No mixer control changed (`tinymix` identical before and after), so
+  `0x31` is not behind any control: the stock sets it by its raw register write — the
+  `adc_reg` of its `set_tinymix_value` strings — and the kernel's own stream setup writes `0x3f`
+  over it for us. **Hypothesis, the strongest of the night, not yet proven:** register `0x31` is
+  the ADC's configuration, `0x32` is what lets MIC1's signal through, and `0x3f` is why our right
+  channel is floor only with the same bias, gains and routes.
+- **Next power-on, the one test that closes the item** (no owner speech needed for the first half):
+  (1) capture with the probe and dump `0x31` at open, at hw_params, at start — which step writes
+  `0x3f`; (2) write the stock's value back through the same debugfs file (`echo "31 32" >
+  …/comip_codec/codec_reg`) once the stream runs, record with the owner speaking, and compare the
+  right channel with the stock's −31..−43 dB; (3) if it hears: the route is "the stock's `0x31`
+  after stream start", applied by the daemon the same way until the register's name is read out of
+  the codec driver (`lc1160_codec.c`, not in any source we hold). The robot powered off on its
+  battery at 02:4x (the owner is charging it); nothing of ours is left running.
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/mic-lab/DJI_0005.MP4 sha256=25797740f51f57f631ba3a2cc83f67232536e2d175043b5105388a5c2c4dd422
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/mic-lab/stock_video_audio.wav sha256=5219d5dd797c0b689009a10c1befc4c14933a9755206942b5167ffaf8e759f0d
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/audio/mic.wav sha256=161f7b64ed9a68f88ac814ce6187c9c4a3f1c64bbee34c2728f75fa6c57dbbe5
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/audio/mic_right.wav sha256=21abfa9f966cd8d6d51601d95c1964b9bafb6f8a8add98fa8d72945813375bb7
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/audio/mic_left.wav sha256=d6f3a744e4800fa6624623b324d320f2a30c702bcc77685dd1f1282f5efcf117
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/audio/stream_60s.txt sha256=1d3e63162ede9a72ef95f41c3749f43a5b78566912997e93a381340df6bb8ff1
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/mic-lab/codec_state_during_our_arecord.txt sha256=e57aeb53c9a67c306f35440a4dee566bc8b9538b6337b75c5eb0a707a09b0bbc
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/mic-lab/codec_state_after_our_arecord.txt sha256=cacbab5bf41d65f61c61430ba19ddbb308ee005f5bf8b948a7e333b024ab3906
+
 ## Corrections after the cold reader (2026-10-30 18:29 -0300) — this section supersedes the hand-off's open-items table
 
 A cold reader resumed from `docs/plans/2026-10-30-1905-handoff-s1-fase1-bateria2.md` alone and found
