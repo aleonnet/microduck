@@ -896,8 +896,9 @@ throughout) into a USB-A-female→USB-C-male OTG adapter into the Coral — and 
 `echo 1 > otg_state` → `ID: 0 state: 1 HOST` within a second and for the whole 20 s, bus 1's root
 hub present (`usb1 1d6b:0002`), **nothing enumerated on bus 1**; bus 2 unchanged (the Genesys hub
 and the Atheros Wi-Fi). `echo 0` → `ID: 1 state: 2 DEVICE`. `dmesg` printed nothing in the window
-(to read `/proc/kmsg` next time instead). Whether the Coral's LED lit in those 20 s — the sign of
-VBUS reaching it through the chain — is the owner's observation, recorded in the chat. The chain
+(to read `/proc/kmsg` next time instead). **The Coral's LED did not light in those 20 s** (owner, at the robot): no 5 V reached it
+through that chain, so the forced host mode never had a powered device to enumerate — the test
+did not electrically happen, and it says nothing yet about whether the port can drive the Coral. The chain
 itself is suspect: a phone-style OTG adapter carries pull-downs on its CC pins to make the C side
 the host, which is the opposite of what a Coral's USB-C expects; the clean test is a micro-USB OTG
 adapter (ID grounded) with the Coral's own USB-A→USB-C cable, and that adapter is not in the house
