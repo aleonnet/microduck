@@ -171,6 +171,18 @@ pub struct Battery {
 
 impl Battery {
     pub const SIZE: usize = 10;
+    /// A reading the S1's pack can give: three cells, 10.8 V nominal and 4.2 V a cell when full
+    /// (user manual, "Intelligent Battery": 2400 mAh, 10.8 V; "cell voltage is at 4.2 V" when
+    /// charged), so 9.0 to 13.0 V with margin, and a percentage. Captures with the stock alive
+    /// read 11.75 to 11.94 V; the boot of 2026-10-30 22:00, with the stock controller process
+    /// relaunched by hand, read 49 mV at 0 % in the same ten bytes — a block that is not the
+    /// battery on that boot (its subjects are open: `s1-bringup.md`, item 1 delivery 4).
+    pub const PLAUSIBLE_MV: std::ops::RangeInclusive<u16> = 9_000..=13_000;
+
+    /// Whether these ten bytes read as the S1's pack at all — see [`Self::PLAUSIBLE_MV`].
+    pub fn plausible(&self) -> bool {
+        Self::PLAUSIBLE_MV.contains(&self.adc_value) && self.percent <= 100
+    }
 
     pub fn parse(b: &[u8]) -> Option<(Self, &[u8])> {
         let (me, rest) = b.split_at_checked(Self::SIZE)?;
@@ -292,6 +304,13 @@ pub struct Esc {
 
 impl Esc {
     pub const SIZE: usize = 36;
+    /// The wheel motor's range in DJI's own SDK (`chassis.drive_wheels`: `[-1000, 1000]` rpm).
+    pub const MAX_RPM: i16 = 1000;
+
+    /// Whether the four speeds read as wheels — the 2026-10-30 22:00 boot put 10 675 here.
+    pub fn plausible(&self) -> bool {
+        self.speed_rpm.iter().all(|r| r.abs() <= Self::MAX_RPM)
+    }
 
     pub fn parse(b: &[u8]) -> Option<(Self, &[u8])> {
         let (me, rest) = b.split_at_checked(Self::SIZE)?;

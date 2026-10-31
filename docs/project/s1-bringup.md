@@ -73,6 +73,7 @@ stages 5, 6 and 8.
 | 11 | `frames` | frames at 720p and 360p: fps and CPU — by `s1-cam` over the stock's own call sequence (no `gst-launch v4l2src`: same generic path that rebooted the robot) | pending — **gates the port** (360p was never captured from the stock; a 360p `S_FMT` is a hypothesis and does not go to the robot) |
 | 12 | `infer` | `s1-infer` (the detector's ONNX path) on the S1 with `libonnxruntime` armv7 and on the Mac over the same frames: ms/frame on both tiers | pending on the robot; the Mac tier ran tonight on a synthetic frame (below) — **gates the port** (one tier suffices) |
 | — | `telemetry` | with the stock alive and nothing of ours on the UART: the stock controller process relaunched under `strace` from its first write (its boot-time DDS subscription, the subject list of the 176 B push) and 40 s of UART reads while the owner drives the gimbal to its stops (the `0x04/0x05` push against the manual's limits) | **done 2026-10-30, 20:55 and 21:0x** (subject list captured; gimbal push confirmed at the pitch stops, below) |
+| — | `telemetry-free` | stock stopped, `s1d` armed (chassis work mode 1, gimbal work mode 0), wheels off the ground: the head swept by `robot.head` while `s1.telemetry` is sampled — the body must not follow, ground yaw − chassis-relative yaw must equal the attitude yaw; then the head held while the owner tilts the robot — which pitch field is the ground's. `s1d`'s UART reads under `strace` alongside | **done 2026-10-30, 22:00–22:3x** (below): head obeyed ±60° to 0.1°, body still (owner's eyes), relation holds to 1.1°, pitch at 0 is ground frame; and the ESC/battery block of that boot is not the validated layout |
 
 The `items` stage is `s1-e2e robot` alone, with the daemons already up; `e2e` is the same program
 with no robot (`s1-e2e fake`), the pre-test every stage-5 and stage-6 item passes before the robot
@@ -638,6 +639,87 @@ The yaw field is confirmed by the quaternion, which agrees with it to within 1.2
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-gimbal/gimbal_pushes.txt sha256=a0ceece4b79f30366f6d13f500470e23789feb42cead8900fa0837a792d2aea4 The DJI on-board runtime (`dji_scratch`) subscribes only when a script starts
 (`script_framework.py:94`): node `0xC9`, msg 0, flags 0, ten subjects at 50 Hz, accepting retcode
 `0` or `0x23` (`rm_module.py:1300`, `rm_ctrl.py:5184`).
+
+### Item 1 closed on the robot: the gimbal freed, the frames fixed, and a block that lies (2026-10-30, 22:00–22:3x)
+
+"Telemetry is closed" above was written before the owner's two corrections (~21:15: the head is
+relative to the body; following is never inherited) and this is what closed them, through `s1d`'s
+own list (stage `telemetry-free`, `scripts/s1/telemetry-free.py`): stock stopped, daemons up,
+`robot.enable` (which now sends `0x3f/0x19 01` and `0x04/0x4c 00 00`), `robot.head` to +60°, −60°,
+0 while `s1.telemetry` is sampled at 10 Hz, then 20 s held at zero. Pre-tested on the Mac against
+`s1d --fake` fed the robot's own push fixtures (`bench-selftest.sh`: 30 samples judged, the free-mode
+frame on the wire at arm) before the robot was touched. Two runs (22:00, 22:11; the first attempt
+at 21:58 died at start: the speaker control's name has a space and reached `s1d` unquoted —
+`daemons.txt` now proves the daemon is up before anything is asked of it), then one head command
+by hand with the owner watching the gimbal, then a 25 s tilt window.
+
+- **Head obeyed, body still.** Commanded +60 (the duck's left) → chassis-relative yaw −59.9 (DJI's
+  right positive); −60 → +59.9; worst error 0.1° (`verdict.txt`, 471 samples). The owner saw the
+  gimbal turn left and back on the single command and saw the wheels not move during the sweeps
+  (his "nothing happened" was the wheels; the sweep he had not watched). Attitude yaw span 0.1°.
+  The judge's own `body_still` line in `verdict.txt` says NO on an rpm of 10 770 — that number is
+  the block below, not a wheel, and the judge now says `body_still undecided` when no wheel speeds
+  are published instead.
+- **Yaw relation.** Ground yaw (@4) − chassis-relative yaw (@8) − attitude yaw = +6.2° (spread
+  0.70°), +6.3° (0.66°), +6.4° (1.11°) over the three windows; +1.0° and −0.2° in the 17:05 and
+  21:0x captures. The relation holds; the constant is the drift between the gimbal's IMU heading
+  and the chassis's, and it is why `robot.state.head` carries the relative field, never a
+  difference of the two ground headings.
+- **Pitch at 0 is the ground frame.** Tilt window (`tilt.ndjson`, 230 samples): the owner tilted
+  the chassis −17.4° then +23.1° (status bit `on_slope` on both ways); the gimbal push's pitch
+  stayed 0.0 through −17° and rose only to +4.5 at +21.7° — the gimbal holding its pitch to the
+  ground until its −20° mechanical stop, exactly as the yaw at 4 is the ground's. The field at 2
+  (−4.9..+4.5 across all captures, no relation to either pitch) stays unnamed; the duck does not
+  need it. (The strace alongside caught only one instant of controller pushes — `strace -p` on
+  `s1d`'s reads gives few whole frames; the decoded samples are the evidence.)
+- **The accelerometer names the frames.** At rest `[0, 0, −1.0]` g; nose up +21.7° gave
+  `acc_x = +0.372 = sin 21.7°`, nose down −17.4° gave −0.318: NED specific force, body x forward,
+  y right, z down, pitch positive nose up, yaw positive clockwise (the gimbal's right). jeguzzi's
+  `robomaster_sim` reaches the same from its x-forward, y-left, z-up body (`command_subjects.hpp`
+  `from_robot`: yaw and pitch negated, roll kept; `ImuSubject`: acc and gyro y and z negated).
+  The duck's trunk and world are z-up (`ImuState`, `SafetyState::gravity` "upright about
+  `[0, 0, −1]`"): `state.rs` now maps every vector `[x, −y, −z]`, the heading negated, gravity
+  `−acc` in that frame, and the attitude as a trunk→world quaternion `[w, x, −y, −z]` of the ZYX
+  Euler one — `safety.gravity`, `imu.quat`, `imu.gyro`, `odom.position`, `odom.yaw` all in the
+  duck's frames, because a quaternion in one frame beside a gyro in another is not a contract
+  (unit tests on the tilt numbers: nose up → gravity behind and below, the forward axis climbing
+  by sin 21.7°, heading −24.8° for DJI's 24.8; `fake_body.rs` on the turned push). Before this,
+  `quat` was identity and `gravity` a constant. `s1.telemetry` keeps DJI's own fields and signs.
+- **The ESC and battery block of this boot is not the validated layout.** Same 161 bytes, same
+  msg id 1, and the subjects from 92 on read true (position, gravity, status word, attitude —
+  the tilt above), but 46..92 read `rpm (10 675, 304, −1107, −1)`, "battery" 49 mV at 0 % with a
+  ramping "temperature" (a counter, +607/s). Both captures that gave the layout (17:05, 21:0x —
+  stock alive from boot — and the 29/10 push with the stock killed) read 11.75–11.94 V and idle
+  rpm. What differs on this boot: the stock controller process had been **relaunched by hand**
+  (stage `telemetry`, 21:05) and then restarted by init — the subscription the push answers is
+  that boot's, and the first composite subject's inner layout is not the same. Hypothesis to
+  measure, not a conclusion: a power cycle restores the layout the stock subscribes at a clean
+  boot; the clean path to the battery is to read the subject list behind the push that is
+  flowing, which `s1d` cannot see. Until then `s1d` publishes the block only when it reads as
+  physics: a pack within 9.0–13.0 V (manual: 10.8 V, 4.2 V a cell when full) at ≤ 100 %, wheels
+  within ±1000 rpm (the SDK's `drive_wheels` range) — `dds::Battery::plausible`,
+  `dds::Esc::plausible`, applied in `tick::decode_push`; a real push of this boot is the fixture
+  `dds_push_stock_relaunched_2026-10-30.bin` (tests: layout and daemon). `robot.health.battery`
+  is absent on such a boot rather than 0.049 V. **Item 1, delivery 4 (open, robot):** on a
+  power-cycled robot, `telemetry-free` again — if the battery reads, the hypothesis stands and the
+  record says which boots lie; if not, the block's subjects are to be decoded from the relaunch's
+  subscription.
+- Refutations (`telemetry-refute.sh`, five plants, all refused, sources restored by hash): the
+  battery offset; the head verdict without the duck/DJI sign; the attitude offset in the strace
+  report; the plausibility window opened (49 mV would pass — the real-push test says
+  `implausible`); the judge calling the body still without wheel speeds.
+
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-free/stop.txt sha256=93993a72aca42aaa5d68f7f5908a965278cb4465616b8ad9b55f1e7cef566425
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-free/daemons.txt sha256=7412236579166ee86683b4c1b6fc13f9f8cbe0054d0f2e5569b94436e1d8a760
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-free/samples.ndjson sha256=36248af30dc4253c403cfad26ab654e0f1cd2174b8937185f030d451a0a07870
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-free/verdict.txt sha256=238782f67d38fd7af912a7f49b1fdd939295f83bc19a11bf73d3935d6f08c7bd
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-free/s1d_free_reads.strace sha256=eafeefd37155996146842ad8bad62c26fe36b79297c2c464e55646ac251ae7bd
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-free/gimbal_vs_attitude.txt sha256=451aaa6bb62abae0248ac844a9ecc56511a2ca446c0214d18a0d01d47f75e45e
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-free/s1d.log sha256=1ac5b2327ef194dd30f78ddfc25d30e0db8018a8e8165f4495e5f0006fe42c73
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-free/tilt.ndjson sha256=e52b17f8fab5d50870a434294e69b56ece5e491d2f6a5c5d9c3f974e78753a4f
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-free/tilt_verdict.txt sha256=ba1e4132b74e0b378a28c34436f70579b67e4223ce20ee082fc5454e0f1bd305
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-free/s1d_tilt_reads.strace sha256=967e5117009f37bd0634e1c0dbbc1340b21c277ccfc52dbf4b8ed03ef5847a88
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-free/tilt_gimbal_vs_attitude.txt sha256=d62b4154c67fbb13feef09c98035444e4ae3d0fa56040a479c53ddba2684b7e8
 
 ## Corrections after the cold reader (2026-10-30 18:29 -0300) — this section supersedes the hand-off's open-items table
 

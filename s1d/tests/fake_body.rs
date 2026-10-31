@@ -229,13 +229,21 @@ fn stock_pushes_fill_health_state_and_the_head() {
 
     let frame = state.frame([0.0; 3], Vec::new());
     assert!((frame.odom.position[0] - 0.0938).abs() < 1e-4);
+    // DJI's yaw is clockwise positive; the duck's heading is counter-clockwise, as its `vyaw`.
     assert!(
-        (frame.odom.yaw - 19.329f64.to_radians()).abs() < 1e-4,
-        "attitude yaw, radians"
+        (frame.odom.yaw + 19.329f64.to_radians()).abs() < 1e-4,
+        "attitude yaw, radians, the duck's sign"
     );
     assert!(!frame.safety.fallen && !frame.safety.picked_up);
     let imu = frame.imu.expect("gyro present once a push arrived");
-    assert!((imu.gyro[2] + 0.0034).abs() < 1e-4);
+    assert!(
+        (imu.gyro[2] - 0.0034).abs() < 1e-4,
+        "z up: DJI's −0.0034 about z-down"
+    );
+    // The chassis attitude travels as a quaternion, and gravity as the accelerometer saw it:
+    // a flat robot, one g down the trunk's z.
+    assert!((imu.quat[0] - (19.329f64.to_radians() / 2.0).cos()).abs() < 1e-3);
+    assert!(frame.safety.gravity[2] < -0.99 && frame.safety.gravity[0].abs() < 0.05);
     // The head is relative to the body: the gimbal's yaw against the chassis, 158.3° to DJI's
     // right, is the duck's −158.3° (left positive); the ground-frame −179.6° stays in
     // `s1.telemetry`. Pitch +35.6° up is the duck's −35.6°.

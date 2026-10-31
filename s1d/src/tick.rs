@@ -226,13 +226,18 @@ pub enum Push {
 /// the sticks', which `0x04/0x05` supplies.
 fn decode_push(msg_id: u8, data: &[u8], t: &mut Telemetry) -> Push {
     if let Some(p) = dds::StockPush::parse(data) {
-        t.esc = Some(p.esc);
+        // The ESC and battery block (46..92) is published only when it reads as physics: on the
+        // boot of 2026-10-30 22:00 (stock controller process relaunched by hand, then restarted
+        // by init) the same 161 bytes carried 49 mV / 0 % and 10 675 rpm there while the IMU,
+        // the attitude and the status word still read true. What that block carries on such a
+        // boot is open (item 1, delivery 4); a health that says the pack is empty is not.
+        t.esc = p.esc.plausible().then_some(p.esc);
         t.position = Some(p.position);
         t.velocity = Some(p.velocity);
         t.imu = Some(p.imu);
         t.attitude = Some(p.attitude);
         t.sa_status = Some(p.sa_status);
-        t.battery = Some(p.battery);
+        t.battery = p.battery.plausible().then_some(p.battery);
         return Push::Stock;
     }
     if msg_id != DDS_MSG_ID || data.len() != DDS_PUSH_LEN {
@@ -686,6 +691,7 @@ mod tests {
     fn a_push_is_decoded_by_whose_layout_it_has() {
         let mut t = Telemetry::default();
         let mut stock = vec![0u8; dds::StockPush::LEN];
+        stock[82..84].copy_from_slice(&11_900u16.to_le_bytes()); // a pack the guard believes
         stock[82 + 8] = 80; // the battery percent where the stock's layout puts it
         assert_eq!(
             decode_push(1, &stock, &mut t),
@@ -721,6 +727,33 @@ mod tests {
             t.esc.is_some() && t.sa_status.is_some() && t.gimbal_pos.is_some(),
             "every subject lands in one push"
         );
+    }
+
+    /// On the boot of 2026-10-30 22:00 the stock's push kept its length and its IMU, attitude
+    /// and status, but the ESC and battery block read 49 mV / 0 % and 10 675 rpm. The telemetry
+    /// takes what still reads as physics and drops the block that does not: no battery, no
+    /// wheel speeds, rather than a health that says the pack is empty.
+    #[test]
+    fn an_implausible_esc_or_battery_block_is_not_published() {
+        let frame = s1_duml::Frame::decode(include_bytes!(
+            "../../s1-duml/tests/fixtures/dds_push_stock_relaunched_2026-10-30.bin"
+        ))
+        .expect("a whole frame");
+        let push = dds::PushPeriod::parse(&frame).expect("a push");
+        let mut t = Telemetry {
+            battery: Some(dds::Battery {
+                adc_value: 11_900,
+                temperature: 300,
+                current: -1000,
+                percent: 80,
+                recv: 0,
+            }),
+            ..Telemetry::default()
+        };
+        assert_eq!(decode_push(push.msg_id, push.data, &mut t), Push::Stock);
+        assert!(t.attitude.is_some() && t.imu.is_some() && t.sa_status.is_some());
+        assert_eq!(t.battery, None, "49 mV at 0 % is not a reading");
+        assert_eq!(t.esc, None, "10 675 rpm is not a wheel");
     }
 
     /// `0x50` is "already there" only where the SDK reads it so, on add-node.

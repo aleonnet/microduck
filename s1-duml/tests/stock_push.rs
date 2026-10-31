@@ -83,6 +83,42 @@ fn the_2026_10_29_push_agrees_with_itself_about_the_slope() {
 }
 
 /// Anything but 161 bytes of subjects is not this push: the 1 Hz one (54 bytes) and a truncation.
+/// The push of the boot in which the stock controller process had been relaunched by hand
+/// (`bench.sh telemetry`, 2026-10-30 21:05) and then restarted by init: same 161 bytes, same
+/// msg id, and the subjects from the position on (92..144) read as before — gravity, the
+/// chassis attitude, the status word — but the ESC and battery block (46..92) does not: the
+/// "battery" reads 49 mV at 0 %, the "rpm" 10 675 against a motor whose range is ±1000 (the
+/// SDK's `drive_wheels`). Cut from `telemetry-free/s1d_tilt_reads.strace`, 22:2x. What the
+/// block carries on such a boot is open (item 1, delivery 4); what the layout must do is refuse
+/// to publish it as a battery or as wheel speeds.
+#[test]
+fn the_relaunched_boots_push_keeps_imu_and_attitude_but_its_esc_and_battery_are_implausible() {
+    let p = stock(include_bytes!(
+        "fixtures/dds_push_stock_relaunched_2026-10-30.bin"
+    ));
+    assert!(
+        (p.imu.acc[2] + 1.0).abs() < 0.02,
+        "one g down: {}",
+        p.imu.acc[2]
+    );
+    assert!((p.attitude.yaw - 19.9).abs() < 0.1, "{}", p.attitude.yaw);
+    assert!(p.sa_status.static_flag);
+    assert_eq!(p.battery.adc_value, 49, "49 mV is no battery");
+    assert_eq!(p.battery.percent, 0);
+    assert!(!p.battery.plausible());
+    assert_eq!(p.esc.speed_rpm[0], 10_675, "ten times the motor's range");
+    assert!(!p.esc.plausible());
+    // and the pushes the layout was read from are plausible on both counts
+    let idle = stock(include_bytes!(
+        "fixtures/dds_push_stock_idle_2026-10-30.bin"
+    ));
+    assert!(idle.battery.plausible() && idle.esc.plausible());
+    let moving = stock(include_bytes!(
+        "fixtures/dds_push_stock_moving_2026-10-30.bin"
+    ));
+    assert!(moving.battery.plausible() && moving.esc.plausible());
+}
+
 #[test]
 fn other_lengths_are_refused() {
     let f = frame(include_bytes!("fixtures/dds_push_stock_1hz_2026-10-30.bin"));

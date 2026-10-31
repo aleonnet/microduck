@@ -10,6 +10,45 @@ use std::time::Instant;
 use arc_swap::ArcSwap;
 use duck_ipc_proto as proto;
 
+/// The controller speaks DJI's frames and the duck speaks its own; they differ by a half turn
+/// about x. DJI's body is x forward, y right, z down (NED), its yaw/pitch/roll ZYX in degrees with
+/// yaw positive clockwise and pitch positive nose up; the duck's trunk is x forward, y left, z up,
+/// its world the IMU's gravity-aligned frame with z up (`duck_ipc_proto::ImuState`). Measured on
+/// the robot, 2026-10-30: at rest the accelerometer reads `[0, 0, −1.0]` g; with the chassis held
+/// nose-up at +21.7° it read `acc_x = +0.36 = sin 21.7°` (`telemetry-free/tilt.ndjson`), which is
+/// NED specific force; the gimbal's yaw went to DJI's +60 when asked right (`drive`, morning).
+/// jeguzzi's `robomaster_sim` reaches the same mapping from its x-forward, y-left, z-up body
+/// (`command_subjects.hpp`: `from_robot` negates yaw and pitch, keeps roll; `ImuSubject` negates
+/// acc and gyro y and z). So a vector goes `[x, −y, −z]`, and a quaternion `[w, x, −y, −z]`.
+fn ned_to_trunk(v: [f32; 3]) -> [f64; 3] {
+    [f64::from(v[0]), -f64::from(v[1]), -f64::from(v[2])]
+}
+
+/// Gravity as `SafetyState::gravity` states it — where gravity pulls, in the trunk frame, upright
+/// about `[0, 0, −1]`. The accelerometer reads specific force, which at rest is minus gravity:
+/// `[0, 0, −1]` in NED is "up"; gravity in NED is `−acc`, and in the trunk frame `[−ax, ay, az]`.
+pub fn gravity_in_trunk(acc_ned_g: [f32; 3]) -> [f64; 3] {
+    let g = ned_to_trunk(acc_ned_g);
+    [-g[0], -g[1], -g[2]]
+}
+
+/// `ImuState::quat`, trunk → world, scalar-first, from DJI's yaw/pitch/roll (ZYX, degrees, NED):
+/// the body→NED quaternion, then both frames turned by the half turn about x, which negates the
+/// y and z parts.
+pub fn trunk_quat(att: &s1_duml::dds::Attitude) -> [f64; 4] {
+    let (y, p, r) = (
+        f64::from(att.yaw).to_radians() / 2.0,
+        f64::from(att.pitch).to_radians() / 2.0,
+        f64::from(att.roll).to_radians() / 2.0,
+    );
+    let (cy, sy, cp, sp, cr, sr) = (y.cos(), y.sin(), p.cos(), p.sin(), r.cos(), r.sin());
+    let w = cr * cp * cy + sr * sp * sy;
+    let x = sr * cp * cy - cr * sp * sy;
+    let yq = cr * sp * cy + sr * cp * sy;
+    let z = cr * cp * sy - sr * sp * cy;
+    [w, x, -yq, -z]
+}
+
 /// What the motion controller last told us, decoded from its DDS pushes. `None` fields are
 /// subjects that have not arrived yet — which is how a subscription the bench has not yet
 /// confirmed shows up: as nothing, not as zeros.
@@ -256,26 +295,31 @@ impl State {
             (None, None) => **self.gimbal_ddeg.load(),
         };
         let hz = f64::from_bits(self.achieved_hz.load(Ordering::Relaxed));
+        // DJI's world and body are NED; the duck's are z-up — `ned_to_trunk` on every vector, the
+        // heading negated (DJI clockwise positive, the duck's `vyaw` counter-clockwise).
         let odom = t
             .position
             .map(|p| proto::OdomState {
-                position: [f64::from(p.x), f64::from(p.y), f64::from(p.z)],
+                position: ned_to_trunk([p.x, p.y, p.z]),
                 yaw: t
                     .attitude
-                    .map(|a| f64::from(a.yaw).to_radians())
+                    .map(|a| -f64::from(a.yaw).to_radians())
                     .unwrap_or(0.0),
             })
             .unwrap_or_default();
         let imu = t.imu.map(|i| proto::ImuState {
-            gyro: [
-                f64::from(i.gyro[0]),
-                f64::from(i.gyro[1]),
-                f64::from(i.gyro[2]),
-            ],
-            // No orientation quaternion on this bus; attitude is Euler. Identity until phase 2
-            // converts it, and a client sees `imu` present only when gyro data exists.
-            quat: [1.0, 0.0, 0.0, 0.0],
+            gyro: ned_to_trunk(i.gyro),
+            // The chassis attitude as the controller states it, as a trunk→world quaternion;
+            // identity only until the first attitude arrives (the same push carries both).
+            quat: t
+                .attitude
+                .map(|a| trunk_quat(&a))
+                .unwrap_or([1.0, 0.0, 0.0, 0.0]),
         });
+        let gravity = t
+            .imu
+            .map(|i| gravity_in_trunk(i.acc))
+            .unwrap_or([0.0, 0.0, -1.0]);
         let armed = self.armed.load(Ordering::Relaxed);
         proto::RobotState {
             t: self.started.elapsed().as_secs_f64(),
@@ -293,7 +337,7 @@ impl State {
             safety: proto::SafetyState {
                 fallen: t.sa_status.map(|s| s.roll_over).unwrap_or(false),
                 limp: !armed,
-                gravity: [0.0, 0.0, -1.0],
+                gravity,
                 gain: None,
                 picked_up: t.sa_status.map(|s| s.is_pick_up).unwrap_or(false),
             },
@@ -313,5 +357,90 @@ impl State {
             frames: None,
             skeleton: Vec::new(),
         }
+    }
+}
+
+#[cfg(test)]
+mod frame_tests {
+    use super::*;
+    use s1_duml::dds::Attitude;
+
+    /// `q v q*` for a unit quaternion, scalar-first.
+    fn rotate(q: [f64; 4], v: [f64; 3]) -> [f64; 3] {
+        let (w, x, y, z) = (q[0], q[1], q[2], q[3]);
+        let (vx, vy, vz) = (v[0], v[1], v[2]);
+        // t = 2 (q_v × v); v' = v + w t + q_v × t
+        let tx = 2.0 * (y * vz - z * vy);
+        let ty = 2.0 * (z * vx - x * vz);
+        let tz = 2.0 * (x * vy - y * vx);
+        [
+            vx + w * tx + (y * tz - z * ty),
+            vy + w * ty + (z * tx - x * tz),
+            vz + w * tz + (x * ty - y * tx),
+        ]
+    }
+
+    fn close(a: [f64; 3], b: [f64; 3]) -> bool {
+        a.iter().zip(b).all(|(p, q)| (p - q).abs() < 0.02)
+    }
+
+    /// At rest the controller reads `[0, 0, −1]` g (every push of 2026-10-30): gravity pulls down
+    /// the trunk's z, which is what `SafetyState::gravity` calls upright.
+    #[test]
+    fn at_rest_gravity_is_minus_z_and_the_quaternion_is_the_heading() {
+        assert!(close(gravity_in_trunk([0.0, 0.0, -1.0]), [0.0, 0.0, -1.0]));
+        // DJI yaw +90 is clockwise: the robot faces right, which in the duck's y-left world is −y.
+        let q = trunk_quat(&Attitude {
+            yaw: 90.0,
+            pitch: 0.0,
+            roll: 0.0,
+        });
+        assert!(close(rotate(q, [1.0, 0.0, 0.0]), [0.0, -1.0, 0.0]));
+        let q = trunk_quat(&Attitude {
+            yaw: 0.0,
+            pitch: 0.0,
+            roll: 0.0,
+        });
+        assert_eq!(q, [1.0, 0.0, 0.0, 0.0]);
+    }
+
+    /// The tilt window of 2026-10-30 (`telemetry-free/tilt.ndjson`, t = 15.2 s): chassis pitch
+    /// +21.7°, roll −1.5°, yaw 24.8°, accelerometer `[0.372, 0.015, −0.935]`. Nose up: gravity in
+    /// the trunk points back and down, and the trunk's forward axis rises in the world.
+    #[test]
+    fn nose_up_reads_as_gravity_behind_and_a_forward_axis_that_climbs() {
+        let g = gravity_in_trunk([0.372, 0.015, -0.935]);
+        // y: 0.015 g to DJI's right is gravity pulling slightly left, the duck's +y
+        assert!(close(g, [-0.372, 0.015, -0.935]), "{g:?}");
+        let q = trunk_quat(&Attitude {
+            yaw: 24.8,
+            pitch: 21.7,
+            roll: -1.5,
+        });
+        let fwd = rotate(q, [1.0, 0.0, 0.0]);
+        assert!(
+            (fwd[2] - 21.7f64.to_radians().sin()).abs() < 0.02,
+            "climbs: {fwd:?}"
+        );
+        // and the heading is the duck's: counter-clockwise positive, so DJI's 24.8 is −24.8
+        assert!(
+            (fwd[1].atan2(fwd[0]) + 24.8f64.to_radians()).abs() < 0.02,
+            "{fwd:?}"
+        );
+        let norm: f64 = q.iter().map(|c| c * c).sum::<f64>().sqrt();
+        assert!((norm - 1.0).abs() < 1e-9);
+    }
+
+    /// Nose down the other way, as the owner tilted first (pitch −17.4°, acc_x −0.318).
+    #[test]
+    fn nose_down_reads_the_opposite() {
+        let g = gravity_in_trunk([-0.32, 0.005, -0.95]);
+        assert!(g[0] > 0.3 && g[2] < -0.9, "{g:?}");
+        let q = trunk_quat(&Attitude {
+            yaw: 0.0,
+            pitch: -17.4,
+            roll: 0.0,
+        });
+        assert!(rotate(q, [1.0, 0.0, 0.0])[2] < -0.29);
     }
 }

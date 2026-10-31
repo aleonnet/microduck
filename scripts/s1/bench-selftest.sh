@@ -35,7 +35,8 @@ case "$1" in
       *"dd if="*) echo "0000000000000000000000000000000000000000000000000000000000000001  /sdcard/bk/system.img" ;;
       *getenforce*) echo Disabled; echo EXEC_IN_DATA_OK ;;
       *"test -"*) exit 0 ;;
-      *"pidof s1d >/dev/null"*) echo s1d_up ;;
+      *"echo s1d_already_up"*) ;;
+      *"echo s1d_up"*) echo s1d_up ;;
       *gst-launch-1.0*num-buffers=300*) echo "Execution ended after 0:00:12.500000000" ;;
       *) echo "shim: $*" ;;
     esac ;;

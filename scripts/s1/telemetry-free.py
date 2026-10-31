@@ -173,10 +173,19 @@ def judge(rows):
     rpm = [max(abs(v) for v in r["telemetry"]["wheels_rpm"]) for r in sweep
            if r["telemetry"].get("wheels_rpm") is not None]
     yaw_span = span(att_yaw)
-    rpm_max = max(rpm) if rpm else 0
-    still = yaw_span <= BODY_YAW_TOL_DEG and rpm_max <= BODY_RPM_TOL
-    lines.append(f"body_still {'yes' if still else 'NO'}: attitude yaw span {yaw_span:.1f} deg "
-                 f"(tol {BODY_YAW_TOL_DEG}), max |rpm| {rpm_max} (tol {BODY_RPM_TOL})")
+    if not sweep:
+        lines.append("body_still undecided: no sweep window")
+    elif not rpm:
+        # s1d publishes no wheel speeds when the ESC block fails its plausibility (2026-10-30
+        # 22:00: 10 675 rpm against a ±1000 motor); with the wheels off the ground the attitude
+        # yaw cannot stand in for them, and the owner's eyes on the wheels are the verdict.
+        lines.append(f"body_still undecided: no wheel speeds in the samples (ESC block not published); "
+                     f"attitude yaw span {yaw_span:.1f} deg — the wheels are judged by eye")
+    else:
+        rpm_max = max(rpm)
+        still = yaw_span <= BODY_YAW_TOL_DEG and rpm_max <= BODY_RPM_TOL
+        lines.append(f"body_still {'yes' if still else 'NO'}: attitude yaw span {yaw_span:.1f} deg "
+                     f"(tol {BODY_YAW_TOL_DEG}), max |rpm| {rpm_max} (tol {BODY_RPM_TOL})")
 
     # head_obeyed: at the end of each commanded leg the chassis-relative yaw is the command, in
     # DJI's sign (the duck's +yaw is DJI's −yaw)
@@ -241,17 +250,20 @@ def judge_file(path):
 
 
 def _rows(phase, n, cmd_yaw, att_yaw, rel_yaw, rpm=0, att_pitch=0.0, g_pitch=0.0, offset=1.0):
-    """Synthetic samples: ground yaw = relative + attitude + offset, the shape the robot gave."""
+    """Synthetic samples: ground yaw = relative + attitude + offset, the shape the robot gave.
+    `rpm=None` is a daemon that published no wheel speeds."""
     out = []
     for i in range(n):
         ay = att_yaw(i) if callable(att_yaw) else att_yaw
         ry = rel_yaw(i) if callable(rel_yaw) else rel_yaw
         ap = att_pitch(i) if callable(att_pitch) else att_pitch
         gp = g_pitch(i) if callable(g_pitch) else g_pitch
+        tel = {"gimbal_deg": [wrap(ry + ay + offset), gp], "gimbal_yaw_vs_chassis_deg": ry,
+               "attitude_deg": [ay, ap, 0.0]}
+        if rpm is not None:
+            tel["wheels_rpm"] = [rpm, -rpm, rpm, -rpm]
         out.append({"t": i / 10, "phase": phase, "cmd_yaw_deg": cmd_yaw, "cmd_pitch_deg": 0.0,
-                    "telemetry": {"gimbal_deg": [wrap(ry + ay + offset), gp],
-                                  "gimbal_yaw_vs_chassis_deg": ry, "attitude_deg": [ay, ap, 0.0],
-                                  "wheels_rpm": [rpm, -rpm, rpm, -rpm]}})
+                    "telemetry": tel})
     return out
 
 
@@ -283,10 +295,14 @@ def selftest():
     expect("C", judge(rows), "yaw_relation NO", "pitch_frame undecided")
     # D: too few pushes
     expect("D", judge(_rows("sweep", 5, 0.0, 0.0, 0.0)), "VERDICT impossible")
+    # E: no wheel speeds published (the ESC block failed its plausibility) → the body is not
+    # judged by numbers it does not have
+    expect("E", judge(_rows("sweep", 40, 60.0, 10.0, -60.0, rpm=None)),
+           "body_still undecided: no wheel speeds")
     if fails:
         print("\n".join(fails), file=sys.stderr)
         return 1
-    print("telemetry-free selftest: 4 cases judged as expected")
+    print("telemetry-free selftest: 5 cases judged as expected")
     return 0
 
 

@@ -114,6 +114,11 @@ e2e_robot() { local log="$1"; shift
 # that did not come up ends the stage with the tail of its log, not with a riddle downstream.
 start_daemons() {
     : "${S1_BAUD:?S1_BAUD is the baud the capture stage measured with stty}"
+    # A re-run with the daemons still up keeps them: a second s1d would lose the socket and its
+    # dying log would overwrite the live one's.
+    if sh_robot "$BB pidof s1d >/dev/null && echo s1d_already_up" | grep -q s1d_already_up; then
+        echo s1d_already_up | tee "$OUT/$stage/daemons.txt"; return 0
+    fi
     sh_robot "($BB setsid $BB nohup $CHROOT_ENV /opt/robot/bin/s1d --port /dev/ttyS3 --baud $S1_BAUD --sounds /opt/robot/sounds ${S1_VOLUME_CONTROL:+--volume-control '$S1_VOLUME_CONTROL'} ${S1_ARGS:-} </dev/null >/data/s1d.log 2>&1 &); $BB sleep 1"
     sleep 2
     sh_robot "$BB pidof s1d >/dev/null && echo s1d_up || { echo S1D_DEAD; $BB tail -5 /data/s1d.log; }" | tee "$OUT/$stage/daemons.txt"
