@@ -42,6 +42,9 @@ for b in s1d s1ctl s1-cam netpadd robotctl; do
     $A push "$BIN/$b" "$CHROOT/opt/robot/bin/$b" >/dev/null
 done
 $A push deploy/s1/robotd.toml "$CHROOT/etc/robot/robotd.toml" >/dev/null
+# The microphone for the duck's 16 kHz mono consumers (`pet-detect`, the sound sentry): `micleft`, a plug
+# over hw:0,0 that resamples and keeps the LEFT channel — the one the voice is on (measured 2026-10-31).
+$A push deploy/s1/asound.conf "$CHROOT/etc/asound.conf" >/dev/null
 $A shell "chmod 755 $CHROOT/opt/robot/bin/*"
 # A sound bank for `robot.sound`: the stock firmware's own wavs (`/system`, bind-mounted read-only
 # into the chroot by `bench.sh exec`) under the duck's tags, until phase 2 gives the S1 a voice.

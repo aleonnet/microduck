@@ -1239,6 +1239,40 @@ of the 02:31 recording and the robot's own echo).
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/mic-lab/echo_test.wav sha256=1cdc12be424ca41213f258130fa714c7f6bc2aac30cd1874fb45905f55f2f9d6
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/mic-lab/echo_test_left_plus18dB.wav sha256=4b2c902fb19928985c00a1249b41aa2ee910bf8f1db3a72d32c06f6028fd3be1
 
+## The duck's voice and the duck's ear on the S1 (2026-10-31, 12:0x–12:2x)
+
+The owner's rule for the phase-1 table: "falta bancada" means plug in and prove, so two 🟡 rows
+were taken to the robot. Robot powered on without the USB cable, root adb through the Lab, the
+stock stopped by the stages (the playback device is held by the stock until then: `aplay` answered
+"Device or resource busy" on the first try).
+
+- **Synthesis ✅.** The `sounds` tool rendered, on the Mac, a `chirp` (0.18 s), a `wheee` (5.2 s)
+  and the theremin gesture (10.1 s), all 48 kHz mono, seed 7; pushed and played through
+  `plughw:0,0`. The owner: "que legal o S1 falando patez". The duck's voice bank and its live
+  synth both reach the S1's speaker with no DJI process running.
+- **The microphone for the duck's 16 kHz mono consumers ✅; the petting model on the S1 ⬜.**
+  `deploy/s1/asound.conf` (installed by `s1-push.sh`) defines `micleft`: a plug over `hw:0,0` that
+  resamples and keeps the left channel, the one the voice is on. A 5 s capture through it is 16 kHz
+  mono at the left channel's level (RMS −50.8 dB). `pet-detect` (cross-compiled, ONNX Runtime
+  armv7 already in the chroot) ran live on the S1 at four windows a second from `arecord -D micleft`.
+  Two 40 s runs with the owner scratching the controller box: the audio shows the scratching
+  plainly (−32..−42 dB against a −50 dB floor in exactly the scratched windows, `pet_run2.wav`), the
+  classifier never left "normal" (maximum probability 0.31 in run 1, 0.11 in run 2, threshold
+  0.95). The model was trained on the duck's head microphone; the S1's box sounds different to it.
+  Hardware and pipeline proven; phase 2 trains on S1 recordings (run 2 is the first labelled one;
+  `pet-features` is the feature extractor the upstream training used).
+- **Stage 12's lever, started:** `build-onnxruntime.sh` now takes `ORT_ARCH_FLAGS`; a build with
+  `-march=armv7-a -mfpu=neon-vfpv4 -mfloat-abi=hard` is running into `out/onnxruntime-neon/`. The
+  number to beat is 2342 ms per 320×320 frame; the duck's own pace is two inferences a second.
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/synth/chirp_seed7.wav sha256=fdba366cf76e9e7489b9ed7daeacc7e2f73703cd60c439d2b801931ee6dcde9f
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/synth/wheee_seed7.wav sha256=5143997d38b986070f9134c3d1132a25b4342b971124aa4ddff6f868c2772b6b
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/synth/theremin_seed7.wav sha256=3bcc893ab2a6e787b1069698fe6c3394f9d07a7e04470dd4bfb5235f33d895f0
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/pet/asound.conf sha256=20dc851b249e9d111c8b4973537ebee4386259c22ed1273f911e29fb1cd6c1bd
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/pet/route_test.wav sha256=55c97069d917e8b96fe38d5f51948459ddd685108819dca8e0af1da44954223b
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/pet/live_petting_run1.txt sha256=4796b5cc980bfec96c82d222d331315157520ad2657f71f3196eace0fcfbbee9
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/pet/live_petting_run2.txt sha256=e365f75f65783464b925233c905d6dcba55a3e79765cb5af4f9480a2436ddd0d
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/pet/pet_run2.wav sha256=771664e6210752998ff9a3210872a6f662e5c8b31a460ceeffabe8502b7d9a21
+
 ## Corrections after the cold reader (2026-10-30 18:29 -0300) — this section supersedes the hand-off's open-items table
 
 A cold reader resumed from `docs/plans/2026-10-30-1905-handoff-s1-fase1-bateria2.md` alone and found

@@ -21,6 +21,10 @@ OUT="${1:-$HOME/Development/RoboMaster-S1/out/onnxruntime}"
 TAG="${2:-v$(python3 -c 'import re,sys;t=open(sys.argv[1]).read();print(re.search(r"\[workspace\.metadata\.onnxruntime\][^\[]*target\s*=\s*\"([^\"]+)\"",t,re.S).group(1))' "$(dirname "$0")/../../Cargo.toml")}"
 NAME="s1-ort-build-$$"
 JOBS="${JOBS:-4}"
+# Instruction-set flags for the cross compiler. Empty = the compiler's baseline (the 2026-10-30 build:
+# 2342 ms per 320x320 frame on the S1, no NEON). The S1's Cortex-A7 has neon-vfpv4; the stage-12 lever
+# is ORT_ARCH_FLAGS="-march=armv7-a -mfpu=neon-vfpv4 -mfloat-abi=hard" into a second output directory.
+ORT_ARCH_FLAGS="${ORT_ARCH_FLAGS:-}"
 
 if ! docker version >/dev/null 2>&1; then
     echo "docker is not running; open -a Docker" >&2
@@ -35,7 +39,7 @@ echo "[ort] log: $OUT/build.log"
 # the armv7 build dies on -Werror=restrict, a GCC 12 false positive in libstdc++ char_traits on
 # 32-bit targets. -Wno-psabi silences a hundred "parameter passing changed in GCC 7.1" notes.
 set +e
-docker run --platform linux/arm64 --name "$NAME" -e TAG="$TAG" -e JOBS="$JOBS" debian:bookworm sh -c '
+docker run --platform linux/arm64 --name "$NAME" -e TAG="$TAG" -e JOBS="$JOBS" -e ORT_ARCH_FLAGS="$ORT_ARCH_FLAGS" debian:bookworm sh -c '
 set -e
 apt-get update -qq
 DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
@@ -51,6 +55,8 @@ SET(CMAKE_SYSTEM_VERSION 1)
 SET(CMAKE_SYSTEM_PROCESSOR armv7l)
 SET(CMAKE_C_COMPILER arm-linux-gnueabihf-gcc)
 SET(CMAKE_CXX_COMPILER arm-linux-gnueabihf-g++)
+SET(CMAKE_C_FLAGS_INIT "$ORT_ARCH_FLAGS")
+SET(CMAKE_CXX_FLAGS_INIT "$ORT_ARCH_FLAGS")
 SET(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
 SET(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
 SET(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
