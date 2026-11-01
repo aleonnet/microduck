@@ -389,6 +389,17 @@ TOML
         i=$((i + 1))
     done
 
+    # **A Mac has no `aplay`, and `robotd` starts its player by name.** Without one every sound fails
+    # at spawn, at debug level, after the caller has already been told `accepted` — so the console's
+    # play button does nothing and says nothing. `scripts/macos/aplay` takes the same arguments and
+    # hands them to what a Mac does have; nothing in the daemon knows the difference.
+    ROBOTD_PATH="$PATH"
+    if [ "$(uname -s)" = Darwin ]; then
+        ROBOTD_PATH="$REPO/scripts/macos:$PATH"
+        command -v gst-launch-1.0 >/dev/null 2>&1 ||
+            say "no gst-launch-1.0 on the PATH — one-shot sounds will play, the wheee, the theremin and the chorale will not"
+    fi
+
     say "starting robotd"
     i=0
     while [ "$i" -lt "$DUCKS" ]; do
@@ -396,7 +407,7 @@ TOML
         # Its own identity, or every duck on this laptop has the same one — and a chorale id is
         # how a duck recognises its own beacon reflected back, so identical ducks drop each
         # other's beacons and never hear anybody. A container gets this from its own machine-id.
-        DUCK_IDENTITY="$name" \
+        PATH="$ROBOTD_PATH" DUCK_IDENTITY="$name" \
         DUCK_RUNTIME_DIR="$STATE" ORT_DYLIB_PATH="$ORT" RUST_LOG="${RUST_LOG:-info}" \
             $SETSID nohup "$REPO/target/debug/robotd" --sim "127.0.0.1:$(duck_port "$i")" \
             --params "$STATE/robotd-$name.toml" --socket "$STATE/$name.sock" \
@@ -469,8 +480,13 @@ WHY
             # shellcheck disable=SC2086
             (cd "$REPO" && cargo build --quiet -p mediad $mediad_features)
             printf '[media]\nquality = "360p30"\n' > "$STATE/mediad-$name.toml"
+            # **Loopback unless asked.** `mediad` binds every interface by default, which is right
+            # for a robot on its own LAN and does not authenticate by design — on a laptop that
+            # hands the console to whoever shares the network. `DUCK_SIM_MEDIA_HOST=0.0.0.0` is the
+            # way to reach it from another machine.
             DUCK_RUNTIME_DIR="$STATE" RUST_LOG="${RUST_LOG:-info}" \
                 $SETSID nohup "$REPO/target/debug/mediad" \
+                --host "${DUCK_SIM_MEDIA_HOST:-127.0.0.1}" \
                 --sim-camera "127.0.0.1:$((FRAME_PORT + i))" \
                 --config "$STATE/mediad-$name.toml" \
                 --robot-socket "$STATE/$name.sock" --tof-socket "$STATE/$name-tof.sock" \

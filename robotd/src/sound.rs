@@ -74,6 +74,8 @@ const SPEAKER_ROLLOFF_HZ: f64 = 300.0;
 /// `robotd` restores its default disposition at startup — so that piping its stdout behaves — which
 /// would make a write into a dead `aplay` kill the whole daemon. Blocked here, every such write is
 /// merely a failed write, which every writer below already treats as "this voice is over".
+///
+/// That is the robot's answer, and it is not enough on a Mac: see [`take_player_stdin`].
 fn block_sigpipe() {
     // SAFETY: masking one signal on the calling thread; nothing else observes the mask.
     unsafe {
@@ -82,6 +84,30 @@ fn block_sigpipe() {
         libc::sigaddset(&mut set, libc::SIGPIPE);
         libc::pthread_sigmask(libc::SIG_BLOCK, &set, std::ptr::null_mut());
     }
+}
+
+/// The pipe a raw player reads from, safe to write into after that player is gone.
+///
+/// On macOS a mask on the writing thread does not stop the signal: measured, a `robotd` holding the
+/// wheee died with signal 13 when the player was killed under its writer. So the pipe itself is
+/// marked, which turns that write into the plain failed write [`block_sigpipe`] promises. On Linux
+/// this only takes the pipe, and the robot behaves as it always did.
+fn take_player_stdin(child: &mut Child) -> Option<std::process::ChildStdin> {
+    let stdin = child.stdin.take()?;
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::fd::AsRawFd;
+        // From the SDK's <sys/fcntl.h>. The libc this workspace locks does not export it for Apple.
+        const F_SETNOSIGPIPE: libc::c_int = 73;
+        // SAFETY: sets a flag on a descriptor owned by `stdin`, which outlives the call.
+        if unsafe { libc::fcntl(stdin.as_raw_fd(), F_SETNOSIGPIPE, 1) } == -1 {
+            tracing::warn!(
+                error = %std::io::Error::last_os_error(),
+                "cannot mark the player's pipe; a dead player can now take this process with it"
+            );
+        }
+    }
+    Some(stdin)
 }
 
 /// What owns the single-client PCM. Not a bool and not two: every one of these is a state that a
@@ -373,7 +399,7 @@ impl Sound {
             tracing::debug!("aplay failed; no theremin");
             return false;
         };
-        let Some(mut stdin) = child.stdin.take() else {
+        let Some(mut stdin) = take_player_stdin(&mut child) else {
             return false;
         };
         self.child = Some(child);
@@ -612,7 +638,7 @@ impl Sound {
             tracing::debug!("aplay failed; no synthesized voice");
             return None;
         };
-        let stdin = child.stdin.take()?;
+        let stdin = take_player_stdin(&mut child)?;
         self.child = Some(child);
         Some(stdin)
     }
@@ -771,7 +797,7 @@ impl Sound {
             tracing::debug!("aplay failed; no wheee");
             return;
         };
-        let Some(mut stdin) = child.stdin.take() else {
+        let Some(mut stdin) = take_player_stdin(&mut child) else {
             return;
         };
         self.child = Some(child);
@@ -897,6 +923,52 @@ mod tests {
         assert_eq!(rate, sounds::SR);
         assert_eq!(pcm.len(), 480 * 2, "S16LE mono payload");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A player that dies under its writer ends that voice and nothing else.
+    ///
+    /// Run in a copy of this test binary because it needs the daemon's signal disposition, which is
+    /// process-wide and would otherwise reach every test running beside it. Without the mark on the
+    /// pipe, on a Mac, that copy dies by signal 13 and the status below says so.
+    #[test]
+    fn a_dead_player_does_not_kill_the_daemon() {
+        const AS_THE_DAEMON: &str = "SOUND_TEST_AS_THE_DAEMON";
+        if std::env::var_os(AS_THE_DAEMON).is_none() {
+            let status = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "sound::tests::a_dead_player_does_not_kill_the_daemon",
+                ])
+                .env(AS_THE_DAEMON, "1")
+                .stdout(Stdio::null())
+                .status()
+                .unwrap();
+            assert!(status.success(), "the writer took the process: {status:?}");
+            return;
+        }
+
+        // SAFETY: changes one disposition, in the copy that exists to have it.
+        unsafe { libc::signal(libc::SIGPIPE, libc::SIG_DFL) };
+        let mut player = Command::new("true")
+            .stdin(Stdio::piped())
+            .spawn()
+            .expect("`true` must start");
+        let mut stdin = take_player_stdin(&mut player).expect("the player has a pipe");
+        player.wait().unwrap();
+
+        let written = std::thread::spawn(move || {
+            use std::io::Write;
+            block_sigpipe();
+            stdin.write_all(&[0; 8192])
+        })
+        .join()
+        .unwrap();
+
+        assert_eq!(
+            written.unwrap_err().kind(),
+            std::io::ErrorKind::BrokenPipe,
+            "the write must fail as a write"
+        );
     }
 
     /// A missing bank must degrade to silence, not errors — robots without a codec walk on.

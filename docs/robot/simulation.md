@@ -168,6 +168,7 @@ Environment variables, all optional:
 | `DUCK_SIM_VIEWER` | `1` | `0` runs MuJoCo headless. |
 | `DUCK_SIM_PORT` | `7801` | The first duck's body port; +1 per duck. |
 | `DUCK_SIM_FRAME_PORT` | `7901` | The first camera's frame port; +1 per camera. |
+| `DUCK_SIM_MEDIA_HOST` | `127.0.0.1` | Where the console and its signalling listen. It has no password, so `0.0.0.0`, to reach it from another machine, gives it to the whole network. |
 
 ## Things worth knowing
 
@@ -181,6 +182,8 @@ cameras, or a headless viewer are the fixes, in that order.
 **Ducks do not hot-join.** MuJoCo compiles its model, so changing the number of ducks restarts the
 simulator. The daemons survive that: `RemoteIo` reconnects on the next tick, and a duck whose body
 is briefly gone reports unhealthy rather than dying, the same as a robot with no power on the bus.
+
+**A duck on a Mac plays through the Mac.** `robotd` starts its player by name, as `aplay`, and a Mac has none, so the script puts `scripts/macos/aplay` first on `robotd`'s PATH: a wav goes to `afplay`, and raw audio — the wheee, the theremin, the chorale — to GStreamer's `osxaudiosink`. The sound comes from the machine's speakers when somebody presses play in the console, not from the browser, which receives no audio on a robot either. `sh scripts/test-macos-aplay.sh` checks it with a fake player.
 
 **`--sim` is not `--fake`.** `robotd --fake` is a robot made of nothing: no physics, positions echo
 back perfectly, nothing falls over. It is for unit tests and for laptop work that needs no body at

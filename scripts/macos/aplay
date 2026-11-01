@@ -1,0 +1,53 @@
+#!/bin/sh
+# `aplay` for a simulated duck on a Mac, which has no ALSA.
+#
+# `robotd/src/sound.rs` starts its player by name, so `scripts/duck-sim` puts this directory first on
+# `robotd`'s PATH and the daemon does not have to choose a player. These are the arguments it passes:
+# a wav file for a one-shot, and raw S16_LE on stdin for the wheee, the theremin and the chorale.
+#
+# **`exec`, always.** A new sound kills the previous child, and the child has to be the player: a
+# shell left in the middle would die and leave the old sound playing under the new one.
+#
+# **An option this does not know is an error.** `robotd` throws away stderr and has already answered
+# `accepted`, so a sound dropped here would be the same silence this file exists to end, with nothing
+# to explain it. Exiting non-zero is at least visible to whoever runs this by hand.
+set -eu
+
+raw=0
+rate=
+channels=1
+file=
+
+die() { echo "aplay (macOS adapter): $*" >&2; exit 2; }
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -q) shift ;;
+        -D) [ $# -ge 2 ] || die "-D needs a device"; shift 2 ;;
+        -t) [ $# -ge 2 ] || die "-t needs a type"
+            [ "$2" = raw ] || die "unsupported type: $2"
+            raw=1; shift 2 ;;
+        -f) [ $# -ge 2 ] || die "-f needs a format"
+            [ "$2" = S16_LE ] || die "unsupported format: $2"
+            shift 2 ;;
+        -c) [ $# -ge 2 ] || die "-c needs a channel count"; channels="$2"; shift 2 ;;
+        -r) [ $# -ge 2 ] || die "-r needs a rate"; rate="$2"; shift 2 ;;
+        # ALSA's buffer sizes: a latency request to a driver this does not use.
+        --buffer-time=*|--period-time=*) shift ;;
+        -*) die "unsupported option: $1" ;;
+        *)  [ -z "$file" ] || die "more than one file: $file and $1"
+            file="$1"; shift ;;
+    esac
+done
+
+if [ "$raw" = 1 ]; then
+    [ -z "$file" ] || die "raw audio comes from stdin, not from $file"
+    [ -n "$rate" ] || die "raw audio needs -r"
+    exec gst-launch-1.0 -q fdsrc fd=0 \
+        ! rawaudioparse use-sink-caps=false format=pcm pcm-format=s16le \
+            sample-rate="$rate" num-channels="$channels" \
+        ! audioconvert ! audioresample ! osxaudiosink
+fi
+
+[ -n "$file" ] || die "no file, and not raw"
+exec afplay "$file"
