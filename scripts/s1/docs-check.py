@@ -89,6 +89,11 @@ PROSE = [
     r'needs \(`docs/[\w./-]+`, item 1 of 2026-10-30 \(night\)\):',
     r'"(the floor\'s worst case must not trip|a disagreement of 0\.13 m/s must not trip the detector)"',
     r'"(the floor\'s worst case is not a lift|a disagreement of 0\.13 m/s is not a lift)"',
+    # `infer`'s comment and message, which named a stage that fills nothing, and what they say now.
+    'FRAMES="\\$\\{S1_FRAMES:\\-\\$OUT/frames\\}"\\ \\ \\ \\#\\ stage\\ 11\'s\\ PNG\\ lands\\ there;\\ any\\ directory\\ of\\ jpg/png\\ works',
+    'FRAMES="\\$\\{S1_FRAMES:\\-\\$OUT/frames\\}"\\ \\ \\ \\#\\ nothing\\ fills\\ it\\ now;\\ any\\ directory\\ of\\ jpg/png\\ works,\\ such\\ as\\ `camera`\'s',
+    '\\[\\ \\-n\\ "\\$\\(find\\ "\\$FRAMES"\\ \\-maxdepth\\ 1\\ \\\\\\(\\ \\-iname\\ \'\\*\\.png\'\\ \\-o\\ \\-iname\\ \'\\*\\.jpg\'\\ \\-o\\ \\-iname\\ \'\\*\\.jpeg\'\\ \\\\\\)\\ \\-print\\ \\-quit\\ 2>/dev/null\\)"\\ \\]\\ \\|\\|\\ \\{\\ say\\ "no\\ frames\\ in\\ \\$FRAMES\\ —\\ run\\ stage\\ 11\\ or\\ set\\ S1_FRAMES";\\ exit\\ 1;\\ \\}',
+    '\\[\\ \\-n\\ "\\$\\(find\\ "\\$FRAMES"\\ \\-maxdepth\\ 1\\ \\\\\\(\\ \\-iname\\ \'\\*\\.png\'\\ \\-o\\ \\-iname\\ \'\\*\\.jpg\'\\ \\-o\\ \\-iname\\ \'\\*\\.jpeg\'\\ \\\\\\)\\ \\-print\\ \\-quit\\ 2>/dev/null\\)"\\ \\]\\ \\|\\|\\ \\{\\ say\\ "no\\ frames\\ in\\ \\$FRAMES\\ —\\ set\\ S1_FRAMES";\\ exit\\ 1;\\ \\}',
     # The refusals that named a plan's phase, and what they say now: these lines exactly.
     '"the\\ policy\\ is\\ not\\ driving:\\ this\\ body\\ has\\ no\\ skills\\ yet\\ \\(phase\\ 2\\)",',
     '"the\\ policy\\ is\\ not\\ driving:\\ this\\ body\\ has\\ no\\ skills\\ at\\ all",',

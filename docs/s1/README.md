@@ -15,7 +15,6 @@ One page owns a mechanism, and the others link to it. When two pages disagree, t
 | [`robot/s1-bench.md`](robot/s1-bench.md) | Running it from a Mac, from a cold robot, with what each step has really proved. |
 | [`project/s1-bringup.md`](project/s1-bringup.md) | The dated record: what was measured, with its artefacts. Every part by stage. |
 | [`project/s1-changelog.md`](project/s1-changelog.md) | The commits by subject, what stands behind each group, the hash table of the rewritten history. |
-
 | [`project/2026-11-01-1000-conferencia-das-paginas.md`](project/2026-11-01-1000-conferencia-das-paginas.md) | What was checked on each page, against what, and what stays unmeasured. |
 
 Kept because revising means a new file and the old one stays; superseded, not current:

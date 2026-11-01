@@ -15,7 +15,7 @@ use duck_ipc_proto as proto;
 /// yaw positive clockwise and pitch positive nose up; the duck's trunk is x forward, y left, z up,
 /// its world the IMU's gravity-aligned frame with z up (`duck_ipc_proto::ImuState`). Measured on
 /// the robot, 2026-10-30: at rest the accelerometer reads `[0, 0, −1.0]` g; with the chassis held
-/// nose-up at +21.7° it read `acc_x = +0.36 = sin 21.7°` (`telemetry-free/tilt.ndjson`), which is
+/// nose-up at +21.7° it read `acc_x = +0.36 = sin 21.7°` (`telemetry-free-20261030-221150/tilt.ndjson`), which is
 /// NED specific force; the gimbal's yaw went to DJI's +60 when asked right (`drive`, morning).
 /// jeguzzi's `robomaster_sim` reaches the same mapping from its x-forward, y-left, z-up body
 /// (`command_subjects.hpp`: `from_robot` negates yaw and pitch, keeps roll; `ImuSubject` negates
@@ -423,7 +423,7 @@ mod frame_tests {
         assert_eq!(q, [1.0, 0.0, 0.0, 0.0]);
     }
 
-    /// The tilt window of 2026-10-30 (`telemetry-free/tilt.ndjson`, t = 15.2 s): chassis pitch
+    /// The tilt window of 2026-10-30 (`telemetry-free-20261030-221150/tilt.ndjson`, t = 15.2 s): chassis pitch
     /// +21.7°, roll −1.5°, yaw 24.8°, accelerometer `[0.372, 0.015, −0.935]`. Nose up: gravity in
     /// the trunk points back and down, and the trunk's forward axis rises in the world.
     #[test]

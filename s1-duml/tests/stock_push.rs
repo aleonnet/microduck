@@ -89,7 +89,7 @@ fn the_2026_10_29_push_agrees_with_itself_about_the_slope() {
 /// with and without the app, 3080 pushes — read `battery, esc`, with the pack at 10.7–12.2 V and
 /// the wheels at idle, and the other order implausible in all 5442 pushes (2026-10-30, 23:xx,
 /// Python over every capture). The msg id does not tell the orders apart; the content does. This
-/// fixture is one such push, cut from `telemetry-free/s1d_tilt_reads.strace` (22:2x): the robot on
+/// fixture is one such push, cut from `telemetry-free-20261030-221150/s1d_tilt_reads.strace` (22:2x): the robot on
 /// since 20:50, 29 % and 10.675 V — the "10 675 rpm" the other order read; at 82 it would be 49 mV at 0 %.
 #[test]
 fn the_other_boots_put_the_battery_before_the_esc_and_the_layout_reads_both_orders() {

@@ -554,7 +554,7 @@ pub fn gun_led(
 
 /// The launcher's muzzle flash, as the stock controller sends it once per shot: `0x3f/0x55` with
 /// control 7, effect 3 (flash), green, once, 40 ms on, 0 off. Captured on the UART with the stock
-/// alive and the app firing (`capture/hdvt_fire.strace`, 2026-10-30 15:45:56.117, 30 of them);
+/// alive and the app firing (`capture-20261030-165821/hdvt_fire.strace`, 2026-10-30 15:45:56.117, 30 of them);
 /// `tests/fixtures/gun_led_fire_stock_real.bin` is one, and `real_frames.rs` holds this builder
 /// to its payload. Nothing comes back from the launcher on the UART (its only frame in that
 /// capture is its version string), so the stock paces the flashes itself, and so does `s1d`.

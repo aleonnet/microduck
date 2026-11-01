@@ -405,10 +405,10 @@ PY
   infer)
     D=$(dir infer); ORT="${S1_ORT:-$HOME/Development/RoboMaster-S1/out/onnxruntime}"; ORT_VER="${S1_ORT_VERSION:-1.28.0}"; MODEL="$OUT/duck_detect.onnx"
     [ -f "$MODEL" ] || curl --fail --location --silent --show-error -o "$MODEL" "https://huggingface.co/pollen-robotics/microduck-duck-detector/resolve/duck-v1/duck_detect.onnx"
-    FRAMES="${S1_FRAMES:-$OUT/frames}"   # stage 11's PNG lands there; any directory of jpg/png works
+    FRAMES="${S1_FRAMES:-$OUT/frames}"   # nothing fills it now; any directory of jpg/png works, such as `camera`'s
     # `find`, not a pair of globs: an unmatched glob reaches `ls` literally and fails the guard on a
-    # directory that holds only PNGs — which is what stage 11 leaves.
-    [ -n "$(find "$FRAMES" -maxdepth 1 \( -iname '*.png' -o -iname '*.jpg' -o -iname '*.jpeg' \) -print -quit 2>/dev/null)" ] || { say "no frames in $FRAMES — run stage 11 or set S1_FRAMES"; exit 1; }
+    # directory that holds only PNGs — which is what `camera` leaves.
+    [ -n "$(find "$FRAMES" -maxdepth 1 \( -iname '*.png' -o -iname '*.jpg' -o -iname '*.jpeg' \) -print -quit 2>/dev/null)" ] || { say "no frames in $FRAMES — set S1_FRAMES"; exit 1; }
     # `duck-bench` is the NPU path; the S1 has none. `s1-infer` is the same measurement over the
     # detector's ONNX path, cross-compiled here and built natively below for the other tier.
     # The on-board tier needs the robot; the Mac tier below runs regardless (one tier suffices).

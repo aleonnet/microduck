@@ -1,6 +1,6 @@
 //! The S1's own list, end to end without a socket: every call parses and refuses an unknown
 //! member by name, and the one-shots queue the frame DJI's library would send, the oracle hex of
-//! `scripts/s1/dji-oracle.py` byte for byte, except `armor` and `blaster`. The continuous ones
+//! `scripts/s1/dji-oracle.py` byte for byte, except body `lights`, `armor` and `blaster`. The continuous ones
 //! (`wheels`, the gimbal rate) set the slot the loop streams from, judged in `fake_body.rs`.
 
 use duck_ipc_proto as proto;

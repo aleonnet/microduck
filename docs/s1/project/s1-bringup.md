@@ -278,7 +278,7 @@ Mac in the robot run; `bench.sh drive` and `events` run `robotctl health`, `quac
 |---|---|---|
 | `robotctl health --json` | the loop healthy | the answer |
 | the pad (UDP → `netpadd` → `robot.*`) | Start arms (five work-mode-1 frames, then the heartbeat); left stick forward (all four wheels, `[fr, −fl, −bl, br]` equal); right stick turns (sides opposed); left stick strafes; sticks centred (wheels zero); D-pad right + right stick (a gimbal frame with yaw and pitch both non-zero, read back from the frame); stick centred (the last gimbal frame is `(0, 0)`); Home twice (LEDs white solid, then off); RT and LT (one `aplay chirp.wav`, and **one** `wheee.wav` for a 300 ms hold — the hold is a level); Start disarms (no heartbeat for 300 ms) | the wire, and `aplay`'s stand-in |
-| `s1ctl` and the socket | version; `robot.enable`; F16 wheels (`[100, −100, −100, 100]`, zero after `robot.stop`); **the deadman** (one `robot.move` and silence: 20–70 moving wheel frames, then zero, no stop sent); F1 follow gimbal_lead (gimbal work mode 0, stick overlay 1, the twist as `0x3f/0x22` with no wheel speeds), chassis_lead (work mode 2), F7 velocity frame gimbal (overlay 2), F4 FPV (work mode 1), free; F2 recenter; F3 speed 30/−15 then stop; F5 sleep, wake; F6 goto 1 −0.5 −90 then `--stop`; F15 chassis work mode 2 then 1 as raw frames; F10 lights solid red, breath blue, flash green, marquee white, off (effects `[1, 2, 3, 4, 0]` on the wire); F9 blaster LED; `robotctl flashlight on --color red`, off; F11 armour 1.0; F12 PWM 500 ‰ / 1 kHz; F17 blaster infrared (three shots: the fire frame, then per shot the stock's own muzzle flash — `0x3f/0x55`, control 7, effect 3, green, 40 ms, captured in `capture/hdvt_fire.strace` and held as `gun_led_fire_stock_real.bin` — and the stock's `ir_gun_shoot.wav` through `aplay`, on the launcher's 330 ms cadence), gel refused naming the key; volume 50 (`amixer -q -c 0 sset Speaker 50%`); `robot.sound greet` and `robotctl quack` (`aplay greet.wav`, `chirp.wav`); a raw frame | the wire: the oracle hex of each command (`dji_oracle.rs`); where a builder is used instead, that builder is itself held to the oracle or to a real fixture |
+| `s1ctl` and the socket | version; `robot.enable`; F16 wheels (`[100, −100, −100, 100]`, zero after `robot.stop`); **the deadman** (one `robot.move` and silence: 20–70 moving wheel frames, then zero, no stop sent); F1 follow gimbal_lead (gimbal work mode 0, stick overlay 1, the twist as `0x3f/0x22` with no wheel speeds), chassis_lead (work mode 2), F7 velocity frame gimbal (overlay 2), F4 FPV (work mode 1), free; F2 recenter; F3 speed 30/−15 then stop; F5 sleep, wake; F6 goto 1 −0.5 −90 then `--stop`; F15 chassis work mode 2 then 1 as raw frames; F10 lights solid red, breath blue, flash green, marquee white, off (effects `[1, 2, 3, 4, 0]` on the wire); F9 blaster LED; `robotctl flashlight on --color red`, off; F11 armour 1.0; F12 PWM 500 ‰ / 1 kHz; F17 blaster infrared (three shots: the fire frame, then per shot the stock's own muzzle flash — `0x3f/0x55`, control 7, effect 3, green, 40 ms, captured in `capture-20261030-165821/hdvt_fire.strace` and held as `gun_led_fire_stock_real.bin` — and the stock's `ir_gun_shoot.wav` through `aplay`, on the launcher's 330 ms cadence), gel refused naming the key; volume 50 (`amixer -q -c 0 sset Speaker 50%`); `robot.sound greet` and `robotctl quack` (`aplay greet.wav`, `chirp.wav`); a raw frame | the wire: the oracle hex of each command (`dji_oracle.rs`); where a builder is used instead, that builder is itself held to the oracle or to a real fixture |
 | telemetry | the subscription on the wire (add-node for the script node `0xC9` in the stock's layout — `dds_add_node_stock_real.bin` is node 9 — never a node reset, nine subjects under msg `0x5d` with flags 3); a push of ours fed to the body → `s1ctl telemetry` reads battery 77 %, gimbal `[90, −15]`, picked up, x 1.5 m, wheel 123 rpm, the controller's answer `0x00` logged as accepted, and the push **acked with the stock's exact frame, the push's sequence included** (`dds_push_ack_stock_real.bin`; `fake_body.rs` holds the same for the stock's push and ours); `robotctl monitor --json` → `robot.state` head yaw 1.5708 rad, odometry x 1.5, picked up | `s1ctl`, `robotctl`, the wire |
 | events | an armour hit on plate 3, an infrared hit and a button press (an `input_event` through a FIFO) → three `s1.event` notifications printed by `s1ctl events` | `s1ctl` |
 | the end | `robot.enable off` (no heartbeat after); every byte on the wire decodes as whole frames (4112 frames, 0 dropped) | the wire |
@@ -331,7 +331,7 @@ controller (`0x09`), which is stopped under us. The launcher fires either way (s
 events per three shots, reflected by a white wall, `items/F17_infrared_fire3.log`); what the stock
 controller adds beside the fire — the muzzle flash and the shot sound — is the controller's own
 doing (`gunShootAction`, `ir_gun_shoot` in its strings), captured on the UART with the stock alive
-and the app firing (`capture/hdvt_fire.strace`: 42 fire frames `0x3f/0x51` from `0x09` to `0x17`,
+and the app firing (`capture-20261030-165821/hdvt_fire.strace`: 42 fire frames `0x3f/0x51` from `0x09` to `0x17`,
 no ack; 30 muzzle flashes `0x3f/0x55` control 7, effect 3, green, once, 40 ms; the launcher's own frames on the UART,
 `0x00/0x01`, `0x00/0xf0`, `0x00/0xf1` and 25 of `0x3f/0x49`, are not decoded, so whether one reports a shot is not known), and reproduced by `s1d` per shot. The owner saw
 the green flash and heard the shot with our daemon (`F17_refute.txt` is the refutation).
@@ -519,7 +519,7 @@ no answer and no push either — a reset leaves the bus dead until a power cycle
 one now, and registers DJI's script node `0xC9` instead of the stock's 9; on a fresh boot (reboot,
 15:54) the answers are the same `02 03` to add-node and `21 03` to subscribe as under node 9. Next
 lead: the runtime's own subscription path in `rm_module.py` (node `0xC9`, msg id 0, through the
-stock controller), and the stock's live DDS traffic in `capture/hdvt_fire.strace`. **Closed the
+stock controller), and the stock's live DDS traffic in `capture-20261030-165821/hdvt_fire.strace`. **Closed the
 same night:** the stock's push is decoded as it flows (telemetry section); F18 is done.
 
 **The muzzle flash, and two errors of method.** `s1.blaster` fires (six infrared-hit events per
@@ -727,7 +727,7 @@ one subject `0x00020003_d7f5dcfb` at 1 Hz; msg 0 again with two, `…d7f5dcfb` a
 DJI's internal namespace `0x20003` (not the SDK's `0x20009` singles), together 153 bytes after the
 time stamp. The controller's own clock in the pushes puts them **20 ms apart** (1314 of 2361
 consecutive gaps in the 17:05 capture; the rest multiples of 20 ms, i.e. drops), so the field's
-20 is not hertz on this firmware; the 1 Hz push's gaps are 1000 ms, or 2000 ms where one dropped. The 14 bytes at 8..22 are
+20 is not hertz on this firmware; the 1 Hz push's gaps are 1000 ms in 24 of 58, the others 2000 to 9000 ms. The 14 bytes at 8..22 are
 therefore part of the first composite subject, whose internal layout DJI does not publish; the
 float there tracks the gimbal yaw (0, −1, −178 against the gimbal's −179.6°). The `msg_id` of the
 big push was 0 at 17:05 and 1 at 20:50: by length, as coded. The stage's first run hung: busybox
@@ -1645,7 +1645,8 @@ the counts the text gives (fire 101 and 42, flashes 12 and 30, body LEDs 38, gim
 1388, follow frames 124, pushes 992 and 667, heartbeat 3201). A few large files were opened only for
 the figure the text takes from them, and logs of probes were read as far as the claim needs. **Binary
 artefacts (partition images, audio, video, frames, libraries) were checked by hash only, and that is
-what their lines claim:** what was heard in a recording rests on the owner's witness.
+what their lines claim:** what was heard in a recording rests on the owner's witness. A later pass opened a few
+of them for a figure (the levels of two recordings, the luma of three frames): the list linked above says which.
 
 Not reopened: what the text quotes from DJI's firmware under `out/2026-10-30-poc2/stock` beyond the
 files the classification cites; external pages cited in "Item 4"; the 16:58 capture's morning
