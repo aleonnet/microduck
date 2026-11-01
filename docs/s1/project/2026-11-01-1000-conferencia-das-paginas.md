@@ -21,7 +21,7 @@ Ordem do dono: "feche a arrumação com qualidade". Feita por mim, antes do leit
 - As 5442 ordens de bloco da telemetria: frase do diário, as capturas existem, o teste só cobre as amostras em `s1-duml/tests/stock_push.rs`.
 - Valor de `robot.health` às 23:5x e `pidof` às 15:43: procurados com `grep` nos `.txt`, `.log` e `.json` de 30/10, sem resultado; capturas grandes não varridas; o texto fica como relato daquela hora.
 - Páginas externas (Hackaday, wiki HU-ICT-LAB, `robomaster_sim`, SDK da DJI): citadas, não reabertas.
-- Áudio, vídeo, imagens e imagens de partição: abertos só para os níveis e a luma acima; o resto é hash; o que foi ouvido ou visto é testemunho do dono.
+- Áudio, vídeo, imagens e imagens de partição: abertos só para os níveis de quatro gravações (eco, rota, `pet_run2.wav`, áudio do vídeo da DJI), a luma de três quadros e os bytes de `audio.ini`; o resto é hash; o que foi ouvido ou visto é testemunho do dono.
 - Firmware da DJI: só onde a frase afirma algo sobre ele (`rm_ctrl.py`, cadeias de `dji_sys`, `dji_hdvt_uav`, `dji_camera`).
 
-**Depois do leitor frio:** ele achou 12 erros meus nesta passada, todos conferidos e corrigidos; o caminho errado de captura foi varrido em todo o S1. Lista: `~/.claude/plans/pasted-content-id-b9f7-leia-inteiros-pure-badger.diff-review-r3.md`. Isto mostra que a releitura minha não bastou sozinha; a lista prova o que foi conferido, não que não sobrou erro.
+**Depois do leitor frio:** ele achou 12 erros meus nesta passada, todos conferidos e corrigidos; o caminho errado de captura foi varrido em todo o S1. Lista: `~/.claude/plans/pasted-content-id-b9f7-leia-inteiros-pure-badger.diff-review-r3.md`. Uma segunda e última leitura, só sobre essas correções, achou mais 7, também conferidos e corrigidos (`...diff-review-r4.md`, ao lado); essas 7 correções não tiveram leitor depois. Isto mostra que a releitura minha não bastou sozinha; a lista prova o que foi conferido, não que não sobrou erro.

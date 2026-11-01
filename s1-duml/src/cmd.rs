@@ -556,8 +556,8 @@ pub fn gun_led(
 /// control 7, effect 3 (flash), green, once, 40 ms on, 0 off. Captured on the UART with the stock
 /// alive and the app firing (`capture-20261030-165821/hdvt_fire.strace`, 2026-10-30 15:45:56.117, 30 of them);
 /// `tests/fixtures/gun_led_fire_stock_real.bin` is one, and `real_frames.rs` holds this builder
-/// to its payload. Nothing comes back from the launcher on the UART (its only frame in that
-/// capture is its version string), so the stock paces the flashes itself, and so does `s1d`.
+/// to its payload. Whether a frame of the launcher reports a shot is not known: beside its version
+/// string it sends three kinds nobody decoded in that capture, so `s1d` paces the flashes by the clock.
 pub fn gun_fire_flash(seq: u16) -> Frame {
     gun_led(seq, 7, 3, 0, 255, 0, 1, 40, 0)
 }

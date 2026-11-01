@@ -36,7 +36,7 @@ On the Mac: `adb`, `cargo-zigbuild` with `zig`, the Rust target `armv7-unknown-l
 | `S1_ROOTFS` | the lab's tar | `exec` |
 | `S1_STAGE`, `S1_PULL_SKIP` | `/sdcard/bk`; `blackbox userdata cache` | `backup` |
 | `S1_ORT`, `S1_ORT_VERSION`, `S1_ORT_MAC` | the lab's; `1.28.0` | `infer` |
-| `S1_FRAMES` | `$S1_OUT/frames`, which nothing fills now | `infer`: point it at a directory with a PNG, such as `camera/` |
+| `S1_FRAMES` | `$S1_OUT/frames`, which nothing fills now | `infer`: point it at a directory with a PNG, such as `camera/`, though it was never run that way |
 
 ## From a cold robot
 

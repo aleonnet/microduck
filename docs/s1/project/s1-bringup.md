@@ -519,7 +519,7 @@ no answer and no push either — a reset leaves the bus dead until a power cycle
 one now, and registers DJI's script node `0xC9` instead of the stock's 9; on a fresh boot (reboot,
 15:54) the answers are the same `02 03` to add-node and `21 03` to subscribe as under node 9. Next
 lead: the runtime's own subscription path in `rm_module.py` (node `0xC9`, msg id 0, through the
-stock controller), and the stock's live DDS traffic in `capture-20261030-165821/hdvt_fire.strace`. **Closed the
+stock controller), and the stock's live DDS traffic in `capture-20261030-165821/hdvt_uav.strace`. **Closed the
 same night:** the stock's push is decoded as it flows (telemetry section); F18 is done.
 
 **The muzzle flash, and two errors of method.** `s1.blaster` fires (six infrared-hit events per
@@ -816,7 +816,7 @@ by hand with the owner watching the gimbal, then a 25 s tilt window.
   the "temperature counter" was an ESC clock. Over all 5442 captured pushes exactly one order
   reads as physics (pack 9–13 V at ≤ 100 %, wheels within ±1000 rpm, the four ESC clocks within
   a second of each other): 2363 one way, 3080 the other, none both, none neither; the pack read
-  11.94 V/80 % at 17:05, 12.23 V/92 % at 21:0x, 10.68 V/29 % at 22:2x, 10.99 V/45 % and
+  11.94 V/80 % at 17:05, 12.23 V/92 % at 21:0x, 10.68 V/29 % at 22:19, 10.99 V/45 % and
   10.90 V/42 % on the clean boot — a day's discharge. The msg id does not name the order (the
   29/10 push is `esc, battery` under msg id 1): the order is a property of that boot's
   subscription, which the hdvt builds in an order that varies per boot, and `StockPush::parse`
@@ -1646,7 +1646,7 @@ the counts the text gives (fire 101 and 42, flashes 12 and 30, body LEDs 38, gim
 the figure the text takes from them, and logs of probes were read as far as the claim needs. **Binary
 artefacts (partition images, audio, video, frames, libraries) were checked by hash only, and that is
 what their lines claim:** what was heard in a recording rests on the owner's witness. A later pass opened a few
-of them for a figure (the levels of two recordings, the luma of three frames): the list linked above says which.
+of them for a figure (the levels of four recordings, the luma of three frames, the bytes of `audio.ini`): the list linked above says which.
 
 Not reopened: what the text quotes from DJI's firmware under `out/2026-10-30-poc2/stock` beyond the
 files the classification cites; external pages cited in "Item 4"; the 16:58 capture's morning
