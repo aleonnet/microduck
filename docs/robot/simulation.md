@@ -168,7 +168,6 @@ Environment variables, all optional:
 | `DUCK_SIM_VIEWER` | `1` | `0` runs MuJoCo headless. |
 | `DUCK_SIM_PORT` | `7801` | The first duck's body port; +1 per duck. |
 | `DUCK_SIM_FRAME_PORT` | `7901` | The first camera's frame port; +1 per camera. |
-| `DUCK_SIM_MEDIA_HOST` | `127.0.0.1` | Where the console and its signalling listen. It has no password, so `0.0.0.0`, to reach it from another machine, gives it to the whole network. |
 
 ## Things worth knowing
 

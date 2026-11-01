@@ -480,13 +480,8 @@ WHY
             # shellcheck disable=SC2086
             (cd "$REPO" && cargo build --quiet -p mediad $mediad_features)
             printf '[media]\nquality = "360p30"\n' > "$STATE/mediad-$name.toml"
-            # **Loopback unless asked.** `mediad` binds every interface by default, which is right
-            # for a robot on its own LAN and does not authenticate by design — on a laptop that
-            # hands the console to whoever shares the network. `DUCK_SIM_MEDIA_HOST=0.0.0.0` is the
-            # way to reach it from another machine.
             DUCK_RUNTIME_DIR="$STATE" RUST_LOG="${RUST_LOG:-info}" \
                 $SETSID nohup "$REPO/target/debug/mediad" \
-                --host "${DUCK_SIM_MEDIA_HOST:-127.0.0.1}" \
                 --sim-camera "127.0.0.1:$((FRAME_PORT + i))" \
                 --config "$STATE/mediad-$name.toml" \
                 --robot-socket "$STATE/$name.sock" --tof-socket "$STATE/$name-tof.sock" \
