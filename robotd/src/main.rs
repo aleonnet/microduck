@@ -1518,6 +1518,7 @@ async fn open_bus_waiting(bus: &params::Bus, state: &RobotState) -> Option<BusIo
 /// Open and verify the bus, or explain why not.
 /// The body IMU's sensor→trunk mount on `board`: the power board stands on edge in a `zero3`
 /// and lies flat in a `beta`.
+#[cfg(target_os = "linux")]
 fn body_imu_mount(board: robotd_params::board::Board) -> [f64; 4] {
     use duck_control::imu::SflpDecoder;
     match board {
