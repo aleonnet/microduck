@@ -10,10 +10,11 @@ command is in [`s1-commands.md`](s1-commands.md); how the software works is
 
 **Rules that are not optional:**
 
-- **No generic camera stream.** `v4l2-ctl --stream-mmap` and `gst-launch v4l2src` rebooted the robot twice. Only `s1-cam`.
+- **No generic camera stream.** `v4l2-ctl --stream-mmap` rebooted the robot twice. `gst-launch v4l2src` is the same generic path and was never run. Only `s1-cam`.
 - **Never a DDS node reset** (`0x48/0x02`). One left the controller's bus dead until a power cycle.
 - **No frame to the robot** without a captured frame or DJI's own library behind it.
 - **Wheels off the ground** for `drive`, `items` and anything that moves, unless the step says floor; ask before moving.
+- **`robot.stop` does not cancel `s1.goto`.** To end a goto: `s1ctl goto --stop`, or a non-zero `robot.move`. See the [defects](s1-commands.md#open-defects).
 - Nothing here writes to `/system` or to a partition. A reboot brings DJI's firmware back and none of ours.
 
 ## What it needs
@@ -40,13 +41,14 @@ On the Mac: `adb`, `cargo-zigbuild` with `zig`, the Rust target `armv7-unknown-l
 
 1. **Power on, root adb.** Root `adb` comes from the DJI app's Lab, through `robomaster-s1-hacks` (`enable_root_adb.py`); it has to be enabled again after every power cycle. `adb devices` must list the robot. The owner's hand may be needed here; check first with `ping` and `adb`.
 2. **The chroot, once:** `scripts/s1/bench.sh exec`. It pushes and unpacks the rootfs when absent and makes the mounts. A reboot drops the mounts: `drive`, `up`, `camera`, `audio`, `frames`, `infer` and `telemetry-free` make them again; `events`, `items`, `floor` and `capture` do not.
-3. **Install, after a build:** `scripts/s1/s1-push.sh`. It builds and installs `s1d`, `s1ctl`, `s1-cam`, `netpadd`, `robotctl`, `robotd.toml`, `asound.conf`, `asound.state.stock`, and links the eight sounds. It does not install `mediad`, `s1-infer` or `pet-detect`.
+3. **Build for the Mac:** `cargo build -p s1d`. The stages that run the items build only `s1-e2e`, which then needs `target/debug/s1ctl` beside it and stops without it; an older one is used silently.
+   **Install, after a build:** `scripts/s1/s1-push.sh`. It builds and installs `s1d`, `s1ctl`, `s1-cam`, `netpadd`, `robotctl`, `robotd.toml`, `asound.conf`, `asound.state.stock`, and links the eight sounds. It does not install `mediad`, `s1-infer` or `pet-detect`.
 4. **Start.** Both ways start `s1d` and `netpadd` by hand, and nothing supervises them.
-   - `scripts/s1/bench.sh stop`, then `S1_BAUD=921600 scripts/s1/bench.sh drive`, which runs the items. **`drive` does not stop DJI's process: without `stop` first, `s1d` writes to a UART DJI's program still holds.** Proved on 2026-10-30, wheels in the air, in the form that existed then.
+   - `scripts/s1/bench.sh stop`, then `S1_BAUD=921600 scripts/s1/bench.sh drive`, which runs every item (see step 5). **`drive` does not stop DJI's process: without `stop` first, `s1d` writes to a UART DJI's program still holds.** Proved on 2026-10-30, wheels in the air, in the form that existed then.
    - `S1_BAUD=921600 scripts/s1/bench.sh up` stops DJI's body process and its monitor itself, starts the daemons, forwards the socket and checks four mixer controls against `deploy/s1/asound.state.stock`. **No valid proof:** its only run was the discarded floor session.
-5. **Items, wheels in the air:** `scripts/s1/bench.sh items`, or some by name (`items F2 F10`). The prompts need a terminal; without one an item counts as `unwitnessed` and fails.
+5. **Items, wheels in the air:** name them: `scripts/s1/bench.sh items F2 F10`. **With no names, `items` and `drive` also run the floor items:** `lifted`, F1, F6 go through, including a real `s1.goto`, and they cannot truly pass in the air. Each item acts first and shows its prompt afterwards. The prompts need a terminal; without one an item counts as `unwitnessed` and fails.
 6. **Floor:** `scripts/s1/bench.sh floor`, 1.5 m free. **No valid proof.** Read the [defects](s1-commands.md#open-defects) first: `robot.stop` does not cancel `s1.goto`.
-7. **By hand:** `s1ctl --tcp 127.0.0.1:9000 <command>` from the Mac; on the robot, `robotctl` in the chroot:
+7. **By hand:** `target/debug/s1ctl --tcp 127.0.0.1:9000 <command>` from the Mac; on the robot, `robotctl` in the chroot:
    `adb shell /system/xbin/busybox chroot /data/debian /usr/bin/env PATH=/usr/bin:/bin /opt/robot/bin/robotctl health`
 8. **Off:** power off, or `scripts/s1/bench.sh restore` to reboot into DJI's firmware and remove the forward. **Restoring a partition image has never been tried.**
 

@@ -51,7 +51,7 @@ sends zero; fresh `s1.wheels` sends those rpm; `gimbal_lead` sends the twist as 
 twist through mecanum kinematics as `0x3f/0x20`. `--twist speed` would send `0x3f/0x21`; it has never run.
 
 **Frames.** The duck's signs are converted where the wheels and the gimbal meet the wire: the duck's +yaw is left, DJI's is right.
-`s1.gimbal` and `s1.telemetry` keep DJI's signs; `s1.goto` takes counter-clockwise yaw and negates it on the wire. `robot.state` uses the duck's frames.
+`s1.gimbal` and `s1.telemetry` keep DJI's signs. `s1.goto` negates its yaw on the wire and passes `y` as given; which way that turns is read from DJI's library, not measured ([`s1-commands.md`](../robot/s1-commands.md)). `robot.state` uses the duck's frames.
 
 **Lift rule.** A detector compares the controller's fused velocity with what the four wheel speeds imply. Past
 the trip level for 300 ms it zeroes the wheels and sets `safety.picked_up`; gimbal, sound and lights go on. **The levels
@@ -145,7 +145,7 @@ shared. A browser and a pad work on both bodies. A conformance battery runs the 
 | Piece | Change | Touches the Pollen's code? |
 |---|---|---|
 | `mediad`, source | a new source without `v4l2src`, fed by the S1's camera sequence | yes |
-| Format | convert NV12 to UYVY at the source, or parametrise; UYVY is fixed in `mediad`, in `robotctl/src/frame.rs` and in the contract's `valid_uyvy`. Decided by measuring the CPU | no if converting, yes if parametrising |
+| Format | convert NV12 to UYVY at the source, or parametrise; UYVY is assumed in `mediad`, in `robotctl` and in the contract's `valid_uyvy`, and also appears in `duck-detect` and the `uyvy` crate; the exact list is part of that work. Decided by measuring the CPU | no if converting, yes if parametrising |
 | `mediad`, permission | a way for `s1.*` through (`mediad/src/session.rs:218`) | yes, one place |
 | The page | show what this body has, no duck menu | yes |
 | `hello`, `system.info` | answered by `s1d`, through `mediad`'s `--updater-socket` and `--config-socket` (`mediad/src/main.rs:161-169`) | no |

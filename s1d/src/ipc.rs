@@ -338,8 +338,8 @@ pub fn dispatch_s1(
                 return accepted(id);
             }
             let cm = |m: f64| (m.clamp(-5.0, 5.0) * 100.0).round() as i16;
-            // DJI's library negates the yaw it is given (`update_position`: `-yaw_angle`), so a
-            // positive yaw here is counter-clockwise, as `robot.move`'s is.
+            // DJI's library negates the yaw it is given (`update_position`: `-yaw_angle`), and its
+            // wire yaw is positive anticlockwise, so positive here is clockwise. Not measured.
             let yaw_ddeg = (-p.yaw.clamp(-1800.0, 1800.0) * 10.0).round() as i16;
             let vel = (p.speed.clamp(0.1, 2.5) * 100.0).round() as u8;
             let omega = (p.yaw_speed.clamp(10.0, 540.0) * 10.0).round() as u16;

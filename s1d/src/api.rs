@@ -121,8 +121,8 @@ fn default_gimbal_speed() -> u16 {
     100
 }
 
-/// Move a distance and stop, the loop closed by the motion controller: `x`, `y` metres (±5,
-/// forward and left), `yaw` degrees (±1800, counter-clockwise), `speed` m/s (0.1..2.5),
+/// Move a distance and stop, the loop closed by the motion controller: `x`, `y` metres (±5; by
+/// DJI's library forward and right), `yaw` degrees (±1800; clockwise, likewise), `speed` m/s (0.1..2.5),
 /// `yaw_speed` °/s (10..540). `stop` abandons the move in flight.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

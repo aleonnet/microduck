@@ -601,7 +601,7 @@ offline** (powered off by the button at the end of the script): inconclusive, to
 
 **Stage 7, the camera: two reboots and the stock's own setup, decoded (2026-10-30, evening).**
 `v4l2-ctl --set-fmt-video=… --stream-mmap` on `/dev/video0` (stock camera process stopped) made the
-robot drop off the network at the same point twice (17:01 and 18:3x); after the second the robot
+robot drop off the network at the same point twice (17:01 and, by `camera/cmd.txt`, 17:5x); after the second the robot
 answered with an uptime of 55 s — a reboot, with no `/proc/last_kmsg` to read. **No more streaming
 by a generic tool.** The stock camera process was restarted under the chroot's `strace -v`
 (`camera/dji_camera_v4l2_decoded.strace`) and its setup is now known field by field: `QUERYCAP`

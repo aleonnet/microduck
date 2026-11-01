@@ -49,7 +49,7 @@ enum Command {
         #[arg(allow_hyphen_values = true)]
         values: Vec<f64>,
     },
-    /// Move x y (m) and yaw (°, counter-clockwise) and stop; `--stop` abandons the move.
+    /// Move x y (m) and yaw (°, DJI's signs by its library, not measured) and stop; `--stop` abandons it.
     Goto {
         #[arg(allow_hyphen_values = true, num_args = 0..=3)]
         xyyaw: Vec<f64>,

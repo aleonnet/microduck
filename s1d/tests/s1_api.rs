@@ -126,7 +126,7 @@ fn gimbal_calls_queue_the_librarys_frames() {
 }
 
 /// `s1.goto` in metres and degrees becomes the library's centimetres and tenths, with the yaw
-/// negated as the library negates it (counter-clockwise positive on our side).
+/// negated as the library negates it (which way that turns is not measured).
 #[test]
 fn goto_queues_the_position_task_and_its_stop() {
     let (s, i) = (State::new(100), Intents::new());

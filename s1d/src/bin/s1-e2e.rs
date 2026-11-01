@@ -1347,7 +1347,7 @@ mod fake {
         );
         item!(
             "F6 goto 1 -0.5 -90, then --stop",
-            "the chassis runs 1 m forward, 0.5 m right, turns 90° clockwise and stops on its own; --stop abandons it",
+            "the chassis runs about 1 m forward, 0.5 m sideways, turns about 90° and stops on its own, directions not measured; --stop abandons it",
             {
                 let (ok, out) = s1ctl(&d, &["goto", "1", "-0.5", "-90"]);
                 if !ok {
@@ -2443,7 +2443,7 @@ mod robot {
         );
         item!(
             "F6 goto 1 -0.5 -90, then --stop",
-            "ON THE FLOOR (1.5 m free ahead and right): the chassis runs 1 m forward, 0.5 m right and turns 90° clockwise on its own; --stop after 8 s",
+            "ON THE FLOOR (1.5 m free all round): the chassis runs about 1 m forward, 0.5 m sideways and turns about 90° on its own, directions not measured; --stop after 8 s",
             {
                 let before = call(&mut client, "s1.telemetry", json!({}))?;
                 let p0 = before["position_m"].clone();

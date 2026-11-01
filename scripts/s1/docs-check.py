@@ -85,6 +85,7 @@ PROSE = [
     r'echo "stage 11 stops [^"]*" \| tee "\$D/blocked\.txt"',
     r'"ON THE FLOOR[^"]*",',
     r'"the gimbal folds down[^"]*",',
+    r'"the chassis runs [^"]*",',
     r'needs \(`docs/[\w./-]+`, item 1 of 2026-10-30 \(night\)\):',
     r'"(the floor\'s worst case must not trip|a disagreement of 0\.13 m/s must not trip the detector)"',
     r'"(the floor\'s worst case is not a lift|a disagreement of 0\.13 m/s is not a lift)"',
@@ -311,12 +312,11 @@ def comments_only(base, fails):
         return
     current = None
     for raw in diff.stdout.split("\n"):
-        if raw.startswith("+++ "):
-            current = raw[6:] if raw.startswith("+++ b/") else None
+        # A new file has `--- /dev/null`, a deleted one `+++ /dev/null`: the other line names it.
+        if raw.startswith(("--- a/", "+++ b/")):
+            current = raw[6:]
             continue
-        if raw.startswith("--- "):
-            if current is None and raw.startswith("--- a/"):
-                current = raw[6:]
+        if raw in ("--- /dev/null", "+++ /dev/null"):
             continue
         if not raw or raw[0] not in "+-":
             continue

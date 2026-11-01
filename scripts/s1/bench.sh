@@ -5,7 +5,7 @@
 # stopped, prove execution before anything is pushed, free the UART before driving.
 #
 # Nothing here touches /system or flashes anything; `restore` is a reboot. Robot wheels must be off
-# the ground for `drive`. `verify-record` is the only stage that runs without a robot: it checks
+# the ground for `drive`. `verify-record` and `e2e` run without a robot; the first checks
 # that every artefact a record cites exists with the sha256 it claims.
 #
 # Usage: scripts/s1/bench.sh <stage> [args]      stages: help | capture | backup | exec | stop | drive |
@@ -100,8 +100,8 @@ cmdlog() { echo "\$ $*" >> "$OUT/$stage/cmd.txt"; }
 sh_robot() { cmdlog "adb shell $*"; $A shell "$@"; }
 # The chroot's device, proc, sys and system trees. Stage 3 makes them; a reboot drops them, and a
 # daemon started without `/dev/urandom` dies at once ("failed to generate random data", measured
-# 2026-10-30 after stage 10). So every stage that enters the chroot re-makes them, guarded, before
-# anything else — the same line, one place.
+# 2026-10-30 after stage 10). So the stages that start or run things there re-make them, guarded,
+# first — the same line, one place (`capture`, `events`, `items` and `floor` do not).
 CHROOT_MOUNTS="$BB grep -q ' $CHROOT/dev ' /proc/mounts || mount -o bind /dev $CHROOT/dev; $BB grep -q ' $CHROOT/proc ' /proc/mounts || mount -t proc proc $CHROOT/proc; $BB grep -q ' $CHROOT/sys ' /proc/mounts || mount -t sysfs sys $CHROOT/sys; mkdir -p $CHROOT/mnt/system; $BB grep -q ' $CHROOT/mnt/system ' /proc/mounts || mount -o bind,ro /system $CHROOT/mnt/system"
 need_chroot() { need_robot; sh_robot "$CHROOT_MOUNTS"; }
 need_robot() { $A get-state >/dev/null 2>&1 || { echo "no adb at $HOST; enable root adb from the app's Lab first (pierluigizagaria/robomaster-s1-hacks)" >&2; exit 1; }; }
@@ -115,8 +115,8 @@ e2e_robot() { local log="$1"; shift
 # s1d and netpadd up in the chroot (stages 5 and telemetry-free). `setsid` + `nohup` + stdin from
 # /dev/null: measured on 2026-10-30, `nohup … &` alone left an empty log — the daemon died with the
 # adb shell that started it. `setsid` alone still lost the race with the pty closing (netpadd, same
-# day); the `sleep 1` inside the shell is what settles it. `--volume-control` only once stage 8's
-# `amixer contents` has named the speaker's control: until then `s1.volume` is refused by name and
+# day); the `sleep 1` inside the shell is what settles it. `--volume-control` is passed unless
+# `S1_VOLUME_CONTROL` is set empty: then `s1.volume` is refused by name and
 # the e2e item says so.
 # The control's name is quoted for the robot's shell: a name with a space ("Speaker Volume", the
 # `contents` name stage 8 dumps) unquoted reached s1d as a second argument — the daemon refused it
@@ -172,7 +172,7 @@ case "$stage" in
     # SIGKILLed `dji_sys` (the power daemon; init brought it back) and no `0x48` request reached
     # the UART in the window. Not done again until `dji_scratch.py` and the service group are read.
     sh_robot "top -n 1 -m 15" > "$D/top_before.txt" 2>&1 || true
-    # Bounded: `strace -p` only ends with the traced process, so each gets a 70 s timeout and `wait`
+    # Bounded: `strace -p` only ends with the traced process, so each gets a 150 s timeout and `wait`
     # returns; the top samples cover the same window.
     sh_robot "$BB timeout -t 150 strace -f -tt -e trace=ioctl,write,read,open,openat -s 256 -o /data/hdvt.strace -p \$($BB pidof dji_hdvt_uav) & $BB timeout -t 150 strace -f -tt -e trace=ioctl,write,read,open,openat -s 256 -o /data/sys.strace -p \$($BB pidof dji_sys) & $BB timeout -t 150 strace -f -tt -e trace=ioctl,write,read,open,openat -s 256 -o /data/camera.strace -p \$($BB pidof dji_camera) & for i in 1 2 3 4 5 6 7 8; do top -n 1 -m 10 >> /data/top_vision.txt; $BB sleep 10; done; wait" || true
     $A pull /data/hdvt.strace "$D/hdvt_uav.strace" >/dev/null; $A pull /data/camera.strace "$D/dji_camera.strace" >/dev/null; $A pull /data/sys.strace "$D/dji_sys.strace" >/dev/null 2>&1 || true; $A pull /data/top_vision.txt "$D/top_vision.txt" >/dev/null
