@@ -67,6 +67,10 @@ check() {
     [ "$(cat "$LOG")" = "sim down $defaults" ] ||
         { echo "ARGUMENTO: $(tr '\n' ' ' < "$LOG")"; return 1; }
 
+    run CURL_FAILS=0 sh "$duck" window || { echo "FALHOU COM WINDOW"; return 1; }
+    [ "$(tr '\n' ' ' < "$LOG")" = "sim up cameras=a viewer=1 rl=$RL curl page http://127.0.0.1:8080 " ] ||
+        { echo "JANELA: $(tr '\n' ' ' < "$LOG")"; return 1; }
+
     if run CURL_FAILS=999 sh "$duck"; then
         echo "SEM CONSOLE: saiu com sucesso"
         return 1
@@ -105,6 +109,8 @@ plantar "com janela" '${DUCK_SIM_VIEWER:-0}' '${DUCK_SIM_VIEWER:-1}' "INICIO:"
 plantar "ignora o valor definido" 'DUCK_SIM_VIEWER="${DUCK_SIM_VIEWER:-0}"' 'DUCK_SIM_VIEWER=0' "VALOR DEFINIDO:"
 plantar "argumento abre a pagina" '|| exec "$REPO/scripts/duck-sim" "$@"' '|| "$REPO/scripts/duck-sim" "$@"' "ARGUMENTO:"
 plantar "desiste em silencio" 'at $PAGE" >&2; exit 1; }' 'at $PAGE" >&2; exit 0; }' "SEM CONSOLE:"
+plantar "window sem janela" 'DUCK_SIM_VIEWER=1' 'DUCK_SIM_VIEWER=0' "JANELA:"
+plantar "window vai para a receita" '    shift' '    :' "JANELA:"
 
 if [ "$falhou" = 0 ]; then
     echo "DEFEITO DETECTADO"

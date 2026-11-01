@@ -2,6 +2,7 @@
 # The duck and its console, with the page open, in one command.
 #
 #   scripts/duck            # starts everything and opens the console in the browser
+#   scripts/duck window     # the same, with the MuJoCo window
 #   scripts/duck down       # stops everything
 #   scripts/duck status     # anything else goes to scripts/duck-sim as it is
 #
@@ -21,6 +22,10 @@ fi
 DUCK_SIM_CAMERAS="${DUCK_SIM_CAMERAS:-a}"
 # No window: closing it stops the physics, and the console is left with no duck behind it.
 DUCK_SIM_VIEWER="${DUCK_SIM_VIEWER:-0}"
+if [ "${1:-}" = window ]; then
+    DUCK_SIM_VIEWER=1
+    shift
+fi
 export DUCK_SIM_CAMERAS DUCK_SIM_VIEWER
 
 [ $# -eq 0 ] || exec "$REPO/scripts/duck-sim" "$@"
