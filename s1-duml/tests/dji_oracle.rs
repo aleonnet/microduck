@@ -3,7 +3,7 @@
 //! The robot carries the Scratch/Python runtime (`/system/firm/dji_scratch/src/robomaster/`,
 //! pulled 2026-10-30). Its `rm_module.py` builds every command the body accepts and
 //! `duss_event_msg.py` packs it; both run unchanged on the Mac. Each hex below is that packer's
-//! output for the arguments in the test's name (`out/2026-10-30-poc2/stock/oracle.py` in the lab),
+//! output for the arguments in the test's name (`scripts/s1/dji-oracle.py`, over the lab's copy),
 //! sender `scratch_script_id` (`0xC9`), seq 0. Our builders must reproduce them byte for byte:
 //! same receiver, same ack request, same payload.
 

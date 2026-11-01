@@ -8,7 +8,7 @@
 //!
 //! The wire is the same JSON-RPC/NDJSON; params are `deny_unknown_fields` so a member from a later
 //! release is refused by name (`tests/s1_api.rs` holds every call to that), and every call maps to
-//! the bytes DJI's own library would send (`s1_duml::cmd`, oracle-tested).
+//! a builder of `s1_duml::cmd`; `docs/s1/robot/s1-commands.md` says where that differs from DJI's.
 
 use duck_ipc_proto::{Error, code};
 use serde::{Deserialize, Serialize};
@@ -160,9 +160,9 @@ pub enum LightEffect {
     Marquee = 4,
 }
 
-/// Which lights: the six groups of the body by bit (`0x01` bottom back, `0x02` bottom front,
-/// `0x04` bottom left, `0x08` bottom right, `0x10` top left, `0x20` top right, `0x3f` all), or the
-/// blaster's own LED (`blaster: true`, which ignores `groups`).
+/// Which lights: six bits of DJI's library (`0x01` bottom back, `0x02` bottom front, `0x04` bottom
+/// left, `0x08` bottom right, `0x10` top left, `0x20` top right, `0x3f` all; we only ever drove
+/// `0x3f`, the map is not measured), or the blaster's own LED (`blaster: true`).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LightsParams {

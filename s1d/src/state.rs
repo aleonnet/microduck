@@ -75,8 +75,8 @@ pub struct Telemetry {
     /// Pushes nobody here decodes: the stock's 1 Hz subject, a truncation.
     pub foreign_pushes: u64,
     /// The last acknowledgement a module sent to one of our one-shots: `(cmd_set, cmd_id, retcode)`,
-    /// the retcode being the first data byte DJI's `unpack_resp` reads. Until 2026-10-31 these were
-    /// traced and lost; the gimbal's answer to `sleep` is what settles whether it refused.
+    /// the retcode being the first data byte DJI's `unpack_resp` reads. Kept so a one-shot's answer
+    /// can be read; whether the gimbal takes `sleep` has no valid measurement yet.
     pub last_ack: Option<(u8, u8, Option<u8>)>,
     pub acks: u64,
 }
@@ -96,7 +96,7 @@ pub struct State {
     /// The wheels-stop rule's verdict (`tick::LiftDetector`): lifted, so the wheels are held at
     /// zero and `robot.state.safety.picked_up` says so beside DJI's own bit.
     pub lifted: AtomicBool,
-    /// The last wheel command actually written, rpm fr/fl/bl/br, for `robot.state`.
+    /// The last twist the loop applied, `[vx, vy, vyaw]`, for `robot.state`.
     pub applied_twist: ArcSwap<[f64; 3]>,
     pub gimbal_ddeg: ArcSwap<(i16, i16)>,
     pub telemetry: ArcSwap<Telemetry>,
@@ -356,7 +356,7 @@ impl State {
                 limp: !armed,
                 gravity,
                 gain: None,
-                // DJI's own bit (never seen set, 2026-10-30/31) or the wheels-stop rule's verdict.
+                // DJI's own bit (never seen set, 2026-10-30) or the wheels-stop rule's verdict.
                 picked_up: t.sa_status.map(|s| s.is_pick_up).unwrap_or(false)
                     || self.lifted.load(Ordering::Relaxed),
             },

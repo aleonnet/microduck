@@ -196,9 +196,9 @@ pub async fn handle(
                 continue;
             }
         };
-        // `s1.*`: this body's own maintenance routes, outside the duck contract — the bench's
-        // way to put any frame on the wire and to choose who leads whom. Never reached over a
-        // remote transport (robotd-design.md §3.5); phase 2 maps what survives into the contract.
+        // `s1.*`: this body's own list, outside the duck contract. No remote transport reaches it
+        // today (`mediad` refuses what `as_call` cannot parse), and every method is equal here:
+        // no per-method permission. How it reaches the browser is an open decision of the owner.
         if let Some(parsed) = S1Call::parse(&request.method, request.params.as_ref()) {
             let Some(id) = request.id.clone() else {
                 continue;
@@ -240,8 +240,8 @@ pub async fn handle(
     }
 }
 
-/// The S1's own list, answered. Every call that moves something becomes the frame DJI's own
-/// library would send (`s1_duml::cmd`, oracle-tested), queued for the loop; the rest reads state.
+/// The S1's own list, answered. Every call that moves something becomes a frame from
+/// `s1_duml::cmd` queued for the loop (where it differs from DJI's library, `s1-commands.md`).
 pub fn dispatch_s1(
     state: &State,
     intents: &Intents,
@@ -316,8 +316,8 @@ pub fn dispatch_s1(
                     clamp_speed(yaw_speed),
                     clamp_speed(pitch_speed),
                 )),
-                // A rate, re-sent by the loop every tick while fresh (one frame moved the gimbal
-                // about a degree on the robot, 2026-10-31); `stop` is the zero rate, sent once.
+                // A rate, re-sent by the loop every tick while fresh; `stop` is the zero rate,
+                // sent once.
                 api::GimbalAction::Speed { yaw, pitch } => {
                     intents.set_gimbal_rate([yaw.clamp(-540.0, 540.0), pitch.clamp(-540.0, 540.0)]);
                 }
@@ -664,8 +664,8 @@ pub fn dispatch(
         ),
         // The gaze form of `robot.head`: the point becomes the two gimbal angles and feeds the
         // same slot, and the answer is the contract's `LookResult` — the shape `robotctl robot
-        // look` decodes (an `IntentResult` here failed it with "missing field `head`" on the
-        // robot, 2026-10-31).
+        // look` decodes (an `IntentResult` here fails it with "missing field `head`", which the
+        // test in `tests/dispatch.rs` holds). No valid proof on the robot.
         proto::Call::RobotLook(p) => {
             let (head, clamped) = crate::tick::gaze_head(p);
             intents.set_head([

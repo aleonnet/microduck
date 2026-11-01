@@ -1,5 +1,5 @@
 //! The RoboMaster S1 as a microduck robot: `robot.*` in, DUML out. See `Cargo.toml` for why this
-//! is not a port of `robotd`, and `docs/project/s1-bringup.md` for what the bench has and has not
+//! is not a port of `robotd`, and `docs/s1/project/s1-bringup.md` for what the bench has and has not
 //! yet confirmed about each byte.
 //!
 //! A library and a thin binary, so the integration tests can drive the control loop against a body

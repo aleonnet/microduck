@@ -4,7 +4,7 @@
 # reason `duck-control` holds no daemon concerns (robotd-design.md §1.3).
 #
 # Provenance of every byte is a test against a frame captured on the robot or a layout quoted from
-# DJI's own SDK (`protocol.py`, Apache-2.0); nothing here is inferred from behaviour alone.
+# DJI's own SDK (`protocol.py`, Apache-2.0); what is still inferred, each module's docs say.
 [package]
 name = "s1-duml"
 version.workspace = true

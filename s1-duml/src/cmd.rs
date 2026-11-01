@@ -5,8 +5,8 @@
 //!   [`gimbal_angles`] and [`heartbeat_proroklab`] — byte for byte the lab's `s1_duml.py`, which came
 //!   from proroklab's `chassis.cpp`/`gimbal.cpp`. `tests/fixtures/poc_*.bin` are those exact bytes.
 //! - **Seen on the wire** from the stock firmware: [`heartbeat_stock`] (`tests/fixtures/heartbeat_real.bin`).
-//! - **Quoted from DJI's SDK** (`protocol.py`) and not yet sent to this robot: [`chassis_speed`]
-//!   and [`system_led`]. The bench confirms them; until then their docs say so.
+//! - **Never sent to this robot:** [`chassis_speed`], quoted from DJI's SDK (`protocol.py`), only
+//!   under `--twist speed`. [`system_led`] is the stock app's captured frame and lit the LEDs.
 //!
 //! Every builder takes the sequence number rather than keeping one, because the robot keeps a
 //! sequence *per command* — the lab generator counted per `(cmd_set, cmd_id)` and the captured
@@ -222,7 +222,7 @@ pub fn gimbal_angles_axes(seq: u16, yaw_ddeg: i16, pitch_ddeg: i16, axes: u8) ->
 }
 
 /// One LED effect, in the thirteen bytes the stock app writes (captured on the robot's UART,
-/// 2026-10-30, stage 1 of `docs/project/s1-bringup.md`; `tests/fixtures/led_stock_*_real.bin`):
+/// 2026-10-30, stage 1 of `docs/s1/project/s1-bringup.md`; `tests/fixtures/led_stock_*_real.bin`):
 ///
 /// ```text
 /// effect  led_mask(u16 LE)  r g b     repeat  t1(u16 LE)  t2(u16 LE)  comp_mask(u16 LE)
@@ -552,10 +552,6 @@ pub fn gun_led(
     .with_ack(Ack::WhenDone)
 }
 
-/// `0x3f/0x07`: the armour's hit detector thresholds, scaled by `k` as `Armor.set_hit_sensitivity`
-/// scales them (`k = 1.0` is the library's default; the peak thresholds are `160 k`, `180 k`,
-/// `200 k`). The library addresses it to the stock controller (`0x09`), which the bench has yet to
-/// see forward it — hence `receiver` is the caller's.
 /// The launcher's muzzle flash, as the stock controller sends it once per shot: `0x3f/0x55` with
 /// control 7, effect 3 (flash), green, once, 40 ms on, 0 off. Captured on the UART with the stock
 /// alive and the app firing (`capture/hdvt_fire.strace`, 2026-10-30 15:45:56.117, 30 of them);
@@ -566,6 +562,10 @@ pub fn gun_fire_flash(seq: u16) -> Frame {
     gun_led(seq, 7, 3, 0, 255, 0, 1, 40, 0)
 }
 
+/// `0x3f/0x07`: the armour's hit detector thresholds, scaled by `k` as `Armor.set_hit_sensitivity`
+/// scales them (`k = 1.0` is the library's default; the peak thresholds are `160 k`, `180 k`,
+/// `200 k`). The library addresses it to the stock controller (`0x09`), stopped under `s1d`, and
+/// `s1.armor` sends it to `0x18`, without any observed effect — hence `receiver` is the caller's.
 pub fn armor_sensitivity(seq: u16, receiver: u8, k: f32) -> Frame {
     let scaled = |v: f32| ((v * k) as u16).to_le_bytes();
     let mut data = vec![0x3f];

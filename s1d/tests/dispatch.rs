@@ -122,7 +122,7 @@ fn flashlight_toggle_inverts_what_on_and_off_left() {
 /// `robotctl robot look` decodes — and aims the gimbal: a point ahead-left and slightly below the
 /// trunk is a positive `head_yaw` (left) and a positive `head_pitch` (down), handed to the same
 /// slot `robot.head` feeds. Before the fix the route refused with an `IntentResult`, and `robotctl`
-/// failed with "missing field `head`" on the robot (2026-10-31).
+/// failed with "missing field `head`".
 #[test]
 fn look_answers_a_look_result_and_aims_the_gimbal() {
     let (s, i) = (State::new(100), Intents::new());

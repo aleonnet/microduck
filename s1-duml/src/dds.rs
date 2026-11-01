@@ -5,9 +5,9 @@
 //! `tests/fixtures/dds_push_176_real.bin`. The subscription request (`0x48/0x03`), its subject UIDs
 //! and each subject's layout are quoted from DJI's SDK (`protocol.py` `ProtoAddSubMsg`, `dds.py`
 //! `SUB_UID_MAP`, the `*Subject.decode` formats in `chassis.py` and `battery.py`); proroklab sends
-//! the same request over CAN (`dds.cpp`). **What the bench still has to show:** that the motion
-//! controller honours a subscription arriving on the UART, and the order the subjects come back in
-//! — which is the order they were asked for, by both sources.
+//! the same request over CAN (`dds.cpp`). **What the robot showed (2026-10-30):** the motion
+//! controller refuses our subscription on the UART, cause undetermined; the telemetry `s1d` reads
+//! is the stock's own boot-time subscription, decoded by [`StockPush`].
 
 use crate::cmd::{host, id};
 use crate::frame::{Ack, Frame};
@@ -175,8 +175,8 @@ impl Battery {
     /// (user manual, "Intelligent Battery": 2400 mAh, 10.8 V; "cell voltage is at 4.2 V" when
     /// charged), so 9.0 to 13.0 V with margin, and a percentage. Captures with the stock alive
     /// read 11.75 to 11.94 V; the boot of 2026-10-30 22:00, with the stock controller process
-    /// relaunched by hand, read 49 mV at 0 % in the same ten bytes — a block that is not the
-    /// battery on that boot (its subjects are open: `s1-bringup.md`, item 1 delivery 4).
+    /// relaunched by hand, read 49 mV at 0 % in the same ten bytes — the two subjects come in
+    /// the other order on such a boot ([`BlockOrder`]; `s1-bringup.md`, "Item 1 closed").
     pub const PLAUSIBLE_MV: std::ops::RangeInclusive<u16> = 9_000..=13_000;
 
     /// Whether these ten bytes read as the S1's pack at all — see [`Self::PLAUSIBLE_MV`].

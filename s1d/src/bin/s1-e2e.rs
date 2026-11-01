@@ -20,7 +20,7 @@
 //!   on a terminal: Enter or `y` passes, anything else fails and is recorded).
 //!
 //! Exit status is the verdict: 0 when every item passed, 1 otherwise. The table it prints is what
-//! the record `docs/project/s1-bringup.md` quotes.
+//! the record `docs/s1/project/s1-bringup.md` quotes.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpStream, UdpSocket};
@@ -1566,8 +1566,8 @@ mod fake {
                 if !ok {
                     return Err(out);
                 }
-                // The launcher's cadence: the third shot 660 ms after the first, its flash out
-                // 150 ms later (`tick::SHOT_PERIOD`, `tick::MUZZLE_FLASH`).
+                // The launcher's cadence: the third shot 660 ms after the first
+                // (`tick::SHOT_PERIOD`), its flash in that same tick.
                 std::thread::sleep(Duration::from_millis(900));
                 let shots = tools_since(&d, from).matches("shoot.wav").count();
                 if shots != 3 {
@@ -1586,7 +1586,7 @@ mod fake {
             },
             |f: &[Frame]| {
                 // Everything addressed to the launcher, in order: the fire command (three
-                // infrared), then green on and off once per shot, each flash out before the next.
+                // infrared), then one green flash per shot, which ends by itself (40 ms).
                 let launcher: Vec<String> = f
                     .iter()
                     .filter(|x| x.receiver == host::GUN)
@@ -2280,7 +2280,7 @@ mod robot {
         );
         item!(
             "F1 follow gimbal_lead",
-            "ON THE FLOOR: chassis follows the gimbal — the head is sent 45° left and the body turns left about 45° and STOPS (2026-10-31 it turned without end); then the head back to zero",
+            "ON THE FLOOR: chassis follows the gimbal — the head is sent 45° left and the body turns left about 45° and STOPS; then the head back to zero",
             {
                 s1ctl(&["follow", "gimbal_lead"])?;
                 let yaw_of = |t: &Value| t["attitude_deg"][0].as_f64().unwrap_or(0.0);
@@ -2401,7 +2401,7 @@ mod robot {
                 let held = call(&mut client, "s1.telemetry", json!({}))?;
                 let drift = held["gimbal_yaw_vs_chassis_deg"].as_f64().unwrap_or(0.0)
                     - after["gimbal_yaw_vs_chassis_deg"].as_f64().unwrap_or(0.0);
-                // 2026-10-31, one frame: ~1°. A streamed rate must give tens of degrees.
+                // A streamed rate must give tens of degrees; this bar has no valid robot run.
                 if dy < 15.0 || dp > -7.0 || drift.abs() > 3.0 {
                     return Err(format!(
                         "yaw moved {dy:.1}° (want ≥ 15), pitch {dp:.1}° (want ≤ −7), drift after stop {drift:.1}°"
@@ -2416,7 +2416,7 @@ mod robot {
         );
         item!(
             "F5 gimbal sleep, wake",
-            "the gimbal folds down for 3 s, then levels — the gimbal's acknowledgement (retcode) and its pitch say so (2026-10-31: accepted, nothing moved, ack lost)",
+            "the gimbal folds down for 3 s, then levels — the gimbal's acknowledgement (retcode) and its pitch say so",
             {
                 let before = call(&mut client, "s1.telemetry", json!({}))?;
                 let p0 = before["gimbal_deg"][1].as_f64().unwrap_or(0.0);
@@ -2443,7 +2443,7 @@ mod robot {
         );
         item!(
             "F6 goto 1 -0.5 -90, then --stop",
-            "ON THE FLOOR (1.5 m free ahead and right): the chassis runs 1 m forward, 0.5 m right and turns 90° clockwise on its own (2026-10-31: accepted, never moved); --stop after 8 s",
+            "ON THE FLOOR (1.5 m free ahead and right): the chassis runs 1 m forward, 0.5 m right and turns 90° clockwise on its own; --stop after 8 s",
             {
                 let before = call(&mut client, "s1.telemetry", json!({}))?;
                 let p0 = before["position_m"].clone();

@@ -6,7 +6,7 @@
 resolver = "3"
 members = ["btd", "configd", "duck-ble", "duck-control", "duck-detect", "duck-ether", "duck-ipc-proto", "duckctl", "kinematics", "mediad", "netpadd", "nfc", "odometry", "pad-imu", "pad-map", "padd", "pet-detect", "sounds", "tof", "updater", "robotctl", "robotd", "robotd-params", "s1-duml", "s1d", "test-support", "uyvy", "xtask"]
 
-# Everything except `duckctl`, and that exception is the whole reason this key exists.
+# Everything except `duckctl` (the reason this key exists), and the S1's `s1d` and `s1-duml`.
 #
 # `cargo board --bins` — in `dev-push.sh` and in the release workflow — builds every default
 # member for aarch64, which is right for a robot's daemons and wrong for the client a developer

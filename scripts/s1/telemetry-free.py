@@ -4,7 +4,7 @@
 With the stock stopped and `s1d` armed (chassis work mode 1, gimbal work mode 0), the head is swept
 left and right by `robot.head` while `s1.telemetry` is sampled; then the head is held at zero for a
 window in which the owner tilts the robot by hand. The samples decide three things the record
-needs (`docs/project/s1-bringup.md`, item 1 of 2026-10-30 (night)):
+needs (`docs/s1/project/s1-bringup.md`, item 1 of 2026-10-30 (night)):
 
   body_still     the chassis did not follow the gimbal: the attitude yaw stayed put and the wheels
                  reported no speed while the head moved (wheels off the ground: a follow attempt

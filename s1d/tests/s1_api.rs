@@ -93,8 +93,8 @@ fn gimbal_calls_queue_the_librarys_frames() {
         vec!["551604fcc9040000403fb2070805640000006400bfa0"]
     );
 
-    // A rate is a continuous intent the loop streams (one frame moved the gimbal about a degree on
-    // the robot, 2026-10-31), so the call queues nothing and sets the slot; `stop` is the zero rate.
+    // A rate is a continuous intent the loop streams, so the call queues nothing and sets the
+    // slot; `stop` is the zero rate.
     run(
         &s,
         &i,

@@ -12,7 +12,7 @@
 # robot's architecture, so the packages are exactly what `apt` would install on the robot.
 #
 # What goes in, and why each: alsa-utils (arecord/aplay — what robotd's voice and pet-detect use),
-# v4l-utils and gstreamer (v4l2src is mediad's capture element; v4l2-ctl is the first probe),
+# v4l-utils and gstreamer (v4l2-ctl lists formats; v4l2src is forbidden here: it rebooted the robot),
 # strace (the tool every bring-up answer came from), procps (top for the CPU figures).
 #
 # Usage: scripts/s1/build-rootfs.sh [out-dir]   → <out-dir>/rootfs-bookworm-armhf.tar + .sha256 + .packages

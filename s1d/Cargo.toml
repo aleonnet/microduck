@@ -1,6 +1,6 @@
 # `s1d` — the RoboMaster S1's body service: the `robot.*` half of the microduck contract that a
-# mecanum chassis and a two-axis gimbal can honour, served on `/run/robotd.sock` exactly where
-# `robotd` would be, so `netpadd`, `robotctl` and `mediad` drive it unchanged.
+# mecanum chassis and a two-axis gimbal can honour, served on `/run/robotd.sock` where `robotd`
+# would be. `netpadd` and `robotctl` ran against it; `mediad` never has (`docs/s1/robot/s1-commands.md`).
 #
 # Below the contract it speaks DUML (`s1-duml`) on `/dev/ttyS3`. It is deliberately not a port of
 # `robotd`: that daemon is fifteen servos and a policy; this one is a twist, two angles, twenty LEDs

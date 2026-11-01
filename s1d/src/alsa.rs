@@ -2,10 +2,10 @@
 //!
 //! The microphone path (MIC2 with its boost, the ADC gains) and the speaker route are mixer
 //! controls the stock's `dji_camera` sets at boot and that persist in the codec until power-off.
-//! Measured 2026-10-31: with the stock stopped since boot they were still there; after a cold
-//! start without the stock they are whatever the kernel's defaults are, and the voice did not
-//! reach the recording. `alsactl store` saved the stock's 57 controls on the robot
-//! (`deploy/s1/asound.state.stock`); this restores them at start with `alsactl restore`, the
+//! With the stock stopped after boot they were still there (2026-10-31). A boot where the stock
+//! never ran has not been tried, so what the mixer holds then, and whether this restore is enough,
+//! is not known. `alsactl store` saved the stock's 57 controls on the robot, during the discarded
+//! floor session (`deploy/s1/asound.state.stock`); this restores them with `alsactl restore`, the
 //! mechanism the state was saved with — never a register written by hand (owner's rule).
 
 use std::path::{Path, PathBuf};

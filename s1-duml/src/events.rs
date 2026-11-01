@@ -1,9 +1,9 @@
 //! Events the body pushes without being asked: a hit on an armour plate, an infrared hit.
 //!
 //! Layouts from DJI's `protocol.py` (`ProtoArmorHitEvent`, `ProtoIrHitEvent`). The SDK's own
-//! `armor.py` unpacks the same bytes differently, so **which plate is which is a bench question**:
-//! the `sub_hit_event` docstring numbers them 1 chassis back, 2 front, 3 left, 4 right, 5 gimbal
-//! left, 6 gimbal right, and tapping each one under `s1d`'s log settles it.
+//! `armor.py` unpacks the same bytes differently, so **which plate is which is not measured**: the
+//! `sub_hit_event` docstring numbers them 1 chassis back, 2 front, 3 left, 4 right, 5 gimbal left,
+//! 6 gimbal right; on 2026-10-30 hits read plates 1 to 4, unmapped, and 5 and 6 were never seen.
 
 use crate::cmd::id;
 use crate::frame::Frame;

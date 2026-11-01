@@ -6,8 +6,8 @@
 //! ```
 //!
 //! **The heartbeat is the chassis's permission to move.** Without it streamed continuously the
-//! wheels ignore every command (bench, 2026-10-29). The stock firmware sends it at ~100 Hz; so does
-//! this. Stopping it is how the chassis is disarmed, which is also what happens if this loop dies.
+//! wheels ignore every command (bench, 2026-10-29). The stock firmware sends it at 91.5 Hz; this,
+//! at the loop's rate. Stopping it is how the chassis is disarmed, which is also what happens if this loop dies.
 //!
 //! **The deadman is on the twist, not the head.** A stale velocity drives the robot into a wall; a
 //! stale gimbal angle holds a pose. `duck_control::safety::Config::deadman` is 500 ms and this
@@ -86,7 +86,7 @@ pub const WHEEL_RPM_MAX: f64 = 1000.0;
 pub const YAW_DDEG_MAX: i16 = 2500;
 pub const PITCH_DDEG_MIN: i16 = -200;
 pub const PITCH_DDEG_MAX: i16 = 350;
-/// Our subscription's id in the motion controller, and how often it is re-asked until it answers.
+/// Our own subscription, which the controller refuses, re-asked only while nothing flows.
 /// Our subscription's msg id. **Not 1**: that is the stock firmware's, and its pushes outlive
 /// `dji_hdvt_uav` — measured 2026-10-30, the controller kept pushing msg id 1 after the stock was
 /// stopped, and `s1d` decoded its subjects with our layout (gyro in the 10³² range). Any other
@@ -245,14 +245,14 @@ pub fn head_from_gimbal(yaw_ddeg: i16, pitch_ddeg: i16) -> [f64; 4] {
     ]
 }
 
-/// The wheels-stop rule's thresholds, from the floor captures of 2026-10-31
-/// (`out/2026-10-31-poc2/floor/lift*_telemetry.ndjson`, record "Floor session, part 2"): on the
-/// floor at 0.15 and 0.3 m/s the controller's fused body velocity and the velocity the four wheel
-/// speeds imply agree within 0.13 m/s; lifted — on a stand with the wheels stopped (2026-10-30),
-/// in a hand with the wheels turning, in a hand with the wheels stopped — the fused velocity runs
-/// away and the disagreement passes 0.4 m/s within 1.5 s. The DJI `pick_up` bit never set in any
-/// of those (owner's rule, 2026-10-31 00:1x: never that bit, never the fused velocity as truth of
-/// motion; its *disagreement* with the wheels as the lift signal, owner's word 2026-10-31 14:5x).
+/// The wheels-stop rule's thresholds. **They have no valid origin:** the two levels come from the
+/// floor session of 2026-10-31, which the owner discarded (`out/2026-10-31-poc2/floor/`), and the
+/// release level and both times are design choices, not measurements. The tests prove the
+/// mechanism, not these numbers; measure again before relying on them. What does stand: lifted,
+/// the wheels stop (owner's rule, 2026-10-30); DJI's `pick_up` bit never set in the captures of
+/// 2026-10-30, and the fused velocity climbed with the wheels stopped while the robot was carried
+/// (`telemetry-free/pickup_wheels.ndjson`), which is why the signal is its disagreement with the
+/// velocity the four wheel speeds imply. `docs/s1/robot/s1-commands.md` lists this as a defect.
 pub const LIFT_TRIP_M_S: f64 = 0.4;
 pub const LIFT_TRIP_FOR: Duration = Duration::from_millis(300);
 pub const LIFT_RELEASE_M_S: f64 = 0.15;
@@ -260,8 +260,8 @@ pub const LIFT_RELEASE_FOR: Duration = Duration::from_millis(500);
 
 /// The body speed the four ESC speeds imply, metres per second — the forward mecanum kinematics,
 /// the inverse of [`mecanum_rpm`] with the wire's sign convention (the left wheels read negative
-/// when the robot drives forward: `[27, −26, −33, 31]` rpm at 0.15 m/s on the floor, 2026-10-31,
-/// which this gives as 0.153 m/s). Order as the ESC subject and the wire have it: front-right,
+/// when the robot drives forward: `[27, −26, −33, 31]` rpm, a sample of the discarded floor session,
+/// reads as 0.153 m/s). Order as the ESC subject and the wire have it: front-right,
 /// front-left, back-left, back-right.
 pub fn wheel_speed_m_s(esc_rpm: [i16; 4], radius_m: f64) -> f64 {
     let [fr, fl_w, bl_w, br] = esc_rpm.map(f64::from);
@@ -503,7 +503,7 @@ pub fn run(body: &mut dyn S1Body, state: Arc<State>, intents: Arc<Intents>, cfg:
                 _ => None,
             };
             // A position task of the controller (`s1.goto`) owns the wheels: no wheel or follow
-            // frame while it runs, or the task is overwritten every tick (floor, 2026-10-31).
+            // frame while it runs, or the task would be overwritten every tick (read here, no valid proof).
             let twist = if snap.position_task && !lifted {
                 [0.0; 3]
             } else {
@@ -551,8 +551,8 @@ pub fn run(body: &mut dyn S1Body, state: Arc<State>, intents: Arc<Intents>, cfg:
 
             // The gimbal: a rate while one is fresh, else the angle target.
             //
-            // The rate (`s1.gimbal speed`) goes out every tick while fresher than the deadman —
-            // one frame moved the gimbal about a degree on the robot (2026-10-31) — and the
+            // The rate (`s1.gimbal speed`) goes out every tick while fresher than the deadman — the
+            // one measurement of a single frame is from the discarded floor session — and the
             // angle hold is silent meanwhile, or it would pull the gimbal back every 100 ms.
             // When the rate ends (`stop`, or the deadman) one zero-rate frame goes out and the
             // head target becomes where the gimbal is, read from its own push, so the hold does
@@ -583,8 +583,8 @@ pub fn run(body: &mut dyn S1Body, state: Arc<State>, intents: Arc<Intents>, cfg:
                 }
                 let target = gimbal_ddeg(snap.head);
                 // Where the gimbal leads, the chassis chases it and the target's yaw is relative
-                // to the chassis (coordinate 3): a re-send puts the target ahead of the new
-                // heading again, and the body turned without end on the floor (2026-10-31). There
+                // to the chassis (coordinate 3, inferred): a re-send would put the target ahead
+                // of the new heading again and the body would not stop (no valid proof). There
                 // the target goes out once per change, as DJI's library sends one task. Where the
                 // chassis leads, the controller owns the yaw and only the pitch is ours
                 // (`rm_ctrl.py` `angle_ctrl` in `gimbal_yaw_follow_mode`).
@@ -738,9 +738,9 @@ pub fn run(body: &mut dyn S1Body, state: Arc<State>, intents: Arc<Intents>, cfg:
                         );
                     } else if frame.is_ack {
                         // A module answering one of our one-shots (`gimbal sleep`, a work mode, a
-                        // position task…): kept in telemetry and said at `info`, retcode first —
-                        // on 2026-10-31 the gimbal's answer to `sleep` was traced and lost while
-                        // the gimbal did not fold.
+                        // position task…): kept in telemetry and said at `info`, retcode first, so
+                        // that whether the gimbal takes `sleep` can be read; it has no valid
+                        // measurement yet.
                         let retcode = frame.data.first().copied();
                         telemetry.acks += 1;
                         telemetry.last_ack = Some((frame.cmd_set, frame.cmd_id, retcode));
@@ -990,7 +990,7 @@ mod tests {
         assert_eq!(dds_retcode_meaning(0x02, None), "empty answer");
     }
 
-    /// The floor sample of 2026-10-31 (0.15 m/s asked, `[27, −26, −33, 31]` rpm) reads as 0.153 m/s;
+    /// A sample of the discarded floor session (`[27, −26, −33, 31]` rpm) reads as 0.153 m/s;
     /// a turn in place (sides opposed) has wheel speed and no body speed; a strafe is lateral.
     #[test]
     fn wheel_speed_is_the_forward_mecanum_kinematics_in_the_wires_signs() {
@@ -1007,8 +1007,8 @@ mod tests {
         assert!((v - 0.3).abs() < 0.01, "{v}");
     }
 
-    /// Over 0.4 m/s for 300 ms trips; under 0.15 m/s for 500 ms releases; the floor's worst
-    /// disagreement (0.13 m/s, 2026-10-31) never trips; a brief spike alone does not either.
+    /// Over 0.4 m/s for 300 ms trips; under 0.15 m/s for 500 ms releases; 0.13 m/s (a figure of the
+    /// discarded floor session) never trips; a brief spike alone does not either.
     #[test]
     fn the_lift_detector_needs_persistence_both_ways() {
         let t0 = Instant::now();

@@ -68,9 +68,9 @@ struct Args {
     /// ALSA device of the speaker.
     #[arg(long, default_value = "hw:0,0")]
     audio_device: String,
-    /// The mixer control `s1.volume` sets: the *simple* control name `amixer sset` takes
-    /// (`Speaker` on the S1; `Speaker Volume`, the `contents` name, was refused on the robot,
-    /// 2026-10-31).
+    /// The mixer control `s1.volume` sets: the *simple* control name `amixer sset` takes. The
+    /// bench passes `Speaker`; that name comes from the discarded floor session, so `s1.volume`
+    /// has no valid proof on the robot.
     #[arg(long)]
     volume_control: Option<String>,
     /// An ALSA state file (`alsactl store`) restored with `alsactl restore` before anything else:

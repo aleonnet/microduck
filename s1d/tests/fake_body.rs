@@ -79,7 +79,7 @@ fn the_deadman_zeroes_the_wheels_and_keeps_the_heartbeat() {
     assert!(state.ticks.load(Ordering::Relaxed) >= 60);
     assert!(state.health().healthy, "{:?}", state.health().reason);
 
-    // The subscription went out once, to our msg id, with seven subjects.
+    // The subscription went out once, to our msg id, with nine subjects.
     let subs: Vec<&Frame> = frames
         .iter()
         .filter(|f| (f.cmd_set, f.cmd_id) == id::DDS_ADD_SUB)
@@ -419,7 +419,7 @@ fn a_volley_lights_the_muzzle_and_sounds_each_shot_on_the_launchers_cadence() {
         }
         std::thread::sleep(Duration::from_millis(5));
     }
-    // The last flash goes out 150 ms after the last shot.
+    // The third shot's flash goes out 660 ms after the first; wait past it.
     std::thread::sleep(Duration::from_millis(300));
     state.shutdown.store(true, Ordering::Relaxed);
     handle.join().unwrap();
@@ -505,8 +505,8 @@ fn arming_frees_the_gimbal_from_the_chassis_once() {
 }
 
 /// `s1.goto`: while the controller's position task runs, the loop sends the heartbeat and **no**
-/// wheel or follow frame — the frames that overwrote the task every tick on the floor
-/// (2026-10-31: goto accepted, odometry still). A twist that asks for motion takes the wheels back.
+/// wheel or follow frame, which would overwrite the task every tick. Tested here, without valid
+/// proof on the robot. A twist that asks for motion takes the wheels back.
 #[test]
 fn a_position_task_owns_the_wheels_until_a_twist_takes_them_back() {
     let path = std::env::temp_dir().join(format!("s1d-fake-goto-{}.bin", std::process::id()));
@@ -569,8 +569,8 @@ fn a_position_task_owns_the_wheels_until_a_twist_takes_them_back() {
 }
 
 /// Where the gimbal leads the chassis, the head target goes out once per change: re-sent every
-/// 100 ms with its yaw relative to the chassis, it kept putting the target ahead of the body and
-/// the body turned to −120° without stopping on the floor (2026-10-31). In free mode the hold
+/// 100 ms with its yaw relative to the chassis (inferred), it would keep putting the target ahead
+/// of the body and the body would not stop. No valid proof on the robot. In free mode the hold
 /// re-send stays; where the chassis leads, only the pitch axis is ours.
 #[test]
 fn the_head_target_is_sent_once_where_the_gimbal_leads_and_held_elsewhere() {
@@ -629,8 +629,8 @@ fn the_head_target_is_sent_once_where_the_gimbal_leads_and_held_elsewhere() {
     );
 }
 
-/// `s1.gimbal speed` is a rate: re-sent every tick while fresh (one frame moved the gimbal about a
-/// degree on the robot, 2026-10-31), the angle hold silent meanwhile; `stop` sends one zero rate
+/// `s1.gimbal speed` is a rate: re-sent every tick while fresh (no valid proof on the robot), the
+/// angle hold silent meanwhile; `stop` sends one zero rate
 /// and the hold resumes; a rate older than the deadman ends the same way.
 #[test]
 fn a_gimbal_rate_is_streamed_until_stopped_and_the_angle_hold_waits() {
@@ -703,7 +703,7 @@ fn a_gimbal_rate_is_streamed_until_stopped_and_the_angle_hold_waits() {
 }
 
 /// A module's acknowledgement to one of our one-shots lands in `s1.telemetry` with its retcode —
-/// the gimbal's answer to `sleep`, traced and lost on 2026-10-31 while the gimbal did not fold.
+/// the gimbal's answer to `sleep`, for one, which has no valid measurement yet.
 #[test]
 fn an_ack_to_a_one_shot_is_kept_with_its_retcode() {
     let path = std::env::temp_dir().join(format!("s1d-fake-ack-{}.bin", std::process::id()));
@@ -758,11 +758,11 @@ fn stock_push(seq: u16, rpm: [i16; 4], body: [f32; 3]) -> Vec<u8> {
     .unwrap()
 }
 
-/// The wheels-stop rule on the loop, with pushes shaped like the floor captures of 2026-10-31:
+/// The wheels-stop rule on the loop, with synthetic pushes (the shape, a discarded session's):
 /// driving at 0.15 m/s with the fused velocity agreeing, the wheels turn; the fused velocity
 /// running away to 0.9 m/s while the wheels still read 0.15 (the robot in a hand) zeroes the
 /// wheels within the trip time and marks `picked_up`; agreement again for the release time gives
-/// the wheels back. The floor's own worst disagreement never trips it.
+/// the wheels back. A disagreement of 0.13 m/s never trips it. Proves the mechanism, not the levels.
 #[test]
 fn lifted_stops_the_wheels_and_the_floor_does_not() {
     let dir = std::env::temp_dir().join(format!("s1d-fake-lift-{}", std::process::id()));
@@ -778,8 +778,8 @@ fn lifted_stops_the_wheels_and_the_floor_does_not() {
     intents.set_enabled(true);
     let (s, i) = (Arc::clone(&state), Arc::clone(&intents));
     let handle = std::thread::spawn(move || run(&mut body, s, i, Config::default()));
-    // The floor at 0.15 m/s: the measured rpm, the fused velocity a little above (0.26 is the
-    // floor's worst, 2026-10-31 run 2 at 3.5 s).
+    // Driving at 0.15 m/s: the rpm, the fused velocity a little above (0.26, a figure of the
+    // discarded floor session).
     let mut seq = 0u16;
     let mut push = |rpm: [i16; 4], body: [f32; 3]| {
         seq = seq.wrapping_add(1);

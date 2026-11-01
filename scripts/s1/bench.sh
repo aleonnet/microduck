@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The S1 bench, in stages: what the plan `docs/project/s1-bringup.md` records, one subcommand each,
+# The S1 bench, in stages: what the plan `docs/s1/project/s1-bringup.md` records, one subcommand each,
 # every stage leaving its artefacts under $OUT/<stage>/ and printing what it produced. The order
 # matters and is the plan's: capture while the stock firmware is alive, back up before anything is
 # stopped, prove execution before anything is pushed, free the UART before driving.
@@ -16,8 +16,8 @@
 #        S1_CHROOT (default /data/debian) · S1_BAUD (from capture) · S1_ROOTFS (tar from build-rootfs.sh)
 #        S1_UDP (the robot's netpadd, default <host without port>:4210) · S1_TCP (the forwarded socket,
 #        default 127.0.0.1:9000) · S1_VOLUME_CONTROL (the speaker's mixer control, the *simple* name
-#        `amixer sset` takes: `Speaker`, measured on the robot 2026-10-31 — `Speaker Volume`, the
-#        `contents` name stage 8 dumps, is refused)
+#        `amixer sset` takes: `Speaker` by default, a name from the discarded floor session, without
+#        valid proof; `Speaker Volume` is the `contents` name stage 8 dumps)
 set -euo pipefail
 cd "$(dirname "$0")/../.."   # `cargo s1` (the alias in .cargo/config.toml) and target/ are the repo's
 
@@ -54,7 +54,7 @@ stages() {
  8 audio     amixer route; arecord 60 s stream; aplay while driving, top alongside
  9 app       observe what the app does with the stock stopped (notes)
 10 restore   reboot; the app drives again; capture repeated shows hdvt_uav alive
-11 frames    gst-launch v4l2src 720p and 360p for 30 s: fps and CPU (mediad's own element)
+11 frames    records blocked.txt and stops: no stream (the 720p rate is stage 7's; 360p never captured)
 12 infer     s1-infer (the detector's ONNX path) on the S1 with libonnxruntime armv7, and on the Mac,
              over the same frames
    telemetry with the stock ALIVE, nothing of ours on the UART: dji_hdvt_uav relaunched under
@@ -121,12 +121,12 @@ e2e_robot() { local log="$1"; shift
 # The control's name is quoted for the robot's shell: a name with a space ("Speaker Volume", the
 # `contents` name stage 8 dumps) unquoted reached s1d as a second argument — the daemon refused it
 # and died, and the stage went on against a dead socket (2026-10-30, 21:58). The name `s1.volume`
-# needs is the *simple* one, `Speaker` (2026-10-31: `amixer sset 'Speaker Volume'` exited 1 on the
-# robot, `Speaker` set 50 % → 16 of 31). So the launch is followed by `pidof`: a daemon that did
+# needs is the *simple* one, `Speaker` (from the discarded floor session of 2026-10-31, no valid
+# proof). The launch is followed by `pidof`: a daemon that did
 # not come up ends the stage with the tail of its log, not with a riddle downstream.
 # `--alsa-state`: the mixer as the stock leaves it (`deploy/s1/asound.state.stock`, saved on the
-# robot with `alsactl store` while the stock was alive, 2026-10-31), restored by the daemon at start
-# so the microphone path no longer depends on the stock having run since boot.
+# robot with `alsactl store` during the discarded floor session), restored by the daemon at start;
+# whether that is enough on a boot where the stock never ran has not been tried.
 S1_VOLUME_CONTROL="${S1_VOLUME_CONTROL-Speaker}"
 ALSA_STATE=/opt/robot/asound.state.stock
 start_daemons() {
@@ -329,7 +329,7 @@ PY
     pix=$(awk -F"'" '/Pixel Format/ {print tolower($2)}' "$D/fmt.txt"); pix=${pix:-nv12}
     # NO STREAM HERE. A generic stream request (`v4l2-ctl --stream-mmap`, 17:01 and 17:5x on 2026-10-30)
     # rebooted the robot both times. The frame comes from `s1-cam`, which replays the stock camera
-    # process's own call sequence (`camera/dji_camera_v4l2_decoded.strace`); until that binary exists
+    # process's own call sequence (`camera/dji_camera_v4l2_decoded.strace`); without that binary
     # the stage records the refusal and stops here.
     # `s1-cam` (s1-push.sh installs it) replays the stock camera process's own sequence — input,
     # the three private controls, the format with its field and colourspace, five MMAP buffers —
@@ -396,10 +396,10 @@ PY
   frames)
     D=$(dir frames); need_chroot
     # NO STREAM HERE either: `gst-launch v4l2src` is the same generic path that rebooted the robot
-    # in stage 7. The rate is measured by `s1-cam` over the stock's own sequence; until it exists
-    # the stage records the refusal. (`fpsdisplaysink` is absent from the rootfs anyway: the rate is
-    # 300 buffers over the time the grabber reports.)
-    echo "stage 11 stops before the stream: a generic V4L2 stream rebooted the robot twice (2026-10-30); fps waits for s1-cam" | tee "$D/blocked.txt"
+    # in stage 7. The 720p rate is what stage 7's `s1-cam` reports; this stage measures nothing and
+    # records that. 360p was never captured from the stock and no such format goes to the robot.
+    # (`fpsdisplaysink` is absent from the rootfs anyway.)
+    echo "stage 11 stops before the stream: a generic V4L2 stream rebooted the robot twice (2026-10-30); the 720p rate is stage 7's" | tee "$D/blocked.txt"
     for f in "$D"/blocked.txt "$D"/fps_720p.txt "$D"/fps_360p.txt "$D"/sample.png; do [ -f "$f" ] && art "$f" || true; done ;;
 
   infer)

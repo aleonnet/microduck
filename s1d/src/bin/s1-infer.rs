@@ -6,7 +6,7 @@
 //!
 //! `duck-detect`'s own bench (`duck-bench`) is the NPU path — `rknn::Model` — and the S1 has no
 //! NPU. This is the same measurement over `duck_detect::onnx::Model`, which is what the S1 can run
-//! and what `mediad` runs on a board whose NPU is off. It is stage 12 of `docs/project/s1-bringup.md`
+//! and what `mediad` runs on a board whose NPU is off. It is stage 12 of `docs/s1/project/s1-bringup.md`
 //! on both tiers: cross-compiled for the robot, built natively for the Mac, the same frames in.
 //!
 //! Frames are decoded up front so the JPEG/PNG decode is not in the timed loop; the model is run

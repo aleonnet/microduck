@@ -93,15 +93,15 @@ pub struct Intents {
     volley: AtomicU8,
     /// Until when a position task of the motion controller (`s1.goto`) owns the wheels, in
     /// microseconds since `epoch`; zero is none. While it runs the loop sends **no** wheel or
-    /// follow frame — measured 2026-10-31 on the floor: a goto accepted while the loop kept
-    /// sending zero wheel speeds every tick never moved the robot, the controller's task being
-    /// overwritten a hundred times a second. DJI's own library sends no wheel speeds during a
-    /// `move`. A new twist or direct wheel speeds take the wheels back.
+    /// follow frame: zero wheel speeds every tick would overwrite the controller's task a hundred
+    /// times a second. Read in the loop and tested on the fake body; the only robot run was the
+    /// discarded floor session. A non-zero twist or direct wheel speeds take the wheels back;
+    /// `robot.stop` and `robot.relax` do not, which is an open defect (`docs/s1/robot/s1-commands.md`).
     position_task_until_us: AtomicU64,
     /// `s1.gimbal speed`: a rate for the gimbal, degrees per second `[yaw, pitch]` in DJI's signs,
-    /// stamped like the twist. One `0x04/0x0c` moved the gimbal about a degree on the robot
-    /// (2026-10-31): the controller applies a rate for one short period, so the loop re-sends it
-    /// every tick while it is fresher than the deadman, as the app re-sends the stick.
+    /// stamped like the twist. The loop re-sends it every tick while it is fresher than the
+    /// deadman; that one frame is not enough is inferred (the discarded floor session), and that
+    /// the app re-sends it was not seen in any capture.
     gimbal_rate: ArcSwap<Stamped<[f64; 2]>>,
 }
 

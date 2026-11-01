@@ -1,5 +1,5 @@
 //! A frame from the S1's camera through the stock camera process's own call sequence, and the
-//! rate the device sustains — stages 7 and 11 of `docs/project/s1-bringup.md`.
+//! rate the device sustains — stages 7 and 11 of `docs/s1/project/s1-bringup.md`.
 //!
 //! ```text
 //! s1-cam --device /dev/video0 --frames 3 --seconds 10 --out /tmp/cam

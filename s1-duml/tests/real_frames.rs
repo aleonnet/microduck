@@ -123,8 +123,8 @@ fn real_dds_push_parses() {
     assert_eq!((frame.cmd_set, frame.cmd_id), cmd::id::DDS_PUSH);
     let push = PushPeriod::parse(&frame).expect("a push");
     assert_eq!(push.data.len(), 176 - 13 - 2);
-    // What the stock firmware subscribed to is not known yet, so only the envelope is asserted;
-    // decoding the subjects is the bench's job once we subscribe to a known list.
+    // Only the envelope is asserted here; the subjects of this same push are decoded by the
+    // stock's layout in `tests/stock_push.rs`.
     let _ = (push.sub_mode, push.msg_id);
 }
 
@@ -156,7 +156,7 @@ fn decoder_recovers_frames_from_the_raw_read_stream() {
     assert_eq!(dec.dropped(), 4);
 }
 
-/// The subscription request as `ProtoAddSubMsg.pack_req` lays it out: two UIDs at 20 Hz.
+///
 /// The stock answers every telemetry push with an ack carrying the push's sequence: ours must be
 /// its bytes, so the motion controller sees the subscriber it expects.
 #[test]

@@ -53,8 +53,8 @@ chmod 755 "$WORK/bin/adb"
 export PATH="$WORK/bin:$PATH"
 # The e2e driver is pointed at ports nothing answers on: port 1 is reserved and refuses, so even a
 # forward left by an earlier robot session on 9000 cannot make this self-test drive a robot.
-# The speaker control is the simple name `amixer sset` takes, `Speaker` (2026-10-31: `Speaker Volume`,
-# the `contents` name, was refused on the robot); the bench's default, not set here, so the self-test
+# The speaker control is the simple name `amixer sset` takes, `Speaker` (no valid robot proof; the
+# name is from the discarded floor session); the bench's default, not set here, so the self-test
 # refutes a bench that drifts back to the wrong name.
 export S1_HOST=shim:5555 S1_OUT="$WORK/out" S1_BAUD=921600 S1_UDP=127.0.0.1:1 S1_TCP=127.0.0.1:1
 unset S1_VOLUME_CONTROL
