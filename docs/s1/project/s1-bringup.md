@@ -15,6 +15,7 @@ of a mistake.
 
 ## State today (2026-11-01, code at `27d4b6e`, no robot touched in this revision)
 
+- **The Pollen's 0.18.3 was merged in afterwards** (`b2b0d21`); the S1's tests pass on it, and nothing of it has run on the robot.
 - **Nothing is proven through the duck's path.** That path is `duckctl udp-pad` → `netpadd` over UDP,
   and the browser at `http://<robot>:8080`. `duckctl udp-pad` has never run against the S1, and neither
   `mediad` nor the browser has ever run on it.

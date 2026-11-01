@@ -92,7 +92,7 @@ Commit messages call these proven or fixed; none of that counts. The code they a
 
 ## After `27d4b6e`
 
-This revision of the documents, on the branch as later commits: comments and help texts corrected, with no change of logic, and the S1's documents moved to `docs/s1/` by the owner's order, with the duck's documents back as they are on `main`. `git log 27d4b6e..` lists them.
+This revision of the documents, on the branch as later commits: comments and help texts corrected, with no change of logic, and the S1's documents moved to `docs/s1/` by the owner's order, with the duck's documents back as they are on `main`. `git log 27d4b6e..` lists them. Then the Pollen's `main` (`b2b0d21`, 0.18.3, contract 47) merged in, without conflict, on the owner's order to keep up: six new contract calls, `os.*` and `telemetry.*`, which `s1d` does not name.
 
 ## History rewritten, 2026-11-01
 

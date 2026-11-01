@@ -121,7 +121,7 @@ and `s1d` calls neither (`git grep`: only their definitions). Which stage proved
 | H33, H34 IMU e odometria | `dds` | `state.rs`, `s1.telemetry`, `robot.state` | painel | `monitor`, com pato em 3D | `robot.subscribe` a 2 Hz | `telemetry-free.py` |
 | H35 Tombado, levantado | `dds` | `tick.rs`, `safety` | painel | `monitor` | aparece como alerta | `telemetry-free.py` |
 | H36 PWM | `chassis_pwm_value`, `chassis_pwm_freq` | `s1.pwm` | sem botão | — | sem botão; 0 de 14 `s1.*` | `s1ctl pwm` |
-| H40 Gimbal por ângulo | `gimbal_angles`, `gimbal_angles_axes` | `robot.head`, `robot.look` | modos D-pad cima e direita; modo Head usa juntas que o gimbal ignora | `robot look` | arrastar na imagem (`mediad/webclient/index.html:1700`) | `s1-e2e` |
+| H40 Gimbal por ângulo | `gimbal_angles`, `gimbal_angles_axes` | `robot.head`, `robot.look` | modos D-pad cima e direita; modo Head usa juntas que o gimbal ignora | `robot look` | arrastar na imagem (`mediad/webclient/index.html:1774`) | `s1-e2e` |
 | H41 Recentrar, velocidade, sono | `gimbal_recenter`, `gimbal_speed`, `gimbal_suspend_resume` | `s1.gimbal` | sem botão | — | sem botão | `s1ctl gimbal` |
 | H42 Modos de seguir | `gimbal_workmode`, `chassis_follow`, `chassis_stick_overlay` | `s1.follow` | sem botão | — | sem botão | `s1ctl follow` |
 | H43 Ângulo lido | `events::GimbalPush` | `state.rs` | painel | `monitor` | `robot.state` | `telemetry-free.py` |
@@ -148,13 +148,13 @@ shared. A browser and a pad work on both bodies. A conformance battery runs the 
 | Format | convert NV12 to UYVY at the source, or parametrise; UYVY is assumed in `mediad`, in `robotctl` and in the contract's `valid_uyvy`, and also appears in `duck-detect` and the `uyvy` crate; the exact list is part of that work. Decided by measuring the CPU | no if converting, yes if parametrising |
 | `mediad`, permission | a way for `s1.*` through (`mediad/src/session.rs:218`) | yes, one place |
 | The page | show what this body has, no duck menu | yes |
-| `hello`, `system.info` | answered by `s1d`, through `mediad`'s `--updater-socket` and `--config-socket` (`mediad/src/main.rs:161-169`) | no |
+| `hello`, `system.info` | answered by `s1d`, through `mediad`'s `--updater-socket` and `--config-socket` (`mediad/src/main.rs:162-170`) | no |
 | Rotation | `--rotate 0` | no |
 | `s1d` | `limp`, skills, `robot.stop` cancels `s1.goto`, no catch-all arm | no |
 | `robotctl` | a subset or adjusted texts, to decide | to decide |
 | Chroot | `plugins-bad`, `ugly` or `openh264`, `nice`; `webrtcsink` built for armhf | no |
 | Supervisor | something that brings back what falls | no |
-| Configuration | a separate file: the editor refuses an `[s1]` section (`robotd-params/src/edit.rs:114`) | no |
+| Configuration | an `[s1]` section in `robotd.toml`, which since 0.18.3 the editor keeps instead of refusing (`robotd-params/src/edit.rs:229-230`); not run on the S1 | no |
 
 **When the Pollen updates:** a new contract method compiles silently in `s1d` today (`s1d/src/ipc.rs:723`); in the proposal `s1d` stops compiling until someone decides.
 `netpadd`, `pad-map` and `robotctl` arrive on both. `robotd`, `duck-control` and `odometry` arrive only on the duck, and nothing warns.

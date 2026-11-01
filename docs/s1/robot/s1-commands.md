@@ -5,7 +5,7 @@ the robot, and how it can be reached today from the controller, from `robotctl`,
 the browser. This page owns that list; it is the base for wiring commands to the console and the pad.
 `scripts/s1/docs-check.py` fails when a call exists in the code and not here, or here and not in the code.
 
-Read from the code at `27d4b6e`, with no robot touched. The dated evidence is in
+Read from the code at `27d4b6e`, then checked after merging the Pollen's 0.18.3 (contract 47), with no robot touched. The dated evidence is in
 [`docs/s1/project/s1-bringup.md`](../project/s1-bringup.md); paths like `drive/e2e.log` are under
 `~/Development/RoboMaster-S1/out/2026-10-30-poc2/`. How the body works is
 [`docs/s1/design/s1-body.md`](../design/s1-body.md); how to run it is [`s1-bench.md`](s1-bench.md).
@@ -35,25 +35,25 @@ by `s1-push.sh`, has never been built for this CPU, and refuses any `s1.*` (`med
 
 | Call | What `s1d` does | On the wire | Test | On the robot | Controller (`duckctl` → `netpadd`) | `robotctl` | Browser | Missing for the duck's path |
 |---|---|---|---|---|---|---|---|---|
-| `hello` | answers the contract's version and its own | — | **none:** the route test skips it, since its destination is the updater | answered | — | on connect (`robotctl/src/main.rs:1548`) | asked at open, but routed to `updaterd`, absent here: red alert (`duck-ipc-proto/src/lib.rs:1420`, `mediad/webclient/index.html:1302`) | an answer for the console |
-| `robot.move` | sets the twist, under the deadman | armed: `0x3f/0x20` each tick by mecanum; `0x3f/0x22` in `gimbal_lead`; `0x3f/0x21` under `--twist speed`, never sent | `the_deadman_zeroes_the_wheels_and_keeps_the_heartbeat` (`s1d/tests/fake_body.rs:23`), fake run | seen, in the air, through `netpadd` (`drive/e2e.log`). On the floor: no valid proof | left and right stick; strafe only in Drive mode | no command | WASD/QE, up to 0.3 m/s and 1.5 rad/s (`mediad/webclient/index.html:1510`) | real `duckctl`; browser; floor; scale never measured |
+| `hello` | answers the contract's version and its own | — | **none:** the route test skips it, since its destination is the updater | answered | — | on connect (`robotctl/src/main.rs:1564`) | asked at open, but routed to `updaterd`, absent here: red alert (`duck-ipc-proto/src/lib.rs:1511`, `mediad/webclient/index.html:1341`) | an answer for the console |
+| `robot.move` | sets the twist, under the deadman | armed: `0x3f/0x20` each tick by mecanum; `0x3f/0x22` in `gimbal_lead`; `0x3f/0x21` under `--twist speed`, never sent | `the_deadman_zeroes_the_wheels_and_keeps_the_heartbeat` (`s1d/tests/fake_body.rs:23`), fake run | seen, in the air, through `netpadd` (`drive/e2e.log`). On the floor: no valid proof | left and right stick; strafe only in Drive mode | no command | WASD/QE, up to 0.3 m/s and 1.5 rad/s (`mediad/webclient/index.html:1584`) | real `duckctl`; browser; floor; scale never measured |
 | `robot.head` | sets the head target in the duck's frame, converted to DJI's signs | armed: `0x3f/0xb0`, coordinate 3, re-sent every 100 ms; once per change in `gimbal_lead`; pitch only in `chassis_lead` | `the_head_target_is_sent_once_where_the_gimbal_leads_and_held_elsewhere` (`s1d/tests/fake_body.rs:576`) | ±60° to 0.1° in free mode, through the socket (`telemetry-free/verdict.txt`); seen through `netpadd` (`drive/e2e.log`) | D-pad up, right and down modes, and a zero head on leaving them (`pad-map/src/mapper.rs:51`); Head mode moves axes a gimbal ignores; yaw up to ±143° (`robotd-params/src/pad_axes.rs:252-256`) against the manual's ±250° | no command | not used; the console uses `robot.look` | real `duckctl`; the follow modes have no valid proof |
-| `robot.look` | turns a point in the trunk frame into two gimbal angles, same slot as `robot.head`, answers `LookResult` | as `robot.head` | `look_answers_a_look_result_and_aims_the_gimbal` (`s1d/tests/dispatch.rs:127`) | no valid proof | — | `robot look` (`robotctl/src/main.rs:3453`) | drag on the picture (`mediad/webclient/index.html:1700`); depends on video | robot run; browser |
+| `robot.look` | turns a point in the trunk frame into two gimbal angles, same slot as `robot.head`, answers `LookResult` | as `robot.head` | `look_answers_a_look_result_and_aims_the_gimbal` (`s1d/tests/dispatch.rs:127`) | no valid proof | — | `robot look` (`robotctl/src/main.rs:3469`) | drag on the picture (`mediad/webclient/index.html:1774`); depends on video | robot run; browser |
 | `robot.stop` | zeroes twist and wheel speeds | the next wheel frame is zero | fake run item F16 | seen as part of F16, in the air | none: the pad stops by centring the sticks | no command | `stop` button (`mediad/webclient/index.html:283`) | **does not cancel `s1.goto`** (see [open defects](#open-defects)) |
-| `robot.enable` | arms or disarms; `toggle` flips; answers `armed` or `disarmed` as the reason | arm: five `0x3f/0x19 01`, then `0x04/0x4c 00 00`; then `0x3f/0x60` each tick. Disarm: wheels zero, heartbeat off | `enable_toggles_and_arms` (`s1d/tests/dispatch.rs:43`), `arming_frees_the_gimbal_from_the_chassis_once` (`s1d/tests/fake_body.rs:463`) | through the socket, armed and disarmed with the wheels obeying (`drive/move.log`, the owner's word in the record). The pad's first Start is `robot.init`; its toggle is witnessed only in the record's prose. The bytes are proroklab's; the stock's heartbeat was never sent | Start, after the first press (`pad-map/src/mapper.rs:253`); Start held sends off, then `robot.init` (`pad-map/src/mapper.rs:273-277`), which here disarms and re-arms | `robot enable` (`robotctl/src/main.rs:3429`) | `enable` button (`mediad/webclient/index.html:280`) | real `duckctl`; browser |
+| `robot.enable` | arms or disarms; `toggle` flips; answers `armed` or `disarmed` as the reason | arm: five `0x3f/0x19 01`, then `0x04/0x4c 00 00`; then `0x3f/0x60` each tick. Disarm: wheels zero, heartbeat off | `enable_toggles_and_arms` (`s1d/tests/dispatch.rs:43`), `arming_frees_the_gimbal_from_the_chassis_once` (`s1d/tests/fake_body.rs:463`) | through the socket, armed and disarmed with the wheels obeying (`drive/move.log`, the owner's word in the record). The pad's first Start is `robot.init`; its toggle is witnessed only in the record's prose. The bytes are proroklab's; the stock's heartbeat was never sent | Start, after the first press (`pad-map/src/mapper.rs:253`); Start held sends off, then `robot.init` (`pad-map/src/mapper.rs:273-277`), which here disarms and re-arms | `robot enable` (`robotctl/src/main.rs:3445`) | `enable` button (`mediad/webclient/index.html:280`) | real `duckctl`; browser |
 | `robot.init` | arms | as `robot.enable` | `every_robot_route_is_served_or_refused_with_a_reason` | first Start press in the pad item | Start, first press (`pad-map/src/mapper.rs:240`), and Start held; the log says "standing up" | `robot init`, with the duck's text | `init` button | texts |
-| `robot.relax` | disarms | wheels zero, heartbeat off; does not stop `s1.goto` | `every_robot_route_is_served_or_refused_with_a_reason` | no witness of its own | — | `robot relax --yes`; without the flag it refuses, with the duck's "the robot will collapse" (`robotctl/src/main.rs:3417`) | `relax` button | defect, below |
-| `robot.health` | loop rate, battery, healthy or not | — | `health_before_the_first_tick_is_not_healthy_but_answers` (`s1d/tests/dispatch.rs:69`) | `drive/health.json`: healthy, 99.98 Hz | `netpadd` health (`netpadd/src/health.rs`) | `health`, `monitor`; says `zero3 (not declared)` (`robotctl/src/main.rs:2168-2177`) | polled (`mediad/webclient/index.html:1376`) | body name in `robotctl` |
+| `robot.relax` | disarms | wheels zero, heartbeat off; does not stop `s1.goto` | `every_robot_route_is_served_or_refused_with_a_reason` | no witness of its own | — | `robot relax --yes`; without the flag it refuses, with the duck's "the robot will collapse" (`robotctl/src/main.rs:3433`) | `relax` button | defect, below |
+| `robot.health` | loop rate, battery, healthy or not | — | `health_before_the_first_tick_is_not_healthy_but_answers` (`s1d/tests/dispatch.rs:69`) | `drive/health.json`: healthy, 99.98 Hz | `netpadd` health (`netpadd/src/health.rs`) | `health`, `monitor`; says `zero3 (not declared)` (`robotctl/src/main.rs:2184-2193`) | polled (`mediad/webclient/index.html:1415`) | body name in `robotctl` |
 | `robot.safeToRestart` | safe unless a non-zero, fresh twist is applied | — | route test only | not exercised | — | — (asked by `updaterd`, absent) | not permitted (`mediad/src/route.rs`) | ignores `s1.wheels` and `s1.goto`: defect |
 | `robot.modelApi` | answers `s1d`'s model API number | — | route test only | not exercised | — | — | not permitted | nothing asks it on the S1 |
 | `robot.remoteSessionActive` | always `{"active":false}` | — | route test only | not exercised | — | — | not permitted | a real answer if `mediad` comes |
-| `robot.mode` | always `roller` | — | `mode_is_roller` (`s1d/tests/dispatch.rs:19`) | answered (`s1-bringup.md`, stage 5) | `netpadd` asks it to pick `[pad_roller]` (`netpadd/src/robotd.rs`) | `robot mode` | polled (`mediad/webclient/index.html:1372`) | nothing |
-| `robot.policies` | `roller`, empty slots and skills | — | route test only | through `netpadd`, indirectly | `netpadd/src/main.rs` | policy commands, with the duck's text | fills the skill menu; empty makes it offer the duck's sit, kick and roll (`mediad/webclient/index.html:1400-1417`) | **the S1's actions as skills** |
-| `robot.subscribe` | starts `robot.state` on this connection at `hz`; answers `unavailable` + no skills | — | **no test in `s1d/tests`;** only `s1-e2e` (`s1d/src/bin/s1-e2e.rs:1174`). What fills the state: `stock_pushes_fill_health_state_and_the_head` (`s1d/tests/fake_body.rs:207`) | `robotctl monitor`, 2026-10-30; `safety.fallen` proven; `safety.limp` is wrong | panel | `monitor`, drawing a duck with 15 joints | 2 Hz (`mediad/webclient/index.html:1347`) | `limp` fixed |
-| `robot.flashlight` | solid colour or off on the body LEDs, `toggle` inverts the last call | `0x3f/0x32` to `0x18` | `flashlight_toggle_inverts_what_on_and_off_left` (`s1d/tests/dispatch.rs:100`) | seen through `netpadd`: Home, white on and off (`drive/e2e.log`) | Home | `flashlight` (`robotctl/src/main.rs:647`) | no button; text field only | real `duckctl`; a button |
-| `robot.sound` | plays a tag of the bank through `aplay`; `hold` makes wheee a level; refused without `--sounds` | none: speaker through ALSA | unit test in `s1d/src/sound.rs`, fake run | heard through `netpadd` ("Sim, ouvi os dois", `drive/e2e.log`) and by `robotctl quack` | RT chirp, LT wheee (`pad-map/src/mapper.rs:406`), **but real `duckctl` plays them on the laptop unless `--robot-sound-on`** (`duckctl/src/udp_pad.rs:418-422`) | `quack` (`robotctl/src/main.rs:621`) | 7 tags (`mediad/webclient/index.html:305-311`) | real `duckctl`; browser; the bank is DJI's wavs under the duck's names |
-| `robot.skills` | empty | — | route test only | not exercised | — | `robotctl/src/main.rs:3856` | — | **the S1's actions as skills** |
-| `pad.bindings` | empty | — | route test only | not exercised | — | — | permitted (`mediad/src/route.rs:500`) | the same |
+| `robot.mode` | always `roller` | — | `mode_is_roller` (`s1d/tests/dispatch.rs:19`) | answered (`s1-bringup.md`, stage 5) | `netpadd` asks it to pick `[pad_roller]` (`netpadd/src/robotd.rs`) | `robot mode` | polled (`mediad/webclient/index.html:1411`) | nothing |
+| `robot.policies` | `roller`, empty slots and skills | — | route test only | through `netpadd`, indirectly | `netpadd/src/main.rs` | policy commands, with the duck's text | fills the skill menu; empty makes it offer the duck's sit, kick and roll (`mediad/webclient/index.html:1439-1456`) | **the S1's actions as skills** |
+| `robot.subscribe` | starts `robot.state` on this connection at `hz`; answers `unavailable` + no skills | — | **no test in `s1d/tests`;** only `s1-e2e` (`s1d/src/bin/s1-e2e.rs:1174`). What fills the state: `stock_pushes_fill_health_state_and_the_head` (`s1d/tests/fake_body.rs:207`) | `robotctl monitor`, 2026-10-30; `safety.fallen` proven; `safety.limp` is wrong | panel | `monitor`, drawing a duck with 15 joints | 2 Hz (`mediad/webclient/index.html:1386`) | `limp` fixed |
+| `robot.flashlight` | solid colour or off on the body LEDs, `toggle` inverts the last call | `0x3f/0x32` to `0x18` | `flashlight_toggle_inverts_what_on_and_off_left` (`s1d/tests/dispatch.rs:100`) | seen through `netpadd`: Home, white on and off (`drive/e2e.log`) | Home | `flashlight` (`robotctl/src/main.rs:663`) | no button; text field only | real `duckctl`; a button |
+| `robot.sound` | plays a tag of the bank through `aplay`; `hold` makes wheee a level; refused without `--sounds` | none: speaker through ALSA | unit test in `s1d/src/sound.rs`, fake run | heard through `netpadd` ("Sim, ouvi os dois", `drive/e2e.log`) and by `robotctl quack` | RT chirp, LT wheee (`pad-map/src/mapper.rs:406`), **but real `duckctl` plays them on the laptop unless `--robot-sound-on`** (`duckctl/src/udp_pad.rs:418-422`) | `quack` (`robotctl/src/main.rs:637`) | 7 tags (`mediad/webclient/index.html:305-311`) | real `duckctl`; browser; the bank is DJI's wavs under the duck's names |
+| `robot.skills` | empty | — | route test only | not exercised | — | `robotctl/src/main.rs:3872` | — | **the S1's actions as skills** |
+| `pad.bindings` | empty | — | route test only | not exercised | — | — | permitted (`mediad/src/route.rs:515`) | the same |
 
 **The bank** (`scripts/s1/s1-push.sh`), tag → DJI's file under `/system/audio/sound`: chirp `media_sound_demo_recognize_success`,
 greet `power_on`, alarm `media_sound_demo_attacked`, inquire `media_sound_demo_scanning`, peck `sleeping`, coo
@@ -62,7 +62,7 @@ greet `power_on`, alarm `media_sound_demo_attacked`, inquire `media_sound_demo_s
 ## `robot.*` the body refuses with a reason
 
 The call exists in the contract and this body cannot honour it: the answer is `IntentResult { accepted: false, reason }`.
-`every_robot_route_is_served_or_refused_with_a_reason` (`s1d/tests/dispatch.rs:80`) proves only that a route does not fall to `METHOD_NOT_FOUND`, not the reason or the shape, and wherever this page says "route test only" that is all there is. Its list, `every_call`, leaves out 6 of the contract's 79 variants: `robot.chorale`, `chorale.subscribe`, `robot.setMode` and `robot.theremin` of this table, so nothing exercises those four, and `chorale.beacon` and `chorale.heard`. `robot.do` is also held by `do_is_refused_with_not_driving` (`s1d/tests/dispatch.rs:29`).
+`every_robot_route_is_served_or_refused_with_a_reason` (`s1d/tests/dispatch.rs:80`) proves only that a route does not fall to `METHOD_NOT_FOUND`, not the reason or the shape, and wherever this page says "route test only" that is all there is. Its list, `every_call`, leaves out 6 of the contract's 85 variants: `robot.chorale`, `chorale.subscribe`, `robot.setMode` and `robot.theremin` of this table, so nothing exercises those four, and `chorale.beacon` and `chorale.heard`. `robot.do` is also held by `do_is_refused_with_not_driving` (`s1d/tests/dispatch.rs:29`).
 
 | Call | Reason given today | Who would send it on the S1 | What it would take |
 |---|---|---|---|
@@ -145,7 +145,7 @@ anyone deciding about it** (see defects). `system.info` is one of the two the co
 | `net.scan` | network |
 | `net.connect` | network |
 | `net.forget` | network |
-| `system.info` | system; the console asks it at open (`mediad/webclient/index.html:1327`) |
+| `system.info` | system; the console asks it at open (`mediad/webclient/index.html:1366`) |
 | `system.services` | system |
 | `system.logs` | system |
 | `system.setName` | system |
@@ -159,6 +159,12 @@ anyone deciding about it** (see defects). `system.info` is one of the two the co
 | `pad.input` | pad |
 | `tof.stream` | no sensor |
 | `head_imu.stream` | no sensor |
+| `os.status` | operating system updates |
+| `os.check` | operating system updates |
+| `os.apply` | operating system updates |
+| `os.switch` | operating system updates |
+| `telemetry.status` | the Pollen's usage telemetry |
+| `telemetry.set` | the Pollen's usage telemetry |
 
 ## What is not a command
 
@@ -198,18 +204,18 @@ The capabilities of the classification of 2026-10-31 that have no line above, wi
 | CI for the S1 | nothing | no line in `.github/workflows` mentions it | later |
 | The console opening without a red alert | nothing | `hello` and `system.info` have no service here | answer the two |
 | A coherent action menu | nothing | see `robot.policies` | skills |
-| Pad buttons for blaster, follow, recentre, sleep | nothing | `[pad]` is free text (`robotd-params/src/lib.rs:267-282`); `deploy/s1/robotd.toml` has no `[pad]` | `robot.do` |
+| Pad buttons for blaster, follow, recentre, sleep | nothing | `[pad]` is free text (`robotd-params/src/lib.rs:395-410`); `deploy/s1/robotd.toml` has no `[pad]` | `robot.do` |
 | Console with a test picture, before the camera | nothing | `[media] source = "test"` in `robotd.toml` (`robotd-params/src/lib.rs`; the old `camera = false` is ignored, and the default is the camera, which here is forbidden); needs `webrtcsink` | build it |
 | `webrtcsink`, encoder and `libnice` in the chroot | nothing | the rootfs has no `bad`, `ugly` or `nice`; `scripts/setup-gstreamer.sh:178` is `aarch64` only | build and measure |
 | The picture the right way up | nothing | board default `Zero3` turns it 90° (`robotd-params/src/board.rs:82-87`) | declare 0° |
 | A sign that the picture is going out | nothing | `mediad/src/indicator.rs:31` is silent without its LED | the owner's call |
 | Audio in the browser | does not exist on the duck either | no audio in `mediad/src/pipeline.rs` | the owner's call |
 | Daemons coming back after a failure | nothing | started by hand, no supervisor (`scripts/s1/bench.sh:139`) | a supervisor |
-| `robotctl` saying only what is true here | in part | `robotctl/src/main.rs:3504-3505` "standing up", `robotctl/src/configure.rs:227-244` `systemctl restart` | a subset |
-| `duckctl open`, `ip`, `ssh`, `scp` | nothing | Bluetooth only (`duckctl/src/main.rs:1530-1537`); `udp-pad <address>` does not need it (`duckctl/src/main.rs:1481-1506`) | another way, or say so |
+| `robotctl` saying only what is true here | in part | `robotctl/src/main.rs:3520-3521` "standing up", `robotctl/src/configure.rs:241-258` `systemctl restart` | a subset |
+| `duckctl open`, `ip`, `ssh`, `scp` | nothing | they find the robot by a Bluetooth scan (`duckctl/src/main.rs:1670-1677`); since 0.18.3 `ssh` and `scp` first try the last address such a scan found, so on the S1 there is still none; `udp-pad <address>` does not need it (`duckctl/src/main.rs:1612-1637`) | another way, or say so |
 | Authentication on browser and pad | the owner's decision | none by the Pollen's choice (`mediad/src/main.rs:9-13`); here it includes the launcher | decide |
 | DJI's firmware functions | the owner's decision | six AI modules, follow by camera, zoom, photo, autonomous program, skills, games; not parts | decide |
-| A configuration of the S1's own that `robotctl configure` accepts | nothing | daemons tolerate a new key; the editor is strict (`robotd-params/src/edit.rs:114`) | a separate file or the registry |
+| A configuration of the S1's own that `robotctl configure` accepts | nothing | since the Pollen's 0.18.3 both the daemons and the editor keep an unknown section and report it (`robotd-params/src/edit.rs:229-230`, test at `robotd-params/src/edit.rs:1196`), so an `[s1]` section would survive `configure`; `robotctl` would still not know its keys. Not run on the S1 | a registry entry, if it should be editable |
 
 ## Open defects
 
@@ -220,7 +226,7 @@ Found reading the code. None is fixed, and none has been reproduced with a test,
 3. **`s1.goto` while disarmed** sends its frame and marks the task, with no heartbeat. The effect is unknown.
 4. **The lift rule's levels have no valid origin** (`s1d/src/tick.rs:248-259`). The test proves the mechanism.
 5. **`robot.safeToRestart` looks only at the twist** (`s1d/src/ipc.rs:564-576`), so it says safe during `s1.wheels` or `s1.goto`.
-6. **`safety.limp` means "disarmed" here** (`s1d/src/state.rs:356`): the console paints red and the panel alarms on a healthy disarmed robot (`mediad/webclient/index.html:1426-1428`, `duckctl/src/udp_pad/panel.rs:203-204`). No test covers it.
+6. **`safety.limp` means "disarmed" here** (`s1d/src/state.rs:356`): the console paints red and the panel alarms on a healthy disarmed robot (`mediad/webclient/index.html:1465-1467`, `duckctl/src/udp_pad/panel.rs:203-204`). No test covers it.
 7. **`s1.armor` goes to `0x18`** (`s1d/src/ipc.rs:398`) where DJI's library goes to `0x09`, and the test does not prove the frame sent.
 8. **No permission per method in `s1.*`**, including `s1.frame`, and the one-shot queue has no limit (`s1d/src/intents.rs:273`). It matters as soon as a remote route exists.
 9. **`other =>`** (`s1d/src/ipc.rs:723`) lets a new contract call compile with nobody deciding.
@@ -230,7 +236,7 @@ Found reading the code. None is fixed, and none has been reproduced with a test,
 13. **The refutation scripts use `sed -i ''`**, macOS only (`scripts/s1/e2e-refute.sh:19`, `scripts/s1/telemetry-refute.sh:19`), which blocks CI.
 14. **`dji-oracle.py` needs DJI's library from outside the repository** (`scripts/s1/dji-oracle.py:8-9`); the hex stays frozen in `s1-duml/tests/dji_oracle.rs`.
 15. **Follow differs from the captured app:** it repeats gimbal mode 2 at 8 Hz; `s1d` sends it once.
-16. **`every_call` covers 73 of the contract's 79 variants**, so the route test does not see six. The Pollen's; to report, not to fix here.
+16. **`every_call` covers 79 of the contract's 85 variants**, so the route test does not see six. The Pollen's; to report, not to fix here.
 17. **`s1.goto`'s timer does not use the clamped distance.** The frame clamps to ±5 m, the timer uses the raw `x` and `y` (`s1d/src/ipc.rs:340`, `s1d/src/ipc.rs:359-362`). Run on the fake body: `x: 100000` puts 5 m on the wire and, by that formula, keeps the task 200 000 s, about 55 h; `x: 1e308` panics in `Duration::from_secs_f64` after the frame is queued, so the connection closes with no answer, the frame stands and the task is not marked, while the wheel frames go on over it. The daemon stays up.
 18. **Disarming leaves a non-zero gimbal rate as the last command.** The rate block is inside `if armed` (`s1d/src/tick.rs:562`), so no zero rate follows `robot.relax`. Run on the fake body: the last `0x04/0x0c` is 30 °/s. Shutdown takes the same path, by reading.
 19. **The angle hold does not stand down for `s1.gimbal sleep` or `recenter`** (`s1d/src/tick.rs:591-607`). Run on the fake body: one `sleep`, then six `0x3f/0xb0` in 0.5 s. This may be why a fold would not hold; not measured.
