@@ -332,8 +332,8 @@ events per three shots, reflected by a white wall, `items/F17_infrared_fire3.log
 controller adds beside the fire — the muzzle flash and the shot sound — is the controller's own
 doing (`gunShootAction`, `ir_gun_shoot` in its strings), captured on the UART with the stock alive
 and the app firing (`capture/hdvt_fire.strace`: 42 fire frames `0x3f/0x51` from `0x09` to `0x17`,
-no ack; 30 muzzle flashes `0x3f/0x55` control 7, effect 3, green, once, 40 ms; nothing from the
-launcher back on the UART but its version string), and reproduced by `s1d` per shot. The owner saw
+no ack; 30 muzzle flashes `0x3f/0x55` control 7, effect 3, green, once, 40 ms; the launcher's own frames on the UART,
+`0x00/0x01`, `0x00/0xf0`, `0x00/0xf1` and 25 of `0x3f/0x49`, are not decoded, so whether one reports a shot is not known), and reproduced by `s1d` per shot. The owner saw
 the green flash and heard the shot with our daemon (`F17_refute.txt` is the refutation).
 
 Refutation, executable (`scripts/s1/e2e-refute.sh`, its output among the artefacts): one byte of
@@ -448,8 +448,8 @@ measured: plain `nohup … &` left an empty log, and `setsid` without the sleep 
 `robotctl health --json` in the chroot: `healthy: true`, 0 missed, 0 bus errors, 99.93 Hz then (the kept `drive/health.json` is a later run of the same stage: 99.98 Hz);
 `robot.mode` → `roller`, `robot.modelApi` → 2. Without a gamepad the Mac drives the JSON-RPC
 socket through `adb forward tcp:9000 localfilesystem:/data/debian/run/robotd.sock` (`drive.py`):
-`robot.enable` → `armed`; 30 × `robot.move` forward 0.2 m/s, 20 × yaw 0.6 rad/s, 20 × strafe
-0.2 m/s, 50 × `robot.head`, every one `accepted`; `robot.enable off` → `disarmed`; the owner, wheels
+`robot.enable` → `armed`; by the kept `drive/move.log`, 29 × `robot.move` forward 0.2 m/s, 19 × yaw 0.6 rad/s, 19 × strafe
+0.2 m/s, 48 × `robot.head`, every one `accepted`; `robot.enable off` → `disarmed`; the owner, wheels
 in the air: **"funcionou"** — wheels and gimbal obeyed. Health `healthy` before and after.
 
 Telemetry, three defects found and two fixed on the bench, one open:
@@ -725,9 +725,9 @@ one subject `0x00020003_d7f5dcfb` at 1 Hz; msg 0 again with two, `…d7f5dcfb` a
 `0x00020003_91a13d9c`, at 1 Hz; and **msg 1, flags 3, two subjects `0x00020003_47e6f7b3` and
 `0x00020003_1d13ee42`, frequency field 20** — this is the 176 B push: two composite subjects of
 DJI's internal namespace `0x20003` (not the SDK's `0x20009` singles), together 153 bytes after the
-time stamp. The controller's own clock in the pushes puts them **20 ms apart** (1314 of 2362
+time stamp. The controller's own clock in the pushes puts them **20 ms apart** (1314 of 2361
 consecutive gaps in the 17:05 capture; the rest multiples of 20 ms, i.e. drops), so the field's
-20 is not hertz on this firmware; the 1 Hz push's gaps are 1000 ms. The 14 bytes at 8..22 are
+20 is not hertz on this firmware; the 1 Hz push's gaps are 1000 ms, or 2000 ms where one dropped. The 14 bytes at 8..22 are
 therefore part of the first composite subject, whose internal layout DJI does not publish; the
 float there tracks the gimbal yaw (0, −1, −178 against the gimbal's −179.6°). The `msg_id` of the
 big push was 0 at 17:05 and 1 at 20:50: by length, as coded. The stage's first run hung: busybox
@@ -746,7 +746,7 @@ manual's −20°/+35° (the mechanical stops sit a degree or two past the publis
 excursion of yaw negative when the owner was asked to go left first (DJI's sign: right positive),
 yaw −95.1°..+121.4°. There is no yaw stop to reach: in the app's driving mode the chassis follows
 the gimbal (owner, 2026-10-30), so a yaw sweep turns the whole robot and the ground-frame yaw at 4
-is the robot turning — the yaw at 8 stayed near 0° while the yaw at 4 held 92°–100°, which is
+is the robot turning — the yaw at 8 stayed near 0° while the yaw at 4 held 92°–100° (over the whole window it ranged −59.6°..+55.1°), which is
 exactly that following, and names the two fields: 8 relative to the chassis, 4 in the ground frame.
 The yaw field is confirmed by the quaternion, which agrees with it to within 1.2° at both extremes
 (−94.7° for −95.1°, 122.6° for 121.4°).
@@ -793,7 +793,7 @@ by hand with the owner watching the gimbal, then a 25 s tilt window.
   need it. (The strace alongside caught only one instant of controller pushes — `strace -p` on
   `s1d`'s reads gives few whole frames; the decoded samples are the evidence.)
 - **The accelerometer names the frames.** At rest `[0, 0, −1.0]` g; nose up +21.7° gave
-  `acc_x = +0.372 = sin 21.7°`, nose down −17.4° gave −0.318: NED specific force, body x forward,
+  `acc_x = +0.372 = sin 21.7°`, nose down −17.4° gave about −0.32: NED specific force, body x forward,
   y right, z down, pitch positive nose up, yaw positive clockwise (the gimbal's right). jeguzzi's
   `robomaster_sim` reaches the same from its x-forward, y-left, z-up body (`command_subjects.hpp`
   `from_robot`: yaw and pitch negated, roll kept; `ImuSubject`: acc and gyro y and z negated).
@@ -1635,6 +1635,8 @@ also the maintenance door (its Lab is how root adb is re-enabled after every pow
 Firmware updates happen only in the app's mode, with root adb off.
 
 ## How this revision was checked (2026-11-01)
+
+The page-by-page list is [`2026-11-01-1000-conferencia-das-paginas.md`](2026-11-01-1000-conferencia-das-paginas.md).
 
 `bench.sh verify-record` proves each artefact below exists with its hash. It does not prove the
 sentence. For that, the text artefacts cited here were opened and held against the sentences that

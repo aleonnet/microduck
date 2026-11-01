@@ -1,8 +1,8 @@
 //! The "Autonomous Program" button on the intelligent controller, read from its evdev node.
 //!
 //! The stock firmware holds `/dev/input/event0` (seen among `dji_hdvt_uav`'s file descriptors).
-//! Phase 1 only reads it and counts presses, so the bench can confirm the node and the key code;
-//! phase 4 makes it the switch between the DJI mode and ours.
+//! Today it only reads it, counts presses and reports them as `s1.event`. Making it the switch
+//! between the DJI mode and ours is a plan, with no code.
 //!
 //! `struct input_event` is `timeval` + `u16 type` + `u16 code` + `i32 value`. On the robot's
 //! 32-bit ARM that is 16 bytes; on a 64-bit host it is 24. Sized at compile time for the target.

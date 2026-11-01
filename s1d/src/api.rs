@@ -71,8 +71,8 @@ pub struct WheelsParams {
     pub rpm: [i16; 4],
 }
 
-/// Speaker volume, 0..100, through the mixer (`amixer`), as the stock's `0x3f/0x1b` sets it on
-/// the same controller.
+/// Speaker volume, 0..100, through the mixer (`amixer`). DJI's own speaker-volume command is
+/// not used.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct VolumeParams {

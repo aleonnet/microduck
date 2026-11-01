@@ -70,7 +70,7 @@ for i, u in enumerate(uuids): m.append(f'uuid_{i}_l','uint32',u); m.append(f'uui
 m.append('freq','uint16',20); m.cmd_id = C.DUSS_MB_CMD_VBUS_ADD_MSG; emit("vbus_add_msg_battery_20hz_to_hdvt", m)
 # system LEDs as the stock app writes them (captured 2026-10-30: 0x3f/0x32 to host 0x18 = armor_id,
 # no ack): effect, led_mask u16, r g b, repeat, t1 u16, t2 u16, comp_mask u16. Effects: 1 solid,
-# 2 breath (both captured); 3 flash, 4 marquee by the library's `effect_*` numbering, to confirm.
+# 2 breath (both captured); 3 flash, 4 marquee by the library's `effect_*` numbering, seen on the robot.
 for name, effect, rgb, t in (("solid_red", 1, (255,0,0), (0,0)), ("breath_blue", 2, (0,0,255), (500,500)), ("flash_green", 3, (0,255,0), (250,250)), ("marquee_white", 4, (255,255,255), (100,100)), ("off", 0, (0,0,0), (0,0))):
     m = msg(D.hdvt_uav_id, D.system_id); m.sender = D.hdvt_uav_id; m.receiver = D.armor_id; m.cmd_type = C.NO_ACK_TYPE
     m.append('effect','uint8',effect); m.append('led_mask','uint16',0xff); m.append('r','uint8',rgb[0]); m.append('g','uint8',rgb[1]); m.append('b','uint8',rgb[2]); m.append('repeat','uint8',0); m.append('t1','uint16',t[0]); m.append('t2','uint16',t[1]); m.append('comp_mask','uint16',0x3f)

@@ -1,6 +1,6 @@
 //! The control loop against a body made of a file: what reaches the wire, decoded back.
 //!
-//! This is the deadman's proof (acceptance 3): one `robot.move`, then silence, and the wheel
+//! This is the deadman's proof, on a fake body: one `robot.move`, then silence, and the wheel
 //! frames must go to zero after the deadman while the heartbeat keeps coming.
 
 use std::sync::Arc;

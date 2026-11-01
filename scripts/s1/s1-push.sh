@@ -50,7 +50,7 @@ $A push deploy/s1/asound.conf "$CHROOT/etc/asound.conf" >/dev/null
 $A push deploy/s1/asound.state.stock "$CHROOT/opt/robot/asound.state.stock" >/dev/null
 $A shell "chmod 755 $CHROOT/opt/robot/bin/*"
 # A sound bank for `robot.sound`: the stock firmware's own wavs (`/system`, bind-mounted read-only
-# into the chroot by `bench.sh exec`) under the duck's tags, until phase 2 gives the S1 a voice.
+# into the chroot by `bench.sh exec`) under the duck's tags; the S1 has no voice of its own.
 # `busybox ln`: the Android shell's own `ln` is a toolbox applet that is not on the adb shell's
 # path, and the loop silently created nothing (measured 2026-10-30: an empty bank on the robot).
 BB=/system/xbin/busybox

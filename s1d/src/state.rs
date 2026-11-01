@@ -50,8 +50,8 @@ pub fn trunk_quat(att: &s1_duml::dds::Attitude) -> [f64; 4] {
 }
 
 /// What the motion controller last told us, decoded from its DDS pushes. `None` fields are
-/// subjects that have not arrived yet — which is how a subscription the bench has not yet
-/// confirmed shows up: as nothing, not as zeros.
+/// subjects that have not arrived yet — which is how a subscription the controller refused
+/// shows up: as nothing, not as zeros.
 #[derive(Debug, Clone, Default)]
 pub struct Telemetry {
     pub battery: Option<s1_duml::dds::Battery>,

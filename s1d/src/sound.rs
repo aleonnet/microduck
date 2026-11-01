@@ -3,12 +3,12 @@
 //!
 //! The stock firmware plays its sounds from `/system/audio/sound/*.wav` (100 files, 48 kHz stereo)
 //! through this same PCM — there is no bus command for sound, the controller *is* the player. On
-//! the bench the bank is symlinks to those files (`s1-push.sh`); phase 2 gives the robot its own.
+//! the robot the bank is symlinks to those files (`s1-push.sh`); it has no voice of its own.
 //! The wheee is the one wav played as a ride: the pad resends `hold: true` while the trigger is
 //! down and `hold: false` once on release, and that hold is a level here as in `robotd` — one
 //! start per hold, the release stops it, and a one-shot arriving mid-ride is dropped rather than
 //! cutting the ride (holding both triggers is how the pad is used). The duck's streamed ride
-//! (start, loop, end segments) is phase 2's with the rest of the voice.
+//! (start, loop, end segments) is not here.
 
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};

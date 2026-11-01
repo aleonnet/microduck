@@ -1,8 +1,8 @@
 # /etc/robot/robotd.toml on a RoboMaster S1 — the smallest file `netpadd` accepts.
 #
 # `netpadd` reads `[netpad]` through `robotd_params::Params::load`, which validates the whole
-# file; every other section keeps its default. `s1d` reads nothing here (its knobs are flags, until
-# phase 2 gives it an `[s1]` section). `[netpad] enabled = true` is what hands the pad to `netpadd`:
+# file; every other section keeps its default. `s1d` reads nothing here (its knobs are
+# flags). `[netpad] enabled = true` is what hands the pad to `netpadd`:
 # on the S1 there is no `padd`, so nothing stands down.
 [netpad]
 enabled = true

@@ -89,6 +89,17 @@ PROSE = [
     r'needs \(`docs/[\w./-]+`, item 1 of 2026-10-30 \(night\)\):',
     r'"(the floor\'s worst case must not trip|a disagreement of 0\.13 m/s must not trip the detector)"',
     r'"(the floor\'s worst case is not a lift|a disagreement of 0\.13 m/s is not a lift)"',
+    # The refusals that named a plan's phase, and what they say now: these lines exactly.
+    '"the\\ policy\\ is\\ not\\ driving:\\ this\\ body\\ has\\ no\\ skills\\ yet\\ \\(phase\\ 2\\)",',
+    '"the\\ policy\\ is\\ not\\ driving:\\ this\\ body\\ has\\ no\\ skills\\ at\\ all",',
+    'refused\\(id,\\ "no\\ voice\\ on\\ this\\ body\\ yet,\\ so\\ no\\ chorale\\ \\(phase\\ 2\\)"\\)',
+    'refused\\(id,\\ "no\\ voice\\ on\\ this\\ body\\ yet,\\ so\\ no\\ chorale"\\)',
+    '"no\\ kinematic\\ model\\ for\\ this\\ body\\ yet\\ \\(phase\\ 5\\ brings\\ the\\ URDF\\)",',
+    '"no\\ kinematic\\ model\\ for\\ this\\ body\\ yet:\\ no\\ URDF\\ has\\ been\\ written",',
+    'refused\\(id,\\ "this\\ body\\ keeps\\ no\\ vet\\ book\\ yet\\ \\(phase\\ 2\\)"\\)',
+    'refused\\(id,\\ "this\\ body\\ keeps\\ no\\ vet\\ book,\\ not\\ even\\ an\\ empty\\ one"\\)',
+    '"this\\ body\\ runs\\ no\\ policy\\ network\\ and\\ has\\ no\\ skills\\ yet\\ \\(phase\\ 2\\)",',
+    '"this\\ body\\ runs\\ no\\ policy\\ network\\ and\\ has\\ no\\ skills\\ at\\ all",',
 ]
 # A comment, by what the language says one is. Any other kind of file changing is logic.
 COMMENT = {".rs": "//", ".sh": "#", ".py": "#", ".toml": "#", ".conf": "#"}

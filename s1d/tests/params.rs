@@ -1,5 +1,5 @@
 //! `deploy/s1/robotd.toml` must load with the validation `netpadd` applies to it, and the two
-//! refusals the plan names must still be refusals — otherwise this file could rot into one that
+//! refusals below must still be refusals — otherwise this file could rot into one that
 //! `netpadd` rejects at startup, which on the robot is a pad that does nothing.
 
 use std::path::PathBuf;
@@ -42,7 +42,7 @@ fn load_variant(from: &str, to: &str) -> Result<robotd_params::Params, robotd_pa
     r
 }
 
-/// The plan's refutation for acceptance 4: a `stale_ms` above the deadman, or a `max_hz` of zero,
+/// A `stale_ms` above the deadman, or a `max_hz` of zero,
 /// is refused by name.
 #[test]
 fn a_stale_ms_above_the_deadman_is_refused() {

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# The S1 bench, in stages: what the plan `docs/s1/project/s1-bringup.md` records, one subcommand each,
+# The S1 bench, in stages: what the record `docs/s1/project/s1-bringup.md` tells, one subcommand each,
 # every stage leaving its artefacts under $OUT/<stage>/ and printing what it produced. The order
-# matters and is the plan's: capture while the stock firmware is alive, back up before anything is
+# matters: capture while the stock firmware is alive, back up before anything is
 # stopped, prove execution before anything is pushed, free the UART before driving.
 #
 # Nothing here touches /system or flashes anything; `restore` is a reboot. Robot wheels must be off

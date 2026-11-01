@@ -164,8 +164,8 @@ pub fn dds_due(
 /// order the wire wants: front-right, front-left, back-left, back-right.
 ///
 /// Textbook mecanum with the rollers at 45°: `ω_fl = (vx − vy − (L+W)·ωz)/r`, `ω_fr = (vx + vy +
-/// (L+W)·ωz)/r`, `ω_bl = (vx + vy − (L+W)·ωz)/r`, `ω_br = (vx − vy + (L+W)·ωz)/r`. Which wheel
-/// turns which way on *this* chassis is the bench's to confirm with the wheels in the air; the
+/// (L+W)·ωz)/r`, `ω_bl = (vx + vy − (L+W)·ωz)/r`, `ω_br = (vx − vy + (L+W)·ωz)/r`. Forward, turn
+/// and strafe were seen right with the wheels in the air (2026-10-30); on the floor, no valid proof. The
 /// signs here are the textbook's and the PoC's "all four positive drives forward".
 pub fn mecanum_rpm(twist: [f64; 3], radius_m: f64, half_sum_lw_m: f64) -> [i16; 4] {
     let [vx, vy, wz] = twist;
@@ -643,9 +643,9 @@ pub fn run(body: &mut dyn S1Body, state: Arc<State>, intents: Arc<Intents>, cfg:
         }
 
         // A volley just asked of the launcher: one muzzle flash and one shot sound per shot, on
-        // the launcher's cadence, the first in the same tick as the fire frame above. The stock
-        // paces its flashes itself too: the launcher reports nothing per shot on the UART
-        // (`capture/hdvt_fire.strace`).
+        // the launcher's cadence, the first in the same tick as the fire frame above. Whether a
+        // frame of the launcher reports a shot on the UART is not known: its `0x3f/0x49` is not
+        // decoded (`capture/hdvt_fire.strace`), so this paces by the clock.
         if let Some(n) = intents.take_volley() {
             let now = Instant::now();
             shots.clear();

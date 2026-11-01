@@ -642,7 +642,7 @@ pub fn dispatch(
         // is what `pad-map`'s pad-loss handler reads to stop asking for a sit.
         proto::Call::RobotDo(_) => refused(
             id,
-            "the policy is not driving: this body has no skills yet (phase 2)",
+            "the policy is not driving: this body has no skills at all",
         ),
         proto::Call::RobotPose(_) => refused(id, "this body has no legs to pose"),
         proto::Call::RobotMouth(_) => refused(id, "this body has no mouth"),
@@ -678,7 +678,7 @@ pub fn dispatch(
         }
         proto::Call::RobotSetMode(_) => refused(id, "this body is always on wheels"),
         // The skill table and the pad bindings: truthfully empty — this body has no one-shot
-        // skills until phase 2 — in the shape the clients decode.
+        // skills yet — in the shape the clients decode.
         proto::Call::RobotSkills => proto::Response::ok(
             Some(id),
             &proto::SkillsResult {
@@ -697,16 +697,16 @@ pub fn dispatch(
             "no depth sensor on this body: there is no theremin to play",
         ),
         proto::Call::RobotChorale(_) | proto::Call::ChoraleSubscribe => {
-            refused(id, "no voice on this body yet, so no chorale (phase 2)")
+            refused(id, "no voice on this body yet, so no chorale")
         }
         proto::Call::RobotModel => refused(
             id,
-            "no kinematic model for this body yet (phase 5 brings the URDF)",
+            "no kinematic model for this body yet: no URDF has been written",
         ),
         proto::Call::RobotVetbook
         | proto::Call::RobotVetbookNote(_)
         | proto::Call::RobotVetbookTally(_) => {
-            refused(id, "this body keeps no vet book yet (phase 2)")
+            refused(id, "this body keeps no vet book, not even an empty one")
         }
         proto::Call::RobotLoadPolicy(_)
         | proto::Call::RobotReloadPolicies
@@ -714,7 +714,7 @@ pub fn dispatch(
         | proto::Call::RobotRemoveSkill(_)
         | proto::Call::PadBind(_) => refused(
             id,
-            "this body runs no policy network and has no skills yet (phase 2)",
+            "this body runs no policy network and has no skills at all",
         ),
         proto::Call::RobotRebootMotors(_) => refused(
             id,

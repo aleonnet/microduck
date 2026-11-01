@@ -1,6 +1,6 @@
 # `s1d` and the S1's body
 
-Status: describes the code at `27d4b6e`. Owner of: how the RoboMaster S1 runs the microduck software
+Status: describes the code at `27d4b6e`, with the Pollen's 0.18.3 merged since. Owner of: how the RoboMaster S1 runs the microduck software
 today, and which software touches which part of the robot. The dated evidence is
 [`s1-bringup.md`](../project/s1-bringup.md); every command is
 [`s1-commands.md`](../robot/s1-commands.md); how to run it is [`s1-bench.md`](../robot/s1-bench.md).
@@ -47,7 +47,7 @@ stops if the loop dies. The bytes are proroklab's; DJI's own are built and have 
 still on. A gimbal rate ends the same way while armed, with one zero-rate frame; disarming sends no such frame. An angle target has no deadman: it holds, and goes on being re-sent during `s1.gimbal sleep` and `recenter`.
 
 **Who owns the wheels on each tick**, first match wins (`s1d/src/tick.rs:512`): a position task sends nothing, unless lifted; lifted
-sends zero; fresh `s1.wheels` sends those rpm; `gimbal_lead` sends the twist as `0x3f/0x22`; otherwise the
+sends zero; fresh `s1.wheels`, newer than the twist, sends those rpm; `gimbal_lead` sends the twist as `0x3f/0x22`; otherwise the
 twist through mecanum kinematics as `0x3f/0x20`. `--twist speed` would send `0x3f/0x21`; it has never run.
 
 **Frames.** The duck's signs are converted where the wheels and the gimbal meet the wire: the duck's +yaw is left, DJI's is right.

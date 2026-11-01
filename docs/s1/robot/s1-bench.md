@@ -35,7 +35,8 @@ On the Mac: `adb`, `cargo-zigbuild` with `zig`, the Rust target `armv7-unknown-l
 | `S1_ARGS` | none | extra flags for `s1d`; the only way to pass `--blaster-gel` |
 | `S1_ROOTFS` | the lab's tar | `exec` |
 | `S1_STAGE`, `S1_PULL_SKIP` | `/sdcard/bk`; `blackbox userdata cache` | `backup` |
-| `S1_ORT`, `S1_ORT_VERSION`, `S1_ORT_MAC`, `S1_FRAMES` | the lab's | `infer` |
+| `S1_ORT`, `S1_ORT_VERSION`, `S1_ORT_MAC` | the lab's; `1.28.0` | `infer` |
+| `S1_FRAMES` | `$S1_OUT/frames`, which nothing fills now | `infer`: point it at a directory with a PNG, such as `camera/` |
 
 ## From a cold robot
 
@@ -86,6 +87,6 @@ scripts/s1/duml-strace.py --selftest         # also telemetry-free.py --selftest
 python3 scripts/s1/docs-check.py             # these pages against the code
 ```
 
-The refutation scripts use `sed -i ''` and run only on macOS. CI does not build or test the S1.
+`e2e-refute.sh` and `telemetry-refute.sh` use `sed -i ''` and run only on macOS. CI does not build or test the S1.
 
 To rebuild the oracle hex in `s1-duml/tests/dji_oracle.rs`, `scripts/s1/dji-oracle.py` needs DJI's Python library, pulled from a robot; it stays out of git. `scripts/s1/v4l2-oracle.sh` regenerates `s1d/tests/fixtures/v4l2_arm32.json` in Docker.
