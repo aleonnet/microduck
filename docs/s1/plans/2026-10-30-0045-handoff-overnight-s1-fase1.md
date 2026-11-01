@@ -1,4 +1,4 @@
-status: accepted
+status: superado por ../project/s1-bringup.md
 
 # Handoff — overnight s1-fase1 — 2026-10-30T03:45:39Z
 

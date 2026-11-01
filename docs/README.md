@@ -68,7 +68,6 @@ Dated records rather than reference. They describe a moment, and go stale on pur
 | [`pad-minimal-pairing.md`](project/pad-minimal-pairing.md) | The smallest board configuration a gamepad will bond under, found by taking one away at a time. |
 | [`idle-cpu.md`](project/idle-cpu.md) | What the daemons do when nobody is asking them to: four things that stopped, two that were measured and left alone, and what still wants a board. |
 | [`tof-on-demand.md`](project/tof-on-demand.md) | `tofd`'s idle 5% is nine parts head IMU to one part depth, and the IMU has no consumer. Why the laser and the unit were left alone and the IMU got a switch. |
-| [`s1-bringup.md`](project/s1-bringup.md) | A DJI RoboMaster S1 as a microduck body: what its UART, chroot, camera, mic, LEDs and armour do with our daemons, stage by stage, and what still waits for the bench. |
 
 ## `ideas/` — not designed yet
 

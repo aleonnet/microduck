@@ -1,21 +1,122 @@
 # S1 bring-up: the RoboMaster S1 as a microduck body
 
-What a DJI RoboMaster S1 does with the microduck daemons. Everything below was measured on the
-machine named in each line — the robot, or the Mac that builds for it — and nothing is inferred
-from behaviour alone. Where a line says **pending**, nobody has measured it yet and the plan says who
-does: the bench stages need the robot plugged in and a person at it.
+The dated record of what a DJI RoboMaster S1 did with the microduck software. It records a moment
+and goes stale on purpose. What the S1 is **today** belongs to other pages:
+[`docs/s1/design/s1-body.md`](../design/s1-body.md) (how it works),
+[`docs/s1/robot/s1-commands.md`](../robot/s1-commands.md) (every command, what proves it, what reaches
+it), [`docs/s1/robot/s1-bench.md`](../robot/s1-bench.md) (how to run it) and
+[`s1-changelog.md`](s1-changelog.md) (what changed). When this page and one of those disagree about
+today, this page is the bug.
 
-The design — what of the microduck enters, what is rewritten, and where the body service sits in
-place of `robotd` — is phase 2's page; this is the record phase 1 writes as it goes. The plan is
-the master plan "S1 ← microduck" (plans directory, 2026-10-29) and the night diary beside it.
+Each line says what it rests on: a file in the lab, cited with its hash; the code, cited by path;
+or a person at the robot. Some conclusions are inferences, and those lines say so. Correction blocks
+dated 2026-11-01 sit next to the text they correct; the older sentence stays when it is the record
+of a mistake.
+
+## State today (2026-11-01, code at `27d4b6e`, no robot touched in this revision)
+
+- **Nothing is proven through the duck's path.** That path is `duckctl udp-pad` → `netpadd` over UDP,
+  and the browser at `http://<robot>:8080`. `duckctl udp-pad` has never run against the S1, and neither
+  `mediad` nor the browser has ever run on it.
+- **The closest thing:** wheels in the air, gimbal, lights, sound and arm/disarm, driven through the real
+  `netpadd` and `robotctl` on the robot on 2026-10-30, with the datagrams made by `s1-e2e` and the owner
+  as witness. Telemetry through `s1.telemetry`, `robot.health` and `robot.state` was accepted by the owner
+  the same night.
+- **The floor session of 2026-10-31 was discarded by the owner.** It is not evidence, and its text is
+  only in the [superseded copy](2026-11-01-0032-s1-bringup-ate-57e01f2.md). So nothing has valid proof on the floor: no
+  wheels on the ground, no follow mode, no `s1.goto`, no volume, no lift rule.
+- **The code at HEAD has not run on the robot outside that discarded session.** Commits `3db7e58`
+  (`robot.look`, `s1.goto`, follow, gimbal rate), `a196808` (acks, mixer), `75b0c60` (lift rule) and
+  `333f075` (`up` and `floor` stages) came after the proofs of 2026-10-30. They have tests and no valid
+  robot proof. Their thresholds and the name `Speaker` come from that session; so does
+  `deploy/s1/asound.state.stock`, byte-identical to the file saved there
+  (`out/2026-10-31-poc2/alsa/asound.state.stock`, compared with `cmp`).
+- **Open defects** are listed in [`s1-commands.md`](../robot/s1-commands.md#open-defects). The one to
+  know first: `robot.stop` does not cancel `s1.goto`.
+
+Attributions to the owner in sections dated 2026-10-31 are that session's own account, not checked
+against the owner's words, unless a line quotes them.
+
+## Every part of the robot, by stage
+
+Table sent to the owner on 2026-11-01, kept as sent, in Portuguese. One observation differs: **H71**,
+because the capture it said was still on the robot is in the lab. The category of each part is what
+the code and the artefacts show on that date. Which software touches each part is in
+[`docs/s1/design/s1-body.md`](../design/s1-body.md#every-part-by-component).
+
+**Legenda:** ✅ provado no robô, com artefato ou testemunho registrado · 🟡 código e testes, sem prova válida no robô · ◐ passou por `netpadd`/`robotctl` reais, sem `duckctl` · ⬜ nada · — não se aplica.
+
+**Categoria:** A afirmação sem código · C teste · D bancada · D+ `netpadd`/`robotctl` reais · E caminho do pato. A rodada do chão de 31/10 não conta. Estágios 9 (app sem a DJI) e 10 (restaurar) não têm coluna, porque não medem peça: 9 nunca rodou; 10 foi visto duas vezes sem artefato.
+
+**Estágios:** 1 captura · 2 backup · 3 chroot · 4 parar a DJI · 5 dirigir · 6 eventos e luzes · 7 câmera · 8 áudio · 11 quadros · 12 inferência · T telemetria · U `duckctl`→`netpadd` · N navegador.
+
+| ID | Peça | Cat. | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 11 | 12 | T | U | N | Observação |
+|---|---|---|--|--|--|--|--|--|--|--|--|--|--|--|--|---|
+| | **Controlador inteligente** | | | | | | | | | | | | | | | |
+| H1 | CPU LC1860, ARMv7, 5 núcleos | D | ✅ | — | ✅ | — | ✅ | — | — | — | — | ✅ | — | — | ⬜ | frequência desconhecida; carga do vídeo não medida |
+| H2 | RAM | A | ⬜ | — | — | — | — | — | — | — | — | — | — | — | ⬜ | nunca medida |
+| H3 | eMMC, 14 partições | D | ✅ | ✅ | ✅ | — | — | — | — | — | — | — | — | — | — | restaurar imagem nunca testado |
+| H4 | microSD | D | ✅ | ✅ | — | — | — | — | — | — | — | — | — | — | ⬜ | usado de área de backup; o "sem SD" do app segue hipótese |
+| H5 | Serial `ttyS3` 921600 | D+ | ✅ | — | — | ✅ | ✅ | ✅ | — | — | — | — | ✅ | ◐ | ⬜ | caminho de tudo que move |
+| H6 | Wi-Fi `0cf3:1022` no hub interno | D | ✅ | — | — | — | ✅ | — | — | — | — | — | — | ◐ | ⬜ | transporta adb e UDP; sem código nosso para gerenciar |
+| H7 | Hub interno `05e3:0619`, 3 portas livres | D | ✅ | — | — | — | — | — | — | — | — | — | — | — | — | medido em `usb-coral`; sem uso |
+| H8 | Micro-USB, modo dispositivo (adb) | D | ✅ | — | — | — | ✅ | — | — | — | — | — | — | — | — | runbook |
+| H9 | Micro-USB, modo host | inferência | ⬜ | — | — | — | — | — | — | — | — | — | — | — | — | sem 5 V é inferência; Coral nunca enumerou |
+| H10 | Porta reservada (USB-C) | D | ✅ | — | — | — | — | — | — | — | — | — | — | — | — | 5 V, sem dados USB |
+| H11 | Bluetooth | A | ⬜ | — | — | — | — | — | — | — | — | — | — | — | — | firmware e `ttyS2` no sistema; medir na validação |
+| H12 | Botão de programa autônomo | D | ✅ | — | — | — | — | ✅ | — | — | — | — | — | ⬜ | ⬜ | `/dev/input/event0`; `s1d/src/button.rs` só conta o aperto; códigos 264 e 265 vistos, qual botão é qual não está mapeado |
+| H13 | Chave de modo e botão de conexão | A | ⬜ | — | — | — | — | ⬜ | — | — | — | — | — | ⬜ | ⬜ | nenhum código; possível origem de um dos códigos acima |
+| H14 | Codificador H.264 `hx280enc` | A | ✅ | — | — | — | — | — | ⬜ | — | ⬜ | — | — | — | ⬜ | só visto na DJI; nada nosso usa. O caminho atual do vídeo é por software |
+| H15 | Coprocessador MA2100 | A | ⬜ | — | — | — | — | — | — | — | — | ⬜ | — | — | ⬜ | só em strings da DJI |
+| H16 | MCU M0, CPLD, GPIOs de energia | A | ⬜ | — | — | — | — | — | — | — | — | — | — | — | — | só em strings; desligar por software depende disto |
+| | **Câmera e áudio** | | | | | | | | | | | | | | | |
+| H20 | Câmera `ov5695`, 720p NV12 | D | ✅ | — | — | — | — | — | ✅ | — | ✅ | ✅ | — | — | ⬜ | 30,1 fps para arquivo, NV12; 1080p, foto e 360p nunca; sem saída ao vivo; `mediad` só aceita UYVY e `v4l2src` genérico reinicia o robô |
+| H21 | Microfone (módulo da câmera) | D à mão | ✅ | — | — | — | — | — | — | ✅ | — | — | — | ⬜ | ⬜ | voz reconhecida por você (`audio/mic.wav`); sem rota no `s1d`; nem o pato leva áudio ao navegador |
+| H22 | Alto-falante | D+ | — | — | — | — | ✅ | ✅ | — | ✅ | — | — | — | ◐ | ⬜ | com `duckctl` real os gatilhos tocam no laptop por padrão |
+| H23 | Volume do alto-falante | C | — | — | — | — | 🟡 | — | — | 🟡 | — | — | — | ⬜ | ⬜ | prova só na rodada descartada |
+| H24 | Codec e mixer | D | ✅ | — | — | — | — | — | — | ✅ | — | — | — | — | — | restauração sem a DJI: só teste com stand-in |
+| | **Placa de movimento** | | | | | | | | | | | | | | | |
+| H30 | Heartbeat e armar | D+ | ✅ | — | — | — | ✅ | — | — | — | — | — | — | ◐ | ⬜ | bytes da DJI nunca enviados, só os do proroklab |
+| H31 | 4 motores M3508I e ESC | D+ | ✅ | — | — | — | ✅ ar | — | — | — | — | — | ✅ | ◐ | ⬜ | no chão: sem prova válida |
+| H32 | 4 rodas mecanum | sem prova válida | — | — | — | — | ✅ ar | — | — | — | — | — | — | ◐ | ⬜ | raio e escala não medidos |
+| H33 | IMU e atitude | D | ✅ | — | — | — | — | — | — | — | — | — | ✅ | — | ⬜ | inclinação conferida à mão |
+| H34 | Odometria fundida | D | ✅ | — | — | — | — | — | — | — | — | — | ✅ | — | ⬜ | lida; exatidão não medida |
+| H35 | Detector de status (tombado, levantado) | D, em parte | ✅ | — | — | — | — | — | — | — | — | — | ✅ | — | ⬜ | tombado ok; bit de levantado nunca ligou; regra própria sem limiar válido |
+| H36 | 6 portas PWM | C | — | — | — | — | 🟡 | — | — | — | — | — | — | ⬜ | ⬜ | nunca medido com carga |
+| H37 | Portas reservadas: micro-USB, UART, S-Bus, M0 | — | ⬜ | — | — | — | — | — | — | — | — | — | — | — | — | manual as marca reservadas |
+| H38 | LED de estado da placa | — | ⬜ | — | — | — | — | — | — | — | — | — | — | — | — | sem comando conhecido |
+| H39 | Barramentos internos CAN e M-BUS | — | ⬜ | — | — | — | — | — | — | — | — | — | — | — | — | manual; só alcançados pela placa de movimento, por DUML |
+| | **Gimbal** | | | | | | | | | | | | | | | |
+| H40 | Motores de yaw e pitch, por ângulo | D+ | ✅ | — | — | — | ✅ | — | — | — | — | — | ✅ | ◐ | ⬜ | ±60° medidos pelo nosso comando; pelo controle yaw vai a ±143° (`robotd-params/src/pad_axes.rs:252-256`), manual ±250° |
+| H41 | Recentrar, velocidade, dormir e acordar | C | — | — | — | — | 🟡 | — | — | — | — | — | — | ⬜ | ⬜ | nenhum testemunho nos logs válidos |
+| H42 | Modos de seguir | C | ✅ | — | — | — | 🟡 | — | — | — | — | — | — | ⬜ | ⬜ | bytes capturados da DJI; movimento só na rodada descartada |
+| H43 | Ângulo do gimbal (`0x04/0x05`) | D | ✅ | — | — | — | — | — | — | — | — | — | ✅ | — | ⬜ | conferido nos batentes |
+| H44 | 16 LEDs do gimbal | D | ✅ | — | — | — | ✅ | ✅ | — | — | — | — | — | ◐ | ⬜ | Home e 5 efeitos em todos; por grupo: não |
+| H45 | Armadura do gimbal, detectores | A | ⬜ | — | — | — | — | ⬜ | — | — | — | — | — | ⬜ | ⬜ | só placas 1 a 4 vistas |
+| H46 | Unidade infravermelha larga | D | ✅ | — | — | — | — | ✅ | — | — | — | — | — | ⬜ | ⬜ | eventos recebidos; qual unidade recebeu não está mapeado |
+| | **Chassi** | | | | | | | | | | | | | | | |
+| H50 | 4 armaduras, detector de impacto | D | ✅ | — | — | — | — | ✅ | — | — | — | — | — | ⬜ | ⬜ | 23 golpes, placas 1 a 4 |
+| H51 | Sensibilidade do detector | C | — | — | — | — | 🟡 | — | — | — | — | — | — | ⬜ | ⬜ | destino `0x18`, oráculo `0x09` (`s1d/src/ipc.rs:398`); efeito não observado |
+| H52 | LEDs das armaduras | D | ✅ | — | — | — | ✅ | ✅ | — | — | — | — | — | ◐ | ⬜ | por grupo: não |
+| | **Lançador** | | | | | | | | | | | | | | | |
+| H60 | Emissor infravermelho estreito | D | ✅ | — | — | — | ✅ | — | — | — | — | — | — | ⬜ | ⬜ | sem botão no controle |
+| H61 | Mecanismo de gel | C, só a recusa | ✅ | — | — | — | 🟡 | — | — | — | — | — | — | ⬜ | ⬜ | nunca disparado por nós |
+| H62 | Luz de trajetória | D | ✅ | — | — | — | ✅ | — | — | — | — | — | — | ⬜ | ⬜ | flash verde da DJI reproduzido |
+| H63 | Contêiner de gel e botão de ejeção | — | ⬜ | — | — | — | — | — | — | — | — | — | — | — | — | manual: mecânico, sem comando |
+| | **Energia** | | | | | | | | | | | | | | | |
+| H70 | Leitura da bateria | D+ | ✅ | — | — | — | ✅ | — | — | — | — | — | ✅ | ◐ | ⬜ | tensão, %, corrente, temperatura |
+| H71 | Desligar por software | A | ⬜ | — | — | — | — | — | — | — | — | — | — | ⬜ | ⬜ | captura de `dji_sys` está no laboratório (`capture-follow/sys_poweroff.strace`), não decodificada; sem código |
+| H72 | LEDs e botão de energia da bateria | — | ⬜ | — | — | — | — | — | — | — | — | — | — | — | — | manual; sem comando conhecido; a % vem por H70 |
 
 ## Three words, three levels (fixed 2026-10-30)
 
 The owner lost the map when one word was used for three things, so the vocabulary is fixed here
 and every other page follows it:
 
-- **Phase** — only the six of the master plan, one front each: 1 body and senses (the software
-  takes the whole hardware), 2 intelligence, 3 media and blaster, 4 system, 5 twin, 6 Space.
+- **Phase** — one of the six of the master plan of 2026-10-29, which lives outside this repository:
+  1 body and senses (the software takes the whole hardware), 2 intelligence, 3 media (the plan also put
+  the blaster here; `s1.blaster` is served today), 4 system, 5 twin, 6 Space. Phase numbers in the sections
+  below are that plan's and were not revised.
 - **Stage** — only the twelve bench steps of phase 1 (the table below): 1 capture, 2 backup, 3 chroot,
   4 stop the stock, 5 drive, 6 events and LEDs, 7 camera, 8 audio, 9 app, 10 restore, 11 frames,
   12 inference.
@@ -24,6 +125,8 @@ and every other page follows it:
   creates a stage or a phase. The inventory of items is the section "Inventory sweep" below.
 
 ## What lives where
+
+The S1's documents live in `docs/s1/`, apart from the duck's. The owner, 2026-11-01: "pato e s1 não se misturam. Eu nem pato tenho. Usam a mesma estrutura do diretorio apenas".
 
 Two trees, one rule (owner, 2026-10-30): **anything that reproduces a proof is in this repository**,
 under `scripts/s1/` — the bench (`bench.sh`) and its self-test against a stand-in `adb`
@@ -37,51 +140,51 @@ never committed), the ONNX Runtime and rootfs builds — each cited here by path
 
 | | |
 |---|---|
-| The S1's body speaks DUML/V1 on `/dev/ttyS3` | **yes** — wheels and gimbal moved on 2026-10-29 from frames the lab encoder built; `s1-duml` reproduces those exact bytes (`cargo test -p s1-duml`, 14 tests, 13 of them against `tests/fixtures/*.bin`) |
-| The heartbeat `0x3f/0x60` is what arms the chassis | **yes** — without it streamed, nothing moved; the stock firmware sends it at 91.5 Hz (3201 frames in 34.98 s of `captures/ttyS3_drive.strace`) |
-| The contract's clients drive this body unchanged | **in code and tests** — `s1d` serves `robot.move/head/stop/enable/init/relax/health/subscribe/mode/policies/flashlight` (`cargo test -p s1d`, 19 tests incl. the deadman against a file body and every robot route of the contract); the bench says whether the robot agrees |
+| The S1's body speaks DUML/V1 on `/dev/ttyS3` | **yes** — wheels and gimbal moved on 2026-10-29 from frames the lab encoder built; `s1-duml` reproduces those exact bytes (`cargo test -p s1-duml`, 42 tests, many against `tests/fixtures/*.bin`) |
+| The heartbeat `0x3f/0x60` is what arms the chassis | **yes** — without it streamed, nothing moved; the stock firmware sends it at 91.5 Hz (3201 frames in 34.98 s of `captures/ttyS3_drive.strace`, recounted with `duml-strace.py`). What we send is proroklab's bytes; the stock's own (`--heartbeat stock`) has never been sent |
+| The contract's clients drive this body unchanged | **`netpadd` and `robotctl` ran on the robot; `mediad` never has.** `s1d` serves the routes listed in [`s1-commands.md`](../robot/s1-commands.md) (`cargo test -p s1d`, 61 tests, including the fake run). `mediad` is not installed by `s1-push.sh`, has never been built for this target, and takes only UYVY while the camera gives NV12. `robotctl` works in part: some of its texts are the duck's |
 | Our binaries exist for the S1's CPU | **yes** — `cargo s1 -p s1d -p netpadd -p robotctl` → three `ELF 32-bit LSB pie executable, ARM, EABI5` (artefacts below) |
-| A Debian armhf userland for the chroot | **built on the Mac** (222 packages; tar and list among the artefacts) — `scripts/s1/build-rootfs.sh`: docker `linux/arm/v7` `debian:bookworm-slim` runs natively here (`uname -m` → `armv7l`, `ldd --version` → `GLIBC 2.36-9+deb12u14`) |
+| A Debian armhf userland for the chroot | **built on the Mac** (222 packages; tar and list among the artefacts) — `scripts/s1/build-rootfs.sh`: docker `linux/arm/v7` `debian:bookworm-slim` runs natively here (`uname -m` → `armv7l`, `ldd --version` → `GLIBC 2.36-9+deb12u14`). It has no `gst-plugins-bad`, `ugly` or `nice`, which video needs |
 | ONNX Runtime for armv7 | **built** — `scripts/s1/build-onnxruntime.sh` (v1.28.0, cross per onnxruntime.ai's "Cross compiling on Linux"): `libonnxruntime.so.1.28.0`, 19179636 bytes, `ELF 32-bit LSB shared object, ARM, EABI5`; the first attempt died on `-Werror=restrict` (GCC 12, `char_traits`, 32-bit) and the script now passes cmake `--compile-no-warning-as-error`, which is what ORT's own `build.py` does |
-| The detector's CPU path runs over that library | **on the Mac, on a synthetic frame** — `s1-infer` (the ONNX measurement `duck-bench` does not make: that binary is the NPU path, and the S1 has no NPU) over `duck_detect.onnx` from the Hub: p50 13.1 ms at 320×320 on this Mac with the macOS ORT 1.28.0 release; the S1's own number is stage 12 |
-| Everything the robot has to answer | as of 2026-10-31 00:xx: stages 1–6 done on the robot, telemetry closed (item 1, every delivery proven live), 7 and 8 measured but the frame and the microphone pending (`s1-cam`, mixer route), 9–12 pending — the stage table and the dated sections below are the truth, this row only points at them |
+| The detector's CPU path runs over that library | **on the S1, by hand, 1740.9 ms per 320×320 frame** with NEON (2341.8 ms without), on the robot's own frame; nothing feeds it live. `s1-infer` is the measurement `duck-bench` does not make: that binary is the NPU path, and the S1 has no NPU. Mac reference 12.0 ms |
+| Everything else | the stage table and the dated sections below |
 
 ## The bench, stage by stage
 
 Run from the Mac with `scripts/s1/bench.sh <stage>`; `S1_HOST` names the robot (root adb on
 5555, enabled from the app's Lab — `pierluigizagaria/robomaster-s1-hacks`). Artefacts land under
 `~/Development/RoboMaster-S1/out/<date>-poc2/<stage>/` and are cited here as `artefato: <path>
-sha256=<hex>` lines; `bench.sh verify-record docs/project/s1-bringup.md` checks every one.
+sha256=<hex>` lines; `bench.sh verify-record docs/s1/project/s1-bringup.md` checks that each exists with its hash, not what a sentence says about it.
 
 Order is not optional: capture **before** stopping anything (the lesson of the first PoC, which
 killed the stock services before learning how they bring up audio and camera), back up before any
 write, prove execution before pushing, free the UART before driving. Wheels off the ground for
 stages 5, 6 and 8.
 
-| # | stage | what it proves | status |
+| # | stage | what it does | status |
 |---|---|---|---|
-| 1 | `capture` | cpuinfo, partitions, mounts, `getenforce`, the UART's baud (`stty`), and `strace` of `dji_hdvt_uav` and `dji_camera` while the app is used: LED effects, armour hits, button, audio and camera init, `top` during person recognition | **done 2026-10-30** (below) |
-| 2 | `backup` | every partition dumped, SHA on robot == SHA on Mac | **done 2026-10-30** (below): 14 on the card, 11 pulled, SHA equal |
-| 3 | `exec` | a binary of ours runs on the robot (`/data`, or `setenforce 0` by the owner, or the microSD); the chroot answers `uname -a` and `ldd --version` | **done 2026-10-30** (below) — gate passed |
-| 4 | `stop` | `hdvt_uav` and `monitor` stopped; nobody holds `ttyS3` | **done 2026-10-30** (below) |
-| 5 | `drive` + `items` | `s1d` + `netpadd` + `robotctl health` in the chroot; `s1-e2e robot` from the Mac: the pad over UDP into `netpadd` (wheels, turn, strafe, gimbal, lights, sounds, arm/disarm), the S1 list through `s1ctl --tcp`, telemetry | **wheels and gimbal done 2026-10-30** (below, owner's witness); **every item pre-tested on the Mac** (`s1-e2e fake`, 40 of 40, below); the robot session runs the same program minus the two wire-only items (a test holds the two lists equal); telemetry **done 2026-10-30 (night)**: the controller's own boot-time push and the gimbal's `0x04/0x05` decoded by layout, held to two real captures and confirmed on the robot (stages `telemetry`, `telemetry-gimbal`, below) |
-| 6 | `events` | `robotctl flashlight` lights the LEDs; every effect of the real `0x3f/0x32`; armour hits, IR and the button as `s1.event` | **done 2026-10-30 (night)**, the owner watching: five body-LED effects, the launcher's trail light, 23 armour hits on the four plates, two button presses and the infrared hits as `s1.event` (section "Robot session") |
-| 7 | `camera` | formats listed; `s1-cam` replays the stock camera process's own sequence (input, three private controls, the format, five MMAP buffers), holds every answer to the recording and streams only when all matched: three frames to files and ten seconds of rate | **done 2026-10-31 00:4x–00:5x** (section "Item 2"): the whole sequence matched the recording, 30.1 fps, 395 frames, 0 dropped, CPU 0.07 s in 13 s, no reboot; the first frame has the owner's Mandalorian in it (`frame.png`) |
-| 8 | `audio` | mic as a 60 s stream through `arecord`; `aplay` while driving, CPU sampled | speaker **proven** (owner, four times); mic: device `hw:0,0` right channel, no signal yet (2026-10-30) |
-| 9 | `app` | what the DJI app does with the stock stopped | pending (informative) |
-| 10 | `restore` | reboot brings the stock back; the app drives | measured twice 2026-10-30 (stock back, app drove), artefact pending |
-| 11 | `frames` | frames at 720p and 360p: fps and CPU — by `s1-cam` over the stock's own call sequence (no `gst-launch v4l2src`: same generic path that rebooted the robot) | pending — **gates the port** (360p was never captured from the stock; a 360p `S_FMT` is a hypothesis and does not go to the robot) |
-| 12 | `infer` | `s1-infer` (the detector's ONNX path) on the S1 with `libonnxruntime` armv7 and on the Mac over the same frames: ms/frame on both tiers | **measured 2026-10-31 01:1x on the robot's own frame** (section "Stage 12"): S1 **2342 ms** per frame on the CPU path, Mac 12.9 ms — the number that decides the accelerator question, with two levers still to measure (NEON build flags, threads) |
-| — | `telemetry` | with the stock alive and nothing of ours on the UART: the stock controller process relaunched under `strace` from its first write (its boot-time DDS subscription, the subject list of the 176 B push) and 40 s of UART reads while the owner drives the gimbal to its stops (the `0x04/0x05` push against the manual's limits) | **done 2026-10-30, 20:55 and 21:0x** (subject list captured; gimbal push confirmed at the pitch stops, below) |
-| — | `telemetry-free` | stock stopped, `s1d` armed (chassis work mode 1, gimbal work mode 0), wheels off the ground: the head swept by `robot.head` while `s1.telemetry` is sampled — the body must not follow, ground yaw − chassis-relative yaw must equal the attitude yaw; then the head held while the owner tilts the robot — which pitch field is the ground's. `s1d`'s UART reads under `strace` alongside | **done 2026-10-30, 22:00–22:3x** (below): head obeyed ±60° to 0.1°, body still (owner's eyes), relation holds to 1.1°, pitch at 0 is ground frame; and the ESC/battery block comes in two orders between boots, now both read (below) |
+| 1 | `capture` | cpuinfo, partitions, mounts, `getenforce`, the UART's baud (`stty`), and `strace` of `dji_hdvt_uav`, `dji_sys` and `dji_camera` while the app is used, `top` alongside | **done 2026-10-30** (below) |
+| 2 | `backup` | every partition dumped, SHA on robot == SHA on Mac | **done 2026-10-30**: 14 on the card, 11 pulled, SHA equal. Restoring an image has never been tried |
+| 3 | `exec` | a binary of ours runs from `/data`; the chroot answers `uname -a` and `ldd --version` | **done 2026-10-30** |
+| 4 | `stop` | `dji_hdvt_uav` and `dji_monitor` stopped; nobody holds `ttyS3` | **done 2026-10-30** |
+| 5 | `drive` + `items` | `s1d` + `netpadd` + `robotctl health` in the chroot; `s1-e2e robot` from the Mac | **on the robot, wheels in the air, 2026-10-30:** pad items through the real `netpadd`, datagrams from `s1-e2e`; owner's witness transcribed by hand, not a passing run of the tool. **Telemetry done the same night.** `s1-e2e fake` passes 42 of 42 today. On the floor: no valid proof |
+| 6 | `events` | `robotctl flashlight`; the effects of `0x3f/0x32`; armour hits, infrared and the button as `s1.event` | **done 2026-10-30 (night)**, the owner watching: five body-LED effects, the launcher's trail light, 23 armour hits on plates 1 to 4, two button presses, infrared hits. Per-group lights and a gimbal plate: no proof |
+| 7 | `camera` | formats listed; `s1-cam` replays the stock camera process's own sequence and streams only when all 27 steps matched: frames to files and ten seconds of rate | **done 2026-10-31** ("Item 2"): 30.1 fps, 395 frames, 0 dropped, no reboot. To files only: no live output exists |
+| 8 | `audio` | mic as a 60 s stream through `arecord`, both channels measured; `aplay` while driving, CPU sampled | speaker **proven** by the owner's ear; mic: `hw:0,0`, **left** channel, voice recognised by the owner on 2026-10-31 ("Item 3, CLOSED"). `s1d` has no microphone route; `s1.volume` has no valid proof |
+| 9 | `app` | what the DJI app does with the stock stopped | **never run** |
+| 10 | `restore` | reboot brings the stock back; the app drives | seen twice on 2026-10-30, **no artefact** |
+| 11 | `frames` | records `blocked.txt` and stops (`scripts/s1/bench.sh:396-403`) | **measures nothing.** The 720p rate is stage 7's. 360p was never captured from the stock and a 360p `S_FMT` does not go to the robot |
+| 12 | `infer` | `s1-infer` (the detector's ONNX path) on the S1 and on the Mac over the same frames | **measured 2026-10-31:** S1 2341.8 ms, 1740.9 ms with NEON; Mac 12.0 ms. CPU per frame is not reliable (see below) |
+| — | `telemetry` | stock alive: the stock controller process relaunched under `strace` from its first write, its boot-time subscription | **done 2026-10-30, 20:55** |
+| — | `telemetry-gimbal` | stock alive, app open: 40 s of UART reads while the owner drives the gimbal | **done 2026-10-30, 21:0x** |
+| — | `telemetry-free` | stock stopped, `s1d` armed, wheels off the ground: head swept by `robot.head` while `s1.telemetry` is sampled; then the robot tilted by hand | **done 2026-10-30, 22:00–22:3x and 23:5x**: head to 0.1° at ±60°; pitch at 0 is ground frame; the ESC/battery block comes in two orders |
+| — | `up`, `floor` | start the daemons from a cold robot; the floor items of `s1-e2e robot` | **exist in the code, without valid proof.** Their only run was the discarded session |
 
 The `items` stage is `s1-e2e robot` alone, with the daemons already up; `e2e` is the same program
 with no robot (`s1-e2e fake`), the pre-test every stage-5 and stage-6 item passes before the robot
 is plugged in; `bench-selftest.sh` runs every other stage against a stand-in `adb` and checks what
-each one asks of the robot.
+each one asks of the robot. `s1-push.sh` does not install `mediad`, `s1-infer` or `pet-detect`; stage 12 pushes `s1-infer` itself.
 
-Viability of the port = stages 3, 5, 11 and 12 proven. 6, 7 and 8 are what phase 2 (intelligence)
-consumes; 9 informs; 2 is the prerequisite of phase 4's autostart, not of this phase.
 
 ## Measured on the Mac, 2026-10-30 (night)
 
@@ -141,12 +244,14 @@ Artefacts of the night (the bench adds its own lines per stage):
 
 The owner's order: nothing goes back to the robot until the whole of phase 1 has been exercised by
 the same mechanism a duck is driven with, and every item is validated in one end-to-end run. The
-mechanism is `pad_map::wire` datagrams (what `duckctl udp-pad` sends) into `netpadd`, `robotctl`
+mechanism is `pad_map::wire` datagrams into `netpadd`, `robotctl`
 and `s1ctl` on the robot socket, and `s1d` on the wire; `s1-e2e fake` starts `s1d --fake` (frames
 to a file, pushes from a file — `--fake-in`), `netpadd`, and runs the real `robotctl` and `s1ctl`
 binaries beside them, then judges every item on the bytes the loop wrote: against DJI's own
 library's frames (`dji-oracle.py`, byte for byte) or the frames captured off the robot. It is also a
 test (`s1d/tests/e2e.rs`, so `cargo test -p s1d` runs it) and a bench stage (`bench.sh e2e`).
+
+> **Correction, 2026-11-01:** the datagrams are built by `s1-e2e` itself (`Packet::from_axes`, `s1d/src/bin/s1-e2e.rs:313`), not by `duckctl udp-pad`. The format is the same; the real `duckctl` has never been in this chain on the S1.
 
 ```
 cargo test -p s1-duml -p s1d     → 70 passed, 0 failed (33 + 37; the e2e test builds netpadd and robotctl itself, 23 s)
@@ -155,6 +260,8 @@ scripts/s1/e2e-refute.sh         → the planted byte was refused; the bench can
 scripts/s1/bench-selftest.sh     → every stage ran and asked what it must (43 artefact lines verified)
 RUSTFLAGS="-D warnings" cargo clippy -p s1-duml -p s1d --all-targets → clean · cargo fmt --check → clean
 ```
+
+> **Correction, 2026-11-01:** those counts are that night's. The test now requires 42 of 42 (`s1d/tests/e2e.rs:51`) and the suites have 42 + 61 tests. The kept report (`e2e/work/report.txt`) is from a later run: 3878 frames, round trip p50 0.2 ms, max 0.9 ms, where the text below says 4112 frames and the line above says p50 0.1 ms, max 0.5 ms; those figures no longer have their file.
 
 The 40 items, in the order the robot session repeats them (`bench.sh drive` runs `s1-e2e robot`:
 the same names and the same order, minus the two wire-only checks — the test
@@ -213,9 +320,9 @@ had 32 items to the fake's 38 and its own JSON client — now the same program (
 missing items, a test over both lists); the deadman and F15 were not exercised end to end, and
 are. `bench-selftest.sh` runs `s1-e2e robot` against port 1 (`S1_TCP`, `S1_UDP`), which refuses,
 so a forward left on 9000 by a robot session cannot make the self-test drive a robot; `bench.sh
-restore` removes that forward. `bench.sh drive` passes `--volume-control` only when
-`S1_VOLUME_CONTROL` names the speaker's control (stage 8's dump), so the volume item is refused
-by name until then, not reported as passed.
+restore` removes that forward.
+
+> **Correction, 2026-11-01:** `bench.sh` now defaults `S1_VOLUME_CONTROL` to `Speaker` (`scripts/s1/bench.sh:130`), so the daemon always gets a control name unless the variable is set empty. That name comes from the discarded floor session: it has no valid proof.
 
 One choice the pre-test could not settle, settled on the robot (2026-10-30, night): `s1.blaster`
 addresses the blaster host (`0x17`) directly, while DJI's library sends the fire command to the stock
@@ -235,7 +342,7 @@ F2's expected hex planted →
 6 above are the run's own refutations: each failed with the text quoted before its fix.
 
 What the pre-test cannot do, and the robot session does, in this order: `exec` (remount `/system`
-into the chroot), `stop`, `drive` (the 38 items, wheels off the ground; the DDS answer codes with
+into the chroot), `stop`, `drive` (the items, wheels off the ground; the DDS answer codes with
 the push ack in place, and once more after `robot.enable` so the subscription is asked while the
 heartbeat streams), `events`, `camera`, `audio`, `frames`, `infer`, `restore` — then `capture` again
 with the stock alive for the button-press power-off (`dji_sys`, the frame behind `s1.power`) and the
@@ -260,15 +367,15 @@ Measured:
   (`hdvt_uav.strace`, `write(16, …)`): solid teal `01 ff00 00 7f 46 00 0000 0000 3f00` and white
   breath `02 ff00 ff ff ff 00 f401 f401 3f00`. The SDK's `0x3f/0x33` never appears. `s1-duml`'s
   `system_led` now reproduces both byte for byte (`tests/fixtures/led_stock_{solid,breath}_real.bin`).
-- Stock traffic in 70 s: `0x04/0x69` 6093 and heartbeat `0x3f/0x60` 6084 writes (~87 Hz each),
+- Stock traffic in 70 s (this morning's strace was later overwritten, see "Capture re-run of 16:58": these counts no longer have their file): `0x04/0x69` 6093 and heartbeat `0x3f/0x60` 6084 writes (~87 Hz each),
   1849 acks of DDS pushes (`0x48/0x08`, attri `0xa0`, data `01` — **the controller acks every push**;
-  `s1d` does not yet), `0x0a/0x53` 672 (~10 Hz), `0x04/0x4c` 43, `0x03/0xd7` 27, `0x00/0x58` 14.
+  `s1d` did not yet then; it does now, `dds::push_ack`), `0x0a/0x53` 672 (~10 Hz), `0x04/0x4c` 43, `0x03/0xd7` 27, `0x00/0x58` 14.
   No `0x3f/0x02` armour, `0x3f/0x10` IR or `0x3f/0x51` blaster frames were written by the controller
   in this window (they would be *reads*, and `strace -s 64` truncates reads mid-stream: 4324
   truncated payloads).
 - **A microSD is in the robot**: `mmcblk1p1` 29.8 GB vfat at `/sdcard`. eMMC 3.8 GB: `system` 256 MB,
   `userdata` 1.1 GB, `blackbox` 1.9 GB, `cache` 256 MB, `recovery`/`normal` 16 MB, `vendor`/`amt`
-  64 MB. `/data` 679 MB free, `ext4 rw` (no `noexec` flag in `/proc/mounts`).
+  64 MB. `/data` 679 MB free that morning (the kept `df.txt` is the 16:58 run: 442 MB, after the rootfs), `ext4 rw` (no `noexec` flag in `/proc/mounts`).
 - 5 cores ARMv7 rev 5, NEON, VFPv4 (`/proc/cpuinfo`). `dji_camera` was streaming (`VIDIOC_DQBUF`).
 - Fixed on the way: the S1's busybox 1.25.1 `timeout` wants `-t SECS` (the bare form exits 127);
   `bench.sh` uses it in stages 1, 5 and 6. Backup staging moved to `/sdcard/bk`.
@@ -337,7 +444,7 @@ shell has no `chroot` or `head`, both are busybox applets here. `busybox chroot 
 **Stage 5, drive — wheels and gimbal proven, telemetry open.** `s1d` and `netpadd` run in the
 chroot (they only survive the adb shell as `(setsid nohup … </dev/null >log 2>&1 &); sleep 1` —
 measured: plain `nohup … &` left an empty log, and `setsid` without the sleep lost the race once).
-`robotctl health --json` in the chroot: `healthy: true`, 99.93 Hz, 0 missed, 0 bus errors;
+`robotctl health --json` in the chroot: `healthy: true`, 0 missed, 0 bus errors, 99.93 Hz then (the kept `drive/health.json` is a later run of the same stage: 99.98 Hz);
 `robot.mode` → `roller`, `robot.modelApi` → 2. Without a gamepad the Mac drives the JSON-RPC
 socket through `adb forward tcp:9000 localfilesystem:/data/debian/run/robotd.sock` (`drive.py`):
 `robot.enable` → `armed`; 30 × `robot.move` forward 0.2 m/s, 20 × yaw 0.6 rad/s, 20 × strafe
@@ -388,6 +495,8 @@ tcp:9000`), the pad over UDP to the robot's `netpadd`, and judged by the owner i
 the next one ("A cada teste que fizer me diga aqui para te dizer se VI a execução de fato").
 Wheels off the ground throughout; the launcher aimed at a white wall.
 
+> **Correction, 2026-11-01:** this is the closest the S1 has come to the duck's path, and it is not that path. The pad's datagrams came from `s1-e2e`, not from `duckctl udp-pad`; the browser played no part. `s1-e2e robot` never passed a run by itself: the witnesses were transcribed by hand (`drive/e2e.log`: 11 lines `WITNESS (chat)` and 2 `unwitnessed`), and `s1-e2e` counts an unwitnessed item as failed (`s1d/src/bin/s1-e2e.rs:1970`).
+
 **Seen by the owner:** chirp by `robotctl quack`; the pad end to end (Start arms, forward, turn,
 strafe, release, gimbal by D-pad right, Home white on/off, RT chirp with LT wheee held without a
 stutter, Start disarms); `s1ctl version`; F16 wheels 100 rpm; the deadman (one move, stops alone);
@@ -400,7 +509,7 @@ positive = up (`rm_ctrl.py rotate_with_degree`), the duck's the opposite; `tick:
 
 **Accepted, not observable in the air:** follow modes F1/F4/F7 (the body must be on the floor to
 turn after the gimbal), F6 goto, F11 armour sensitivity, F12 PWM, F15 chassis work mode. They stay
-🟡 until a floor session; F1 is the owner's priority ("é um movimento de destaque quando tivermos a
+🟡: the one floor session held was discarded by the owner, so none of them has valid proof today. F1 is the owner's priority ("é um movimento de destaque quando tivermos a
 inteligência").
 
 **Telemetry (F18), still refused.** A `0x48/0x02` node reset was tried once: afterwards the
@@ -434,8 +543,7 @@ until a run that ends with the stock alive.
 
 **Bench defect found:** a reboot drops the chroot's `/dev`, `/proc`, `/sys` and `/mnt/system`
 mounts of stage 3, and `s1d` dies at start ("failed to generate random data": no `/dev/urandom`).
-The daemons were started by hand after re-mounting; the stage that starts them must re-run the
-guarded mount line (to fix, with the self-test).
+The daemons were started by hand after re-mounting. Fixed since: `need_chroot` re-makes the mounts in every stage that enters the chroot (`scripts/s1/bench.sh:105-106`).
 
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/drive/e2e.log sha256=0b3cf9f587c0920444d46848305df24533d7c81ebb6e3f068c73c64a7e1585f5
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/items/e2e.log sha256=11233b0a47286b123693d64642bce72db3606c0a1037dfb026100bca8f5cf954
@@ -485,8 +593,8 @@ values are the library's own (`gimbal_free_mode`, `gimbal_yaw_follow_mode`). The
 whole setup (`0x3f/0x19 00` to the motion controller, `0x3f/0x66 02 00` to the chassis, both from
 sender `0x02`); F4 needs no further capture. The mic and the volume do not pass the UART (camera
 and ALSA processes) and are stage 8's.
-The power-off trace of `dji_sys` (`/data/sys_poweroff.strace`, 17:15) stays on the robot for the
-next boot. Stage 7 started after the owner closed the app: formats listed (YUYV, NV12, NV21, two
+The power-off trace of `dji_sys` (`/data/sys_poweroff.strace`, 17:15) is in the lab, pulled later and
+not decoded yet (artefact below): no power-off frame has been read out of it. Stage 7 started after the owner closed the app: formats listed (YUYV, NV12, NV21, two
 10-bit Bayer), then `VIDIOC_S_FMT` 1280×720 NV12 "Invalid argument" **while the robot was going
 offline** (powered off by the button at the end of the script): inconclusive, to repeat. Stages
 8, 11 and 12 were not reached.
@@ -511,8 +619,11 @@ five MMAP buffers) — `s1-cam`, the next piece of code, and the base of stage 1
 `mediad` source. After the stock camera process was killed twice under strace, opening the device
 from Android gave `ENODEV` until the next reboot; a power cycle precedes stage 7.
 
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/capture-follow/sys_poweroff.strace sha256=71b46a450c90a237075dbd1ade62be65f288b5543446486c39d83e41f0e8d25f
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/camera/dji_camera_start.strace sha256=d11b0d55d6d7e430b575f58a5a3404a9a18d0a6469654e6811ff6a93a6c2dd48
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/camera/dji_camera_v4l2_decoded.strace sha256=ba572e0b80b6826d01245d5038902493dc098638d3ad126a821a820e3c2adcef
+
+> **Correction, 2026-11-01:** this section's microphone conclusion is withdrawn. The voice is on the **left** channel and our capture holds it: see "Item 3, the microphone, CLOSED on the robot". And the mixer's `contents` name `Speaker Volume` is not what `amixer sset` takes; the bench passes `Speaker` (`scripts/s1/bench.sh:130`), a name from the discarded session, so `s1.volume` has no valid proof. The times below are 18:05–18:08 by the artefacts' mtimes (see "Corrections after the cold reader").
 
 **Stage 8, audio (2026-10-30, 18:00–18:40), three runs (the first two archived under their
 stamps).** The speaker is **proven by the owner's ear, several times over the day**: the chirp by
@@ -638,17 +749,19 @@ is the robot turning — the yaw at 8 stayed near 0° while the yaw at 4 held 92
 exactly that following, and names the two fields: 8 relative to the chassis, 4 in the ground frame.
 The yaw field is confirmed by the quaternion, which agrees with it to within 1.2° at both extremes
 (−94.7° for −95.1°, 122.6° for 121.4°).
-`events::GimbalPush` is confirmed field by field; telemetry is closed — **reopened by the owner at
-~21:15 and closed again with every delivery proven live, "Item 1 closed on the robot" below.**
+`events::GimbalPush` is confirmed field by field. Telemetry as a whole was reopened by the owner at
+~21:15 and closed with every delivery proven live in "Item 1 closed on the robot" below.
 
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-gimbal/hdvt_gimbal_reads.strace sha256=cefd0ab0a759b8339ac1e4788f2989e6638cf172cd884b8a753cd6db1e3d45e7
-- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-gimbal/gimbal_pushes.txt sha256=a0ceece4b79f30366f6d13f500470e23789feb42cead8900fa0837a792d2aea4 The DJI on-board runtime (`dji_scratch`) subscribes only when a script starts
+- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-gimbal/gimbal_pushes.txt sha256=a0ceece4b79f30366f6d13f500470e23789feb42cead8900fa0837a792d2aea4
+
+The DJI on-board runtime (`dji_scratch`) subscribes only when a script starts
 (`script_framework.py:94`): node `0xC9`, msg 0, flags 0, ten subjects at 50 Hz, accepting retcode
 `0` or `0x23` (`rm_module.py:1300`, `rm_ctrl.py:5184`).
 
 ### Item 1 closed on the robot: the gimbal freed, the frames fixed, and a block that lies (2026-10-30, 22:00–22:3x)
 
-"Telemetry is closed" above was written before the owner's two corrections (~21:15: the head is
+The sections above were written before the owner's two corrections (~21:15: the head is
 relative to the body; following is never inherited) and this is what closed them, through `s1d`'s
 own list (stage `telemetry-free`, `scripts/s1/telemetry-free.py`): stock stopped, daemons up,
 `robot.enable` (which now sends `0x3f/0x19 01` and `0x04/0x4c 00 00`), `robot.head` to +60°, −60°,
@@ -662,7 +775,7 @@ by hand with the owner watching the gimbal, then a 25 s tilt window.
 - **Head obeyed, body still.** Commanded +60 (the duck's left) → chassis-relative yaw −59.9 (DJI's
   right positive); −60 → +59.9; worst error 0.1° (`verdict.txt`, 471 samples). The owner saw the
   gimbal turn left and back on the single command and saw the wheels not move during the sweeps
-  (his "nothing happened" was the wheels; the sweep he had not watched). Attitude yaw span 0.1°.
+  (the owner's "nothing happened" was about the wheels; the sweep had not been watched). Attitude yaw span 0.1°.
   The judge's own `body_still` line in `verdict.txt` says NO on an rpm of 10 770 — that number is
   the block below, not a wheel, and the judge now says `body_still undecided` when no wheel speeds
   are published instead.
@@ -673,7 +786,7 @@ by hand with the owner watching the gimbal, then a 25 s tilt window.
   difference of the two ground headings.
 - **Pitch at 0 is the ground frame.** Tilt window (`tilt.ndjson`, 230 samples): the owner tilted
   the chassis −17.4° then +23.1° (status bit `on_slope` on both ways); the gimbal push's pitch
-  stayed 0.0 through −17° and rose only to +4.5 at +21.7° — the gimbal holding its pitch to the
+  stayed 0.0 through −17° and rose only to +4.5 at +21.7° and +6.1 at the +23° extreme (`tilt.ndjson`) — the gimbal holding its pitch to the
   ground until its −20° mechanical stop, exactly as the yaw at 4 is the ground's. The field at 2
   (−4.9..+4.5 across all captures, no relation to either pitch) stays unnamed; the duck does not
   need it. (The strace alongside caught only one instant of controller pushes — `strace -p` on
@@ -761,7 +874,7 @@ by hand with the owner watching the gimbal, then a 25 s tilt window.
   what the S1 does with it is its own).
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-free/pickup_wheels.ndjson sha256=fbf2d5ddf571492af92ae1248cc2c9f09eba4899ddbefe7cdbaaa4e3d0011980
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/telemetry-free/pickup_wheels_bits.txt sha256=351d7870d493a65cf6320882833835634372b237db3d827b3760c6eec371ecf4
-- **Safety rule to implement (owner, 2026-10-31 00:1x; not yet in code).** When the S1 is lifted
+- **Safety rule (owner, 2026-10-30 night and 2026-10-31 00:1x).** It is in the code since `75b0c60`, with a different signal and with thresholds and a sample taken from the discarded floor session (`s1d/src/tick.rs:248-259`): the mechanism has a test, the numbers have no valid origin. As written then: when the S1 is lifted
   the wheels stop; head, sounds, lights and perception keep reacting. Detector in `s1d`, from the
   measurements above: ESC rpm above an idle floor (idle jitter read ≤ 25 rpm tonight) while the
   accelerometer shows no matching motion — never the controller's velocity estimate (it climbed
@@ -790,7 +903,7 @@ by hand with the owner watching the gimbal, then a 25 s tilt window.
 
 ## Item 2, the camera: `s1-cam`, and the first picture out of the S1 (2026-10-31, 00:4x–00:5x)
 
-The owner's design decision (00:4x): 720p NV12 mirrors the duck (`mediad` captures 1280×720 and
+A design note from that session (00:4x), not checked against the owner's own words: 720p NV12 mirrors the duck (`mediad` captures 1280×720 and
 letterboxes it into the detector's 320×320 in one pass, `mediad/src/detect.rs`); what a viewer or
 the simulator receives is the configured quality, phase 3's business through the chip's H.264
 encoder the stock already uses (`hx280enc`, the fd the stock camera thread writes between its
@@ -816,7 +929,7 @@ dequeue and its requeue); no resolution the stock never showed goes to the robot
   sequence in order and nothing else; frames out of the five buffers in queue order with their
   own bytes; a driver answering another size stops at `SetFormat` with both sizes named; a second
   input stops at the third step with no `STREAMON` ever sent.
-- **The binary.** `s1d/src/bin/s1-cam.rs` (`--frames 3 --seconds 10 --out /tmp/cam`): frames as
+- **The binary (files only: it has no live output, and `s1d` does not open the camera; `mediad` takes UYVY, this is NV12).** `s1d/src/bin/s1-cam.rs` (`--frames 3 --seconds 10 --out /tmp/cam`): frames as
   raw NV12 files, then the rate from the driver's sequence numbers (gaps are drops) and the
   process's CPU time, one JSON line; a divergence is JSON and exit 3, nothing streamed. Cross-built
   for the robot (`cargo s1 -p s1d --bin s1-cam`, ELF 32-bit ARM); `s1-push.sh` installs it.
@@ -865,6 +978,8 @@ dequeue and its requeue); no resolution the stock never showed goes to the robot
 | S1 (Leadcore LC1860, 5× ARMv7 rev 5 with NEON/VFPv4 online, `libonnxruntime.so.1.28.0` armv7 built by `build-onnxruntime.sh`) | **2341.8 ms** | 2613.1 ms | 0.42 fps | 2306.7 ms | 0 |
 | Mac (arm64, ORT 1.28.0 release) | 12.9 ms | 12.9 ms | 77.4 fps | not measured | 0 |
 
+> **Correction, 2026-11-01:** the CPU-per-frame figures in this section and in "the NEON lever" are not reliable. `s1d/src/bin/s1-infer.rs:57` declares `sysconf` as returning `i64`; on ARMv7 `long` is 32 bits, so the upper half read is whatever the register held. Latency does not depend on it. Everything below that reads a core count off that number is unproven, including "one core did the work". The levers named below were pulled later: see "Stage 12, the NEON lever measured", 1740.9 ms.
+
 Zero detections on both is the expected answer of a duck detector shown a figure; what the stage
 measures is the time. **The CPU path as built is 180× the Mac and about 2.3 s a frame: nowhere
 near a live rate.** CPU time per frame equals the wall time, so the two intra-op threads the
@@ -883,6 +998,8 @@ owner's, and it is asked with this number on the table, not before.
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-30-poc2/infer/offboard.txt sha256=51ad2e0020fc32a66cbf01f4c6bdb5a58f2ae25e5f7d0089ab38f30ad3ae4e28
 
 ## Item 4, the USB port and the Coral: host mode forced with the Coral on the micro-USB (2026-10-31, 01:4x)
+
+> **Correction, 2026-11-01:** "no 5 V on the micro-USB" is an inference from a dark LED, not a reading, as "Parked" below says. The times in this and the next sections come from that session and do not all agree with each other.
 
 The ports, finally named by the owner at the robot: the box on the gimbal is the controller; its
 **micro-USB on the left side** is the Linux port (the Mac's adb over USB rides on it; the manual's
@@ -1065,7 +1182,9 @@ Wi-Fi, the DJI app closed until the last step. Artefacts in `out/2026-10-31-poc2
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/mic-lab/mic_lab_applause.py sha256=5591b57bec4940bfb423d67db2acf2defe9cef68ccce5c3d3b9a13bb5c26b692
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/mic-lab/usb_card_handover_watch.txt sha256=c0024b806d5dcb68b7d94cb5abea69e2bc47c344843ba61599b1d778d5bbd0a7
 
-## Item 3, the microphone: the stock hears the owner, our capture does not — one codec register apart (2026-10-31, 02:0x–02:4x)
+## Item 3, the microphone: a first reading, withdrawn by "CLOSED on the robot" below (2026-10-31, 02:0x–02:4x)
+
+> **Correction, 2026-11-01:** this section and the next read the recording wrongly. The recording of 02:31 does hold the voice, on the left channel, and no codec register is the difference. They stay as the record of how the error was made; the map of the codec driver remains useful.
 
 The owner power-cycled the robot with **nothing on the micro-USB**: the app saw the card at once
 (the hypothesis of the section above holds in behaviour; the mechanism is still to be read) and
@@ -1085,13 +1204,13 @@ Then ours, stage 8, twice:
   artefact; `bench-selftest.sh` runs the stage once with the device "busy" (it failed on four
   counts against the old stage) and `audio-refute.sh` plants both defects and sees them refused,
   `bench.sh` restored by hash. The stale run is archived as `audio-20261031-021147/`, cited nowhere.
-- **02:31, the fixed stage: the recording happened and holds no voice.** 60 s, stereo, fresh file.
+- **02:31, the fixed stage: the recording happened, and was read then as holding no voice (wrong).** 60 s, stereo, fresh file.
   Right channel (`mic_right.wav`, the stock's MIC1 → ADC1 path): peak −46 dB, RMS −73.6 dB, the
   per-second level a smooth −76..−69 dB drift with no speech bursts, the owner speaking for the
   first 20 s. Left channel (`mic_left.wav`, ADC2, the path the stock keeps off): peak −19 dB, RMS
   −47 dB, noise floor −44 dB — broadband noise from an unterminated input, no speech dynamics. The
   owner heard nothing played back.
-- **The codec during our capture is the stock's, except one register.** A 15 s probe with the
+- **Read then as: the codec during our capture is the stock's except one register (withdrawn).** A 15 s probe with the
   power map read mid-stream: `Capture`, `MIC1`, `MIC1 Pga`, `Adc1 Mixer`, `ADC1 Pga`, `MICB1` all
   On, the MIC2/ADC2 widgets Off — identical to the stock's app run. All 90 codec registers diffed
   between the stock running and ours running: `0x01` and `0x47` differ only by the playback bits
@@ -1100,7 +1219,7 @@ Then ours, stage 8, twice:
   and after our capture)**. No mixer control changed (`tinymix` identical before and after), so
   `0x31` is not behind any control: the stock sets it by its raw register write — the
   `adc_reg` of its `set_tinymix_value` strings — and the kernel's own stream setup writes `0x3f`
-  over it for us. **Hypothesis, the strongest of the night, not yet proven:** register `0x31` is
+  over it for us. **Hypothesis of that night, refuted the next morning:** register `0x31` is
   the ADC's configuration, `0x32` is what lets MIC1's signal through, and `0x3f` is why our right
   channel is floor only with the same bias, gains and routes.
 - **Next power-on, the one test that closes the item** (no owner speech needed for the first half):
@@ -1120,7 +1239,7 @@ Then ours, stage 8, twice:
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/mic-lab/codec_state_during_our_arecord.txt sha256=e57aeb53c9a67c306f35440a4dee566bc8b9538b6337b75c5eb0a707a09b0bbc
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/mic-lab/codec_state_after_our_arecord.txt sha256=cacbab5bf41d65f61c61430ba19ddbb308ee005f5bf8b948a7e333b024ab3906
 
-## Item 3, the microphone: register 0x31 read out of the kernel — the capture path never enables it, the playback path does (2026-10-31, morning, robot off)
+## Item 3, the microphone: register 0x31 read out of the kernel, as a map of the driver; its conclusion is withdrawn below (2026-10-31, morning, robot off)
 
 The owner's condition for the last test: no trial and error; read whatever code can be read. The
 codec driver's source (`arch/arm/plat-lc/drivers/sound/codecs/lc1160_codec.c`) is in no tree we
@@ -1145,15 +1264,15 @@ directly (load base `0xc0008000`, verified: all 22 mixer-control name strings re
     mask 0x0f, value 0x0f)` — the low nibble back to `0xf` when the stream is torn down. `0x3f` is
     therefore `0x32` with its low nibble released: the idle value.
   (`substream->stream` is the word at `+0x30` of `struct snd_pcm_substream` in 3.10; 0 = playback.)
-- **This explains every reading of the night.** With the stock, `dji_hdvt_uav` keeps the
+- **What this was then taken to explain (withdrawn in the next section).** With the stock, `dji_hdvt_uav` keeps the
   playback stream open from boot (pcm0p held by pid 233) → `0x31 = 0x32` → the capture's data
   flows. Stage 8 stops the stock, the playback stream closes → `0x31 → 0x3f`; our capture's own
   setup writes only `0x14 := 0x22`, never `0x31` → the SoC's capture DMA runs (hw_ptr advanced at
   48 kHz) over a codec whose interface is in its idle state → the right channel's samples are
   mostly exact zeros (astats "noise floor −inf", RMS −73 dB), the left channel the free noise of an
   unterminated ADC2. The microphone, bias, gains and routes were all right; the codec's I2S/DAC-side
-  register that the capture path depends on was never programmed. **Mechanism read from code;
-  what remains hypothesis is only that the capture *depends* on it, which the next test measures.**
+  register was never programmed. The mechanism was read from code; that the capture depends on it
+  was refuted by the next test.
 - **The test, no longer blind (next power-on):** (1) stop the stock as stage 8 does; start
   `arecord` alone: read `0x31` (expected `0x3f`), the right channel zeros; (2) with the capture
   still running, start a 48 kHz playback (`aplay` of a stock wav or silence): read `0x31` (expected
@@ -1201,8 +1320,8 @@ by the stages, every reading in `mic-lab/`):**
   Boost` on, `MIC2 Volume` 29) carries the usable signal; the right channel carries the same voice
   25 dB down. Stage 8's comment and its `mic_right.wav` split picked the wrong channel (from the
   2026-10-30 run, when the left channel was a DC constant — a different boot state after
-  `dji_camera` had been killed twice under strace; not reproduced since). **To fix in the stage:**
-  analyse both channels and keep the left as the microphone; proposed to the owner, not yet done.
+  `dji_camera` had been killed twice under strace; not reproduced since). Done in the stage since: it measures both channels and keeps
+  the left as the microphone (`scripts/s1/bench.sh:376-380`).
 - The kernel's power widgets report the left (ADC2) path **Off** while its enable bits are set at
   the register level: the stock's four control writes at boot (`mic_pga`, `mic_boost`, `adc_gain`,
   `adc_reg` by numeric id) leave that path enabled outside the kernel's power management, and the
@@ -1259,10 +1378,10 @@ stock stopped by the stages (the playback device is held by the stock until then
   plainly (−32..−42 dB against a −50 dB floor in exactly the scratched windows, `pet_run2.wav`), the
   classifier never left "normal" (maximum probability 0.31 in run 1, 0.11 in run 2, threshold
   0.95). The model was trained on the duck's head microphone; the S1's box sounds different to it.
-  Hardware and pipeline proven; phase 2 trains on S1 recordings (run 2 is the first labelled one;
+  Run by hand: nothing of this is in `s1d` or in `s1-push.sh`. Phase 2 would train on S1 recordings (run 2 is the first labelled one;
   `pet-features` is the feature extractor the upstream training used).
 - **Stage 12's lever, started:** `build-onnxruntime.sh` now takes `ORT_ARCH_FLAGS`; a build with
-  `-march=armv7-a -mfpu=neon-vfpv4 -mfloat-abi=hard` is running into `out/onnxruntime-neon/`. The
+  `-march=armv7-a -mfpu=neon-vfpv4 -mfloat-abi=hard` was started into `out/onnxruntime-neon/`. The
   number to beat is 2342 ms per 320×320 frame; the duck's own pace is two inferences a second.
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/synth/chirp_seed7.wav sha256=fdba366cf76e9e7489b9ed7daeacc7e2f73703cd60c439d2b801931ee6dcde9f
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/synth/wheee_seed7.wav sha256=5143997d38b986070f9134c3d1132a25b4342b971124aa4ddff6f868c2772b6b
@@ -1284,64 +1403,25 @@ stage 12 and run over the real 720p frame (`camera/frame.png`), stock stopped:
 
 | runtime | p50 per 320×320 inference | p95 | CPU per frame |
 |---|---|---|---|
-| S1, baseline (2026-10-30, no NEON) | 2341.8 ms | 2613.1 ms | ≈ wall (one core) |
-| **S1, NEON (today)** | **1740.9 ms** | 1918.3 ms | 2213.3 ms (≈1.3 cores) |
+| S1, baseline (2026-10-30, no NEON) | 2341.8 ms | 2613.1 ms | 2306.7 ms (not reliable) |
+| **S1, NEON (2026-10-31)** | **1740.9 ms** | 1918.3 ms | 2213.3 ms (not reliable) |
 | Mac, reference | 12.0 ms | 12.2 ms | — |
 
 NEON buys 26 %. The duck's own pace is two inferences a second (≤ 500 ms each, a tenth of a core
 on its NPU, `npu-bringup.md`); the S1's Cortex-A7 is 3.5× away from it with this FP32 model at
-320×320, and threads do not close the gap (1.3 cores busy for one inference). The levers left are
+320×320. What threads buy is not measured: the CPU figure is not reliable (see stage 12). The levers left are
 on the model side — an INT8 quantisation of `duck_detect` (ONNX Runtime's ARM NEON int8 kernels),
-a smaller input — or off the S1's CPU: the Coral through the OTG Y cable (ordered), or the Mac.
+a smaller input — or off the S1's CPU: the Coral through a self-powered OTG hub (no part has been bought; that is the owner's decision), or the Mac.
 That choice is the owner's phase-2 decision; the numbers are on the table. **The robot restarted by
 itself twice during the morning** (uptime 63 s at 12:4x after a second drop; adb refused, the Lab
-re-enabled it): to watch the battery level at the next power-on before reading more into it.
+re-enabled it): to watch the battery level at the next power-on before reading more into it. Never investigated since; still open.
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/infer/onboard.txt sha256=48b4e127a7871ce7cf030377f7d6b76b38219a9c7db767d7b722288c8241032d
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/infer/offboard.txt sha256=a07594a8bdeb7b15c775bd87d3bd42db5de932fcf35580f587f10f6abc07dc91
 - artefato: /Users/alessandro/Development/RoboMaster-S1/out/onnxruntime-neon/libonnxruntime.sha256 sha256=bd763f0599b3dee27e24d5a5cb5b8fa5da53ff770758de0d8ba7e475df575956
 
-## Floor session, part 1 (2026-10-31, 13:5x–14:1x): F1 both ways and the volume proven, F6 did not move, the stock's mixer state saved
-
-Robot on the floor (track 5 m ahead, 40 cm behind, 50 cm wide), rebooted into stock, root adb through
-the Lab, stock stopped, our daemons up (health ok, 12.46 V / 97 %, 99.98 Hz), armed by `robotctl robot
-enable`, the S1 list driven from the Mac through the forwarded socket.
-
-- **Stock mixer state saved with ALSA's own tool** while the stock was alive: `alsactl store` →
-  `alsa/asound.state.stock` (57 controls). This is what the daemon restores at start (to do), instead
-  of relying on `dji_camera` having run.
-- **F1 chassis follows gimbal ✅ with a finding.** `s1.follow gimbal_lead`, then `robot.head` yaw
-  +45° (duck left): the chassis turned left — and kept turning, to −120°, stopping only when the
-  head was sent back to 0 (gimbal-vs-chassis stayed within −5..+1°). Cause, read in `tick.rs`: in
-  this mode the loop re-sends the gimbal target every 100 ms **relative to the chassis**, so the
-  body chases a target that moves with it. **Fix to make in the daemon:** in `gimbal_lead` the head
-  target is a ground-frame angle (or sent once), with a test. `s1ctl gimbal speed 30 0` moved the
-  gimbal only ~1° (one frame of a rate command; the SDK streams it) — to document in the list.
-- **F1 gimbal follows chassis ✅.** `s1.follow chassis_lead`, `robot.move` 0.3 m/s streamed from the
-  Mac: 0.99 m forward (the Mac-side loop ran ~2 s longer than intended), the gimbal lagged to −22°
-  and realigned to 0.0°. Driving on this floor: accelerometer deviation p50 0.045 g, p90 0.12 g
-  against 0.020 g still — the "on the floor" signature the lift rule needs (in the air, 2026-10-30:
-  spinning and still within 0.002 g of each other).
-- **F5 gimbal sleep/wake:** both accepted; the owner's confirmation of the fold is pending.
-- **Volume ✅, with a correction:** `s1.volume` was refused ("amixer exited with exit status: 1"):
-  `amixer sset` wants the *simple* control name, `Speaker`, not the `contents` name `Speaker
-  Volume` the bench exported since stage 8. Restarted with `--volume-control Speaker`: 50 % → 52 %
-  (16 of 31, −10 dB), 90 % → 28 of 31 (+2 dB), a quack at each; back to 65 % (the stock's 20).
-  **To fix in the bench:** `S1_VOLUME_CONTROL` and the self-test lines say `Speaker Volume`.
-- **F6 goto ✗ (accepted, did not move):** `s1.goto 1 0 0 --speed 0.3` accepted; odometry unchanged,
-  max |rpm| 31. Read in `tick.rs`: while armed the loop sends a wheel-speed (or follow) frame every
-  tick, zero twist included, over the controller's own position task. **Fix to make in the daemon:**
-  while a goto is active (until `--stop`, a new twist, or a timeout from distance/speed) the loop
-  keeps the heartbeat and sends no wheel command; test with the fake body.
-- **Not done yet in this session:** the lift capture (wheels at 0.15 m/s, owner lifts 10 cm for 4 s),
-  F12 (no load), the restore stage with artefact.
-- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/alsa/asound.state.stock sha256=759c335701cf82b1e634ff0459ac5221167a9bc69a069c1a765b5fc9fdbe01b3
-- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/floor/f1_gimbal_lead_head_telemetry.ndjson sha256=9209943d2905e26073e62e6db85bcfce2cfb2ce06ee559840cb53e0a502b34be
-- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/floor/f1_chassis_lead_drive.ndjson sha256=0d6ef3abb3c5e2b44f2e5be87f17a3823998a1553c29f1198febb8f3a8e74e3b
-- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/floor/goto1_telemetry.ndjson sha256=6953aafa1eb2618cac75832b9fe2b1700b19d88240625c5621ec103fe740cdf0
-
 ## Corrections after the cold reader (2026-10-30 18:29 -0300) — this section supersedes the hand-off's open-items table
 
-A cold reader resumed from `docs/plans/2026-10-30-1905-handoff-s1-fase1-bateria2.md` alone and found
+A cold reader resumed from `docs/s1/plans/2026-10-30-1905-handoff-s1-fase1-bateria2.md` alone and found
 the defects below. **That file's name and its "19:05" are wrong: it was written at 18:15 (commit
 5ad758c, `git log -1 --format=%ci`), and the stage 8 times "18:00–18:40" are 18:05–18:08 by the
 artefacts' mtimes.** The scope lock keeps this session from renaming it; the next session reads it
@@ -1368,9 +1448,8 @@ Every claim below carries its file and line; a claim without them is a hypothesi
    `v4l2-ctl --set-ctrl` cannot replay them; `s1-cam` must issue the ioctls with the ARM32 UAPI
    layouts (`v4l2_buffer` with 32-bit timeval), which neither the repo nor the rootfs carries
    (`mediad/src/exposure.rs:381` chose `v4l2-ctl` to avoid pinning those layouts by hand).
-2. **The bench no longer streams with a generic tool.** Stages 7 and 11 stop before the stream and
-   record `blocked.txt`; `bench-selftest.sh` asserts that neither `--stream-mmap` nor `gst-launch
-   v4l2src` is sent. Until `s1-cam` exists, no frame and no fps.
+2. **The bench no longer streams with a generic tool.** `bench-selftest.sh` asserts that neither `--stream-mmap` nor `gst-launch
+   v4l2src` is sent. Stage 7 now runs `s1-cam` when installed and records the refusal otherwise; stage 11 still only records `blocked.txt` (`scripts/s1/bench.sh:396-403`): the 720p rate is stage 7's.
 3. **`hw:0,1` is not "untested"**: `arecord -D hw:0,1 -f S16_LE -r 16000 -c 1` answered "read error:
    Invalid argument" (first run of stage 8); `--dump-hw-params` says it accepts S16_LE, 1–2 channels,
    8–16 kHz. It was never recorded from. The stock's capture device is `pcmC0D0c` (= `hw:0,0`).
@@ -1379,7 +1458,7 @@ Every claim below carries its file and line; a claim without them is a hypothesi
 5. **Memory and index**: the live memory still holds revoked orders ("tentar reset de nó", "tentar nó
    0xC9", "dono testemunha cada item") and old counts (40/71 OK) in earlier blocks; the later blocks
    revoke them. The index line for the master plan says the front is closed; it is open (base
-   `4d9ca3c`). The next session trusts the latest block and the disk, not the earlier blocks.
+   `4d9ca3c`; abandoned with a reason on 2026-11-01, see [`s1-changelog.md`](s1-changelog.md)). The next session trusts the latest block and the disk, not the earlier blocks.
 6. **Wheels in the air is a safety question, not a repeat**: before any stage that moves the wheels
    the owner is asked once whether they are off the ground.
 
@@ -1400,6 +1479,8 @@ below, never one item.** What each remaining item has, column by column:
 | F12 PWM | `Chassis.set_pwm_value/freq` | not an app action | oracle-held | yes, with a load on a port |
 | F18 telemetry | `Tank.set_sub_node` + `add_gimbal_and_chassis_sub_msg`: node `0xC9`, msg 0, `sub_config` 0, `mode` 0, ten subjects with high word `0x20009`, 50 Hz — sent to the **stock controller** (`0x09`), which forwards; accepts `0x00` or `0x23` | the stock's own: node 9, msg 0, flags 3, one subject `d7f5dcfb/00020003`, 1 Hz (`hdvt_boot.strace`); the forwarded script subscription was never captured (it happens at boot) | subjects as the library's, flags 3 as the stock's — refused `21 03` | nothing of ours: the stock's push is decoded as it flows (2026-10-30 (night)); stage `telemetry` relaunches `dji_hdvt_uav` under strace for its subject list and reads the gimbal's `0x04/0x05` at the stops |
 | volume | — | — | `amixer sset <control>` | after stage 8 names the control (`amixer_contents.txt`; stage 1 wrote none) |
+
+> **Correction, 2026-11-01:** this section is the state on that night. F1 was captured at 17:12 the same day (`capture-follow/hdvt_follow.strace`). The `gst-launch` stage 11 described next no longer exists. No follow, goto or PWM item has valid proof on the robot today.
 
 Stages 7, 8, 11, 12, read against what exists: the rootfs tar carries `v4l2-ctl`, `gst-launch-1.0`,
 `gst-inspect-1.0`, `arecord`, `aplay`, `amixer`, `strace` and the GStreamer plugins
@@ -1438,7 +1519,7 @@ Physical commands the inventory lacked — proposed for phase 1, awaiting the ow
 
 | # | what the robot does | command (SDK name) | request layout | in the code |
 |---|---|---|---|---|
-| F1 | chassis follows the gimbal / gimbal follows the chassis / free — the "twist" | `0x3f/0x46` goes to the stock controller; on the bus the library does it with chassis work mode 1 + the follow twist `0x3f/0x22` (gimbal lead) or gimbal work mode 2 `0x04/0x4c` (chassis lead) | follow: vx, vy, yaw offset as floats | `s1.mode` + `chassis_follow` / `gimbal_workmode`, oracle-exact; bench proves the motion |
+| F1 | chassis follows the gimbal / gimbal follows the chassis / free — the "twist" | `0x3f/0x46` goes to the stock controller; on the bus the library does it with chassis work mode 1 + the follow twist `0x3f/0x22` (gimbal lead) or gimbal work mode 2 `0x04/0x4c` (chassis lead) | follow: vx, vy, yaw offset as floats | `s1.follow` + `chassis_follow` / `gimbal_workmode`, oracle-exact; no valid proof of the motion |
 | F2 | recentre the gimbal | `gimbal.recenter` `0x3f/0xb2` | action_id, ctrl\|freq<<2, valid yaw/roll/pitch bits, 3× u16 speed | absent (listed in the plan, never built) |
 | F3 | gimbal by rate, °/s, continuous | `gimbal.drive_speed` `0x04/0x0c` | yaw, roll, pitch i16 + ctrl byte | absent; what phase 2's look/follow needs |
 | F4 | gimbal work mode | `0x04/0x4c` (the stock writes it 43× in 70 s) | workmode, recenter | absent; semantics to capture |
@@ -1458,11 +1539,11 @@ The "in the code" column is as of the sweep (2026-10-30, afternoon). **Every F-i
 been built** (`s1-duml/src/cmd.rs`: `gimbal_recenter`, `gimbal_speed`, `gimbal_workmode`,
 `gimbal_suspend_resume`, `chassis_position`, `chassis_stick_overlay`, `gun_led`, `armor_sensitivity`,
 `chassis_pwm`), each held to DJI's own packer byte for byte (`s1-duml/tests/dji_oracle.rs`), served
-by the S1's own list below and run end to end on the Mac (40 items) and on the robot (section "Robot
-session"); the column is left as the sweep wrote it so the gap it found stays on record.
+by the S1's own list below and run end to end on the Mac (`s1-e2e fake`). On the robot, section "Robot
+session" says which were seen and which were not observable in the air: there is no valid robot proof for F1, F4, F6, F7, F11, F12, F15. The column is left as the sweep wrote it so the gap it found stays on record.
 
 Already assigned elsewhere by the owner (2026-10-29), kept: blaster fire `0x3f/0x51` (type<<4\|times;
-IR by default, gel only with the key and the tank removed) → phase 3; the stock's video stream control
+IR by default, gel only with the key and the tank removed) → phase 3 in that plan, though `s1.blaster` is served today and infrared was fired on 2026-10-30; the stock's video stream control
 `0x3f/0xd2` → phase 3 (`mediad` replaces it); DJI's on-board detection `0x0a/0xa3…0xab` (person,
 gesture, line, marker, robot; marker colour) goes to the `dji_vision` process, not the motion
 controller → phase 2, where reusing `dji_vision` is an option against training our own; serial number
@@ -1480,12 +1561,11 @@ a byte-for-byte test.
 
 ## The S1's own list (2026-10-30)
 
-The owner's ruling: the S1 does not extend the duck's contract, it has **its own list**, served by
+The owner's words (2026-10-30 14:29): "o S1 deveria ter sua própria lista e não acrescentar à lista do pato". That is what the code does today, and how the list reaches the browser is an open decision: the owner has also said the aim is reuse, not a contract that cannot change. `s1.*` is served by
 `s1d` on the same socket beside the duck routes a wheeled body honours (`robot.move`, `robot.head`,
 `robot.flashlight`, `robot.sound`, `robot.state`, `robot.health`, `robot.enable`). `duck-ipc-proto`
 is untouched; the list lives in `s1d/src/api.rs` with its own `S1_API_VERSION`, `s1ctl` is its
-shell, and every call that moves something queues the frame DJI's own library would send
-(`s1d/tests/s1_api.rs` holds each to the oracle byte for byte).
+shell, and every call that moves something queues a frame built by `s1_duml::cmd`, whose builders are held to DJI's packer (`s1-duml/tests/dji_oracle.rs`). Two differ from the library on purpose or by defect: `s1.blaster` goes to host `0x17`, not `0x09`, and `s1.armor` goes to `0x18`, not `0x09`, and its test does not prove the frame sent (`s1d/tests/s1_api.rs:254-260`). [`docs/s1/robot/s1-commands.md`](../robot/s1-commands.md) owns the current list.
 
 | route | hardware | what it carries |
 |---|---|---|
@@ -1495,7 +1575,7 @@ shell, and every call that moves something queues the frame DJI's own library wo
 | `s1.wheels` | the four motors | rpm per wheel, under the deadman |
 | `s1.lights` | 2×8 gimbal LEDs, 4 chassis plates, blaster LED | effect, colour, times, groups; `blaster` |
 | `s1.blaster` | blaster | `times`; `gel` only with `--blaster-gel` and the tank out, else infrared |
-| `s1.armor` | the six hit detectors | sensitivity `k` |
+| `s1.armor` | the hit detectors (plates 1 to 4 seen; a gimbal plate has no proof) | sensitivity `k` |
 | `s1.pwm` | the six PWM ports | duty, hz, mask |
 | `s1.volume` | speaker | percent, through the mixer control the bench names |
 | `s1.telemetry` | motion controller pushes | wheels, odometry, velocities, IMU, attitude, status word, gimbal angle, sticks, battery |
@@ -1503,8 +1583,7 @@ shell, and every call that moves something queues the frame DJI's own library wo
 | `s1.frame` | diagnostic | one raw frame |
 | `s1.version` | — | the list's version |
 
-Still without a route, declared: `s1.power` (the battery message `dji_sys` sends — captured next
-stage 1), the camera and the microphone (V4L2 and ALSA, `mediad`'s and `pet-detect`'s mechanisms,
+Still without a route, declared: `s1.power` (the battery message `dji_sys` sends: the capture is in the lab, `capture-follow/sys_poweroff.strace`, not decoded), the camera and the microphone (V4L2 and ALSA, `mediad`'s and `pet-detect`'s mechanisms,
 stages 7, 8, 11), Wi-Fi (phase 4), the MA2100 vision coprocessor (phase 2).
 
 ## What the stock binaries say about the rest of the hardware (2026-10-30)
@@ -1517,26 +1596,22 @@ not guessed:
   Myriad 2 vision processor — over SPI (reset GPIO). "Power off now…", "Power save now…", "Send
   reboot request to battery", "Request power/boot %d after %d ms", "Send ota power down message
   to 0x%x": the robot powers itself off by a message to the battery board. The frame is not in
-  any library we hold; stage 1 is repeated with `strace` on `dji_sys` while the owner powers the
-  robot off by its button, and that frame becomes `s1.power`.
+  any library we hold; the `strace` on `dji_sys` while the owner powered the robot off is in the lab, not decoded.
 - **`dji_hdvt_uav` reads the button** (`/dev/input/event0`: "Key_code %d key pressed / key long
   pressed", a long press triggers Wi-Fi pairing — "Wifi Pairing is triggered") and a few GPIOs
-  (`hu_gpio.c`: AMT test pins, "paring_gpio"). `s1d` already reads the same device; press and long
-  press are the two events `s1.event` reports.
+  (`hu_gpio.c`: AMT test pins, "paring_gpio"). `s1d` reads the same device and reports only the press (`value == 1`, `s1d/src/button.rs:60`), as `s1.event`: no long press.
 - **Audio.** The microphone is `dji_camera`'s: it opens the capture PCM with tinyalsa and sets
   four mixer controls by numeric id (`adc_gain`, `adc_reg`, `mic_boost`, `mic_pga`) before encoding
   AAC for the app. The `/system/audio/*.apu` files are not mixer tables but profiles for DJI's audio
   algorithms (`testAPUmodeName1`, 48000 Hz, floats). So the mic route for `arecord` is the mixer
   state the stock leaves behind: the capture stage dumps every control while the stock runs
-  (`amixer -c 0 contents` through the chroot) and stage 8 replays it. The speaker's volume, as the
+  (`amixer -c 0 contents` through the chroot). `s1d --alsa-state` restores a saved state at start (`s1d/src/alsa.rs`), with a test on a stand-in only: a boot where the stock never ran has not been tried. The speaker's volume, as the
   stock sets it, goes through a kernel device, `/dev/speaker0` (`duss_hal_speaker_set_volume`);
   stage 8 then found that the mixer control `Speaker Volume` (value 20 in `amixer_contents.txt`)
-  does drive the speaker under `aplay`, and that is what `s1.volume` uses (`--volume-control
-  'Speaker Volume'`) — two paths to one speaker, the stock's untraced and unneeded.
+  does drive the speaker under `aplay`; `s1.volume` goes through the mixer under the simple name `Speaker` (`scripts/s1/bench.sh:130`, without valid proof). `/dev/speaker0` is a string in the binary; it did not exist on the robot with the stock stopped (`mic-lab/gpio_holders_stock_stopped.txt`).
 - **Power.** DJI's common command set has `0x00/0x45` sleep control, `0x00/0x46` shutdown
   notification, `0x00/0x47` power state and `0x00/0x0b` device reboot, and the battery its own set
-  (`0x0d`). Which one `dji_sys` sends on the button is what the capture stage records (`strace` on
-  `dji_sys` while the owner powers the robot off at the end).
+  (`0x0d`). Which one `dji_sys` sends on the button is in that capture, not read yet.
 - **The vision coprocessor (MA2100)** is where DJI's detectors run (`dji_vision`); it is hardware
   phase 2 may drive, and it is listed here so it is not forgotten.
 
@@ -1554,286 +1629,21 @@ in `/data` with the daemons started by hand is rung 1 — still volatile. Rung 2
 autostart, is phase 4's and is only entered after stage 2's dump has been **restored once and
 verified by hash**, because no public source documents a recovery path for this controller.
 
-The app and our daemons cannot drive the body at the same time — both would write to one UART —
-but they alternate by boot: a flag file in `/data` chooses, and the app stays whole because it is
-also the maintenance door (its Lab is how root adb is re-enabled after every power cycle).
+The app and our daemons cannot drive the body at the same time: both would write to one UART. The owner decided on 2026-10-29 that they would alternate by boot and that the app stays whole, because it is
+also the maintenance door (its Lab is how root adb is re-enabled after every power cycle). **No code does this yet.** Today every boot starts the stock, and our daemons are started by hand with `bench.sh`.
 Firmware updates happen only in the app's mode, with root adb off.
 
-## Floor session, part 2 (2026-10-31, 14:3x–14:5x): the lift capture — a floor-only baseline and one real lift, both with the wheels turning
+## How this revision was checked (2026-11-01)
 
-Two drives at `robot.move` 0.15 m/s with the owner cued by the robot's own chirp through the
-socket (`robot.sound`, volume set to 100 %). The owner lifted ~10 cm by hand and set the robot
-back down; the DJI pick-up bit never set (as on 2026-10-30).
+`bench.sh verify-record` proves each artefact below exists with its hash. It does not prove the
+sentence. For that, the text artefacts cited here were opened and held against the sentences that
+cite them: the small ones read directly, the large captures decoded again with `duml-strace.py` for
+the counts the text gives (fire 101 and 42, flashes 12 and 30, body LEDs 38, gimbal pushes 2969 and
+1388, follow frames 124, pushes 992 and 667, heartbeat 3201). A few large files were opened only for
+the figure the text takes from them, and logs of probes were read as far as the claim needs. **Binary
+artefacts (partition images, audio, video, frames, libraries) were checked by hash only, and that is
+what their lines claim:** what was heard in a recording rests on the owner's witness.
 
-- **Run 1 is a floor-only baseline, 25 s, 3.7 m.** The owner waited for a "quack" and did not
-  lift (the chirp is a synthesised "blim", not a duck). My Mac-side loop also ran 25 s instead
-  of 12: each `robot.move` call plus `sleep 0.1` cost ~0.2 s, the same drift as part 1's
-  "~2 s longer". The robot stopped at 4.86 m of odometry, near the end of the 5 m track. Lesson
-  applied in run 2: loop by wall clock, cues through the socket (no adb latency).
-- **Run 2 is the real lift, with the time marks confirmed by the owner:** 180° turn in place
-  (delta −175.6°), then 12.09 s at 0.15 m/s back along the track (4.84 → 3.01 m). Cue 1 at
-  3.00 s (one chirp), cue 2 at 7.11 s (two chirps); the owner lifted at the double chirp and set
-  the robot down 2.5 s after the wheels stopped.
-- **What the push shows, floor vs hand (0.5 s bins, 25 pushes each):**
-  - floor, 0.15 m/s (run 1 whole; run 2 0–7 s): accelerometer deviation from 1 g p50 0.024–0.029,
-    p90 0.04–0.08; pitch/roll ≤ 2°; no DJI status flag; fused-velocity vs wheel-speed mismatch
-    ≤ 0.13 m/s;
-  - lift at 7.5 s: one jolt (acc_z −1.29 g, 0.51 rad/s), then **in hand, wheels turning,
-    8–12 s:** deviation p50 0.10–0.13, p90 0.16; pitch 3–8°, roll to 7°; DJI `on_slope` true
-    from 8.0 s (continuously 9.1–12.7 s), `down_hill`/`up_hill` flickering; the controller's
-    fused velocity runs away from 0.19 to 1.29 m/s against 0.15 m/s of wheel speed (mismatch
-    > 0.4 m/s from 9.0 s, 1.5 s after the lift; same runaway as on the stand on 2026-10-30
-    with the wheels stopped);
-  - in hand, wheels stopped, 12–14.5 s: deviation 0.07–0.15, fused velocity still 0.6 m/s;
-    set-down at 14.5 s: `impact_z` true once, acc_z −1.71 g; then still (0.014).
-- **What this decides for the wheels-stop rule (to implement with the robot off):** the
-  accelerometer deviation separates "in hand" from "floor at 0.15 m/s" (0.10 vs 0.025) but not
-  from "floor at 0.3 m/s" (0.045/0.12 in part 1) and not "in the air on a stand" (0.002 above
-  still on 2026-10-30). The one signal present in all three lifted cases measured so far (stand
-  with wheels stopped, hand with wheels turning, hand with wheels stopped) is the disagreement
-  between the controller's fused velocity and the velocity the four wheel speeds imply; on the
-  floor it stays ≤ 0.13 m/s. The owner's direction of 2026-10-31 00:1x ("never the controller
-  velocity") was about trusting that velocity as motion; using its *disagreement* with the
-  wheels as the lift signal is a different use and needs his word — asked. Whatever the signal,
-  the wheel-side velocity must come from the mecanum kinematics of the four rpm (a turn in place
-  has wheel speed and no body velocity), with the geometry from a cited source, and the
-  thresholds from these captures plus the 0.3 m/s floor drive and the gimbal_lead turn.
-- Not done in this session yet: F5 fold confirmation by eye, F12 (no load), restore stage with
-  artefact.
-- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/floor/lift_telemetry.ndjson sha256=fadace100074b9a627ba745aecbc9acbc3fe470c34bd93d5ba4dccf9eb7ffaa4
-- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/floor/lift_marks.txt sha256=19d8882c4c6ca673f47a7e5b2abaeca9931ac2e51253bb4afeb19d200213e7a2
-- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/floor/lift2_telemetry.ndjson sha256=3cd04529db54dc641bba42f6c7112d37c818d99cf73ed3f061d83017a90393ad
-- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/floor/lift2_marks.txt sha256=9df859d4843b07fc1e07877edec2a63a9831a2a8a0b0b8f7776eb70f8266ef70
-
-## Audit ledger, 2026-10-31 15:2x: every route against the code, and the fixes it owes (owner's order: "read all the code, validate 100 %, every command ready for the UI and the intelligence phase, no shortcuts")
-
-Base `f746b2e`. Nothing is fixed before this ledger; each fix comes with the test that fails first, the fix, the planted
-defect refused, and one floor run through the bench. The owner's bar: "no sandy ground for phase 2 or the UI".
-
-**Read whole in this front** (the command's data path, contract → daemon → frame → wire): `s1d/src/api.rs` (490),
-`ipc.rs` (732), `tick.rs` (807), `intents.rs` (313), `state.rs` (446), `body.rs`, `main.rs`, `button.rs`, `sound.rs`,
-`bin/s1ctl.rs`, `tests/fake_body.rs` (505), `s1-duml/src/cmd.rs` (590); DJI's `rm_module.py` (`Gimbal`), `rm_ctrl.py`
-(`GimbalCtrl`), `rm_define.py` (coordinates, modes); `duck-ipc-proto` `HeadParams`/`LookParams`/`LookResult`/
-`IntentResult`. **Still to read whole** (closed items with artefacts, but the order is 100 %): `cam.rs`, `v4l2.rs`,
-`bin/s1-cam.rs`, `bin/s1-infer.rs`, `bin/s1-e2e.rs`, `s1-duml/src/{frame,dds,events,crc}.rs`, both crates' other tests,
-`scripts/s1/*.sh`, `deploy/s1/*`.
-
-**D1 `s1.goto` accepted, no motion** (floor 14:0x, `goto1_telemetry.ndjson`: odometry still, |rpm| ≤ 31). Cause,
-`tick.rs` 366–423: while armed every tick sends a wheel-speed or follow frame, zero twist included, over the controller's
-position task (`0x3f/0x25`); DJI's `ChassisCtrl.move` sends no wheel speeds during the task. Fix: a `position_task` slot
-in `Intents` (set by `s1.goto`, cleared by `--stop`, by a non-zero `robot.move`/`s1.wheels`, or by a timeout from
-distance/speed plus slack); while set, the loop sends the heartbeat and no wheel/follow frame. Failing test first
-(`fake_body.rs`): goto active for 0.5 s → zero `0x3f/0x20`/`0x22` frames, ≥ 40 heartbeats. Counter-proof: guard
-removed → the test counts wheel frames.
-
-**D2 `s1.follow gimbal_lead`: the body turns and never stops** (floor 14:0x, `f1_gimbal_lead_head_telemetry.ndjson`:
-head +45° → body to −120°, gimbal-vs-chassis −5..+1°). Cause: `tick.rs` 425–435 re-sends `gimbal_angles(target)` every
-100 ms, and `cmd.rs::gimbal_angles` uses coordinate 3 (`0x1d`); `rm_define.py` 185–190: coordinates 3/4/5 are
-**yaw relative to the car**, 0 is NED. With the chassis chasing the gimbal (follow offset 0°) each re-send puts the
-target 45° ahead of the chassis's new heading. In free mode the re-send is harmless (±60° measured 2026-10-30). Fix:
-in `GimbalLead` the head target goes out once per change (no hold re-send), as DJI's `set_degree_ctrl` is one task; in
-`ChassisLead` the yaw axis bit is masked (`rm_ctrl.py` 1669–1672: "gimbal_yaw_follow_mode, the yaw ctrl invalid").
-Failing test first: GimbalLead, constant head, 0.5 s → exactly one `0x3f/0xb0`; Free → ≥ 4; ChassisLead → yaw bit off.
-
-**D3 `s1.gimbal speed` moves ~1° and stops** (floor 14:0x). Cause: `ipc.rs` 324–327 sends one `0x04/0x0c` (no ack);
-the controller applies a rate for one short period. DJI's `set_accel_ctrl` is also one frame per call (NO_ACK), and
-the app/pad re-send it continuously — it is a rate, like the stick. Fix: `speed` becomes a stamped continuous intent
-(`gimbal_rate`) re-sent every tick while fresher than the deadman; `stop` zeroes it. Failing test first: speed 30/−15
-for 0.3 s → ≥ 20 frames with 300/−150; none after the deadman (today: 1 frame).
-
-**D4 `robot.look` answers in the wrong shape** (14:5x: `robotctl robot look 1 0.5 -0.1` → "missing field `head`";
-gimbal 0°). Cause: `ipc.rs` 656–658 refuses with `IntentResult`; the contract's answer is `LookResult { head, clamped }`
-(`lib.rs` 2305–2313) and `robotctl::run_look` decodes that. Fix: serve it on the gimbal — `head_yaw = atan2(y, x)`,
-`head_pitch = −atan2(z, hypot(x, y))` in the duck's trunk frame (x forward, y left, z up; positive pitch looks down),
-clamped to the manual's travel (`clamped: true` when it saturates), handed to the same slot `robot.head` feeds;
-`neck_pitch` accepted and ignored (two axes). Failing test first (`tests/dispatch.rs`): the answer decodes as
-`LookResult` with `head_yaw = atan2(0.5, 1)`; today it decodes as `IntentResult { accepted: false }`.
-
-**D5 `s1.gimbal sleep/wake`: accepted, no fold** (14:3x, `f5_sleep_wake.ndjson`; owner: "nada mexeu"). The frame is
-byte for byte DJI's (`cmd.rs::gimbal_suspend_resume` = `rm_module.py` 501–514: same payload, sender 0xC9,
-`NEED_ACK_NO_FINISH`); `rm_ctrl.py` 1438 sends nothing before it. The gimbal's ack is not read (trace level). Verdict:
-**cause not determined by code**. Fix needs measurement: (a) every ack to an S1 one-shot logged at `info` with its
-retcode (class fix, not only DDS answers); (b) a capture of the stock doing a gimbal sleep (Lab block) in the next
-capture script. No new frame goes to the robot on a hypothesis (owner, 2026-10-30). Stays 🟡 with the cause open.
-
-**D6 mic mixer and ALSA state at start.** The mic works only because the stock ran first (its four mixer controls
-persist); `s1.volume` depends on a hand-passed control name; `bench.sh`/selftest still say `Speaker Volume`. Fix:
-`s1d --alsa-state <file>` runs `alsactl restore -f` at start when the file exists (the 14:0x `asound.state.stock`
-artefact); bench and selftest say `Speaker`; the `up` stage installs the state file. Proof: `amixer contents` after
-restore equals the saved state; selftest refutes `Speaker Volume`.
-
-**D7 the wheels-stop rule is absent.** Data (14:3x–14:4x, `lift*_telemetry.ndjson`): on the floor at 0.15 and 0.3 m/s
-the disagreement |v_fused − v_wheels| ≤ 0.13 m/s; lifted (stand 2026-10-30 wheels stopped; hand wheels turning; hand
-wheels stopped) it runs past 0.4 m/s within 1.5 s. Signal authorised by the owner (14:5x). Fix in `tick.rs`: v_wheels by
-the mecanum forward kinematics of the four rpm (`wheel_radius_m`, `half_sum_lw_m` already in `Config`), v_fused from the
-push's `velocity_body`; `lifted` when the disagreement exceeds 0.4 m/s for ≥ 0.3 s; while lifted the wheel frame is
-zero (heartbeat, gimbal, sounds, lights, perception go on); released below 0.15 m/s for ≥ 0.5 s; published as
-`robot.state.safety.picked_up`. Failing test first with real pushes cut from `lift2` (lifted → wheels zero from the push
-that crosses 0.4) and from run 1 (floor → never zeroed by the detector). Counter-proof: threshold planted at 2.0 → the
-lifted test fails.
-
-**D8 the bench depends on scripts in the chat.** Fix: an `up` stage (root adb by USB or Wi-Fi, mounts, stop the stock,
-install, daemons with `--volume-control Speaker --alsa-state`, health) and a `floor` stage (the floor items as
-`s1-e2e robot` items judged by telemetry: F1 both ways, F5, F6, speed, look, volume, lifted with the sound cue), both
-in the selftest; every command loop by wall clock.
-
-**Routes, verdict by code.** The deliberate refusals (`ipc.rs` 636–700: pose, mouth, set_mode, chorale, vetbook, model,
-theremin, rest/shutdown, policies and skills) answer `IntentResult` with a reason, which is what those clients decode.
-`robot.look` is the one refusal in the wrong shape (D4). `robot.remote_session_active` answers a raw `{"active": false}`:
-its shape in the contract is to be checked when `lib.rs` is read for it.
-
-**Order:** D4 → D1 → D2 → D3 → D6 → D7 → D8 → D5 (ack log + capture script) → the rest of the reading → runbook, reuse
-map, README, lychee → gates → one floor run → close. The runbook and the reuse map live in this record while the front's
-scope does not include `docs/robot/` (widening the scope is the owner's act, in plan mode).
-
-## The fixes of the audit ledger, done in code (2026-10-31, 15:3x–17:3x): D1–D8 with their failing tests and planted defects; the robot proof is one floor run away
-
-Every defect of the ledger above is fixed in the daemon or the bench, each with the test that failed first, the fix, and the planted
-defect the test refused (restored by copy and hash — never by `git checkout`, which wiped an uncommitted fix once this afternoon).
-Suites: `cargo test -p s1-duml -p s1d` green (the e2e fake run 42 of 42), clippy `-D warnings` and `fmt` clean, the bench
-self-test green, the four refutation scripts green over the changed code (artefacts below). Nothing has yet been proved on the robot:
-that is the floor run, one command (`bench.sh up`, then `bench.sh floor`), with the owner watching and answering the prompts.
-
-| D | fix (commit) | failing test, then green | planted defect refused |
-|---|---|---|---|
-| D4 `robot.look` | served on the gimbal (atan2 in the duck's frame, clamped to the manual's travel), answered as `LookResult` (2faf204) | `dispatch.rs::look_answers_a_look_result_and_aims_the_gimbal` — failed with the robot's own "missing field `head`" | `clamped` always false → the out-of-reach case fails |
-| D1 `s1.goto` | the controller's position task owns the wheels: no wheel/follow frame until `--stop`, a non-zero twist or the distance/speed timeout (2faf204) | `fake_body.rs::a_position_task_owns_the_wheels_until_a_twist_takes_them_back` | guard removed → 51 wheel frames during the task |
-| D2 gimbal_lead | the head target once per change where the gimbal leads (coordinate 3's yaw is chassis-relative); pitch only where the chassis leads (2faf204) | `fake_body.rs::the_head_target_is_sent_once_where_the_gimbal_leads_and_held_elsewhere` | hold forced on → 5 frames instead of 1 |
-| D3 gimbal rate | `speed` is a streamed intent under the deadman; `stop` is DJI's zero rate with ctrl 0x00; the angle hold waits and then adopts the gimbal's real angle (2faf204) | `fake_body.rs::a_gimbal_rate_is_streamed_until_stopped_and_the_angle_hold_waits` | one frame only → the stream count fails |
-| D5 acks | every acknowledgement to a one-shot kept in `s1.telemetry` (`acks`, `last_ack` with the retcode) and said at `info`; DDS answers unchanged (3c33456) | `fake_body.rs::an_ack_to_a_one_shot_is_kept_with_its_retcode` | ack dropped → `last_ack` None |
-| D6 mixer | `deploy/s1/asound.state.stock` pushed by `s1-push.sh`, restored by `s1d --alsa-state` with `alsactl restore`; bench and self-test on the simple control `Speaker` (3c33456) | `alsa.rs` (the stand-in is asked `-f <file> restore`; a missing file refused before any spawn) | bench back to `Speaker Volume` → the self-test fails naming it |
-| D7 wheels-stop rule | `LiftDetector` on the disagreement fused velocity × wheel kinematics, 0.4 m/s for 300 ms trips, 0.15 m/s for 500 ms releases; lifted = zero wheel frame every tick, `safety.picked_up`, `limited_by: lifted` (f2e0f5a) | `tick.rs` unit tests (kinematics on the real sample, persistence both ways) and `fake_body.rs::lifted_stops_the_wheels_and_the_floor_does_not` with synthetic stock pushes | trip level planted at 2.0 → the lifted test fails |
-| D8 bench | `bench.sh up` (one command from a cold robot, USB or Wi-Fi) and `bench.sh floor` (the floor items of `s1-e2e robot`); e2e items `lifted: the wheels stop` and `robot.look (duck route)` in both modes; telemetry judges in F1 both ways, F3, F5 (with the ack), F6 (c29adbc) | the e2e fake run 42/42; the self-test asks `up` for the stop, the launch line, the mixer check and the forward | the mixer check: a planted wrong value → DIFF, an absent control named |
-
-**What the floor run must show, item by item** (`bench.sh floor`, judged by telemetry, the owner at the prompt): lifted → wheels at
-≤ 10 rpm within 1.5 s of `picked_up`, driving again after the set-down; F1 gimbal_lead → the body turns about 45° left and **stops**;
-F1 chassis_lead → gimbal realigned within 5°; F3 → ≥ 15° of yaw sweep in 1 s, held after stop; F5 → the gimbal's ack with its retcode
-in `last_ack` and a pitch change ≥ 10° (if the pitch does not change, the item fails and the retcode is the measurement D5 waited
-for); F6 → ≥ 0.7 m and +90° by odometry; robot.look → gimbal at −26.6° yaw, −5.7° pitch; volume 50 accepted.
-
-**Read whole in this front, in addition to the ledger's list:** `cam.rs`, `v4l2.rs` (structures and constants; its tests hold them to
-the ARM oracle), `bin/s1-cam.rs`, `bin/s1-infer.rs`, `s1-duml/src/{frame,dds,events,crc}.rs`, `s1-duml/tests/{dji_oracle,stock_push}.rs`,
-`s1d/tests/{dispatch,e2e,params,s1_api}.rs`, the four refutation scripts, `build-rootfs.sh`, `s1-push.sh`, `bench-selftest.sh`,
-`deploy/s1/*`. No further defect found there. **Not read whole** (said plainly): about a third of `bin/s1-e2e.rs` (the pad items of
-both modes), the body of `s1-duml/tests/real_frames.rs`, the test bodies of `v4l2.rs`, `dji-oracle.py`, `duml-strace.py`,
-`telemetry-free.py`, `v4l2-oracle.{c,sh}`, and the capture/backup/audio/camera/frames/infer/telemetry stages of `bench.sh` — all of
-them with their own refutation or artefact in this record, none on the command path a UI will drive.
-
-### Runbook: the S1 today, from a cold robot to the floor
-
-1. **Robot on, cable in.** USB (micro-USB to the Mac) or Wi-Fi: `adb devices` lists it either way (2026-10-31: both at once). Over
-   Wi-Fi after a reboot, root adb is enabled from the app's Lab (pierluigizagaria/robomaster-s1-hacks); over USB it is there at boot.
-   `S1_HOST` names the one to use (default `192.168.1.236:5555`; the USB serial is `0123456789ABCDEF`).
-2. **Install (only after a build):** `scripts/s1/s1-push.sh` — cross-builds `s1d`, `s1ctl`, `s1-cam`, `netpadd`, `robotctl`, pushes
-   them with `robotd.toml`, `asound.conf`, `asound.state.stock`, and links the sound bank.
-3. **Up:** `S1_BAUD=921600 scripts/s1/bench.sh up` — mounts, stock body process stopped, `s1d` + `netpadd` up (`--volume-control
-   Speaker --alsa-state /opt/robot/asound.state.stock`), health, the socket forwarded to `127.0.0.1:9000`, the four mixer controls
-   checked against the shipped state. Nothing moves.
-4. **Bench items, wheels in the air:** `scripts/s1/bench.sh items` (every item) or `items F2 F10` (some).
-5. **Floor:** `scripts/s1/bench.sh floor` — the robot on the floor with 1.5 m free; the prompts say what to watch; one chirp = lift
-   the robot 10 cm, two chirps = set it down. The verdict per item is in `floor/e2e_console.txt`, the daemon's log in `floor/s1d.log`.
-6. **From a shell:** `s1ctl --tcp 127.0.0.1:9000 <telemetry|follow|gimbal|goto|wheels|lights|blaster|armor|pwm|volume|events|frame>`;
-   on the robot, `robotctl <health|quack|flashlight|monitor|robot enable|robot look>` inside the chroot
-   (`adb shell /system/xbin/busybox chroot /data/debian /usr/bin/env PATH=/usr/bin:/bin /opt/robot/bin/robotctl …`).
-7. **Off:** power the robot off. The stock comes back by itself at the next boot; nothing of ours persists across it.
-8. **No robot:** `scripts/s1/bench.sh e2e` (every item on the wire), `scripts/s1/bench-selftest.sh` (every stage against a stand-in
-   adb), the four `*-refute.sh`.
-
-### Reuse map: what the S1 takes from the duck as it is, what it needs anew, read off `s1d/src/ipc.rs`
-
-| duck mechanism | on the S1 | state |
-|---|---|---|
-| `duck-ipc-proto` contract, JSON-RPC/NDJSON on `/run/robotd.sock`, `hello`, `robot.health`, `robot.state` (+ subscribe), `robot.move`, `robot.head`, `robot.look`, `robot.stop`, `robot.enable/init/relax`, `robot.sound`, `robot.flashlight`, `robot.mode` (`roller`), `robot.policies`, `robot.skills`, `pad.bindings`, `robot.safe_to_restart`, `robot.model_api` | served by `s1d` in the contract's shapes, same socket, same clients (`robotctl`, `netpadd`, the pad) | reused as is |
-| `robot.pose`, `robot.mouth`, `robot.set_mode`, `robot.theremin`, `robot.chorale`, `chorale.subscribe`, `robot.vetbook*`, `robot.model`, `robot.rest`, `robot.shutdown`, `robot.do`, policies/skills loading, `robot.reboot_motors` | refused with a reason (legs, mouth, voice, vet book, URDF, skills: not on this body) — the clients decode the refusal | not applicable, correctly refused |
-| `netpadd` + `pad-map` (the gamepad over UDP) | unchanged binary, `[pad_roller]` opened for the strafe | reused as is |
-| `robotctl` | unchanged binary in the chroot | reused as is |
-| `robotd`'s voice bank (`aplay` per tag, the held wheee) | `s1d::sound`, the same rules; the stock's wavs under the duck's tags until phase 2 gives the S1 a voice | mechanism reused, sounds to make |
-| `pet-detect` (16 kHz mono mic → scratch classifier) | runs live on the S1 through `micleft`; the duck's model does not fire on the S1's mic (max 0.31) | pipeline reused, **model to retrain in the dojo with S1 recordings** |
-| `duck-detect` ONNX path (`mediad` on a board without NPU) | 1741 ms per 320×320 frame with NEON, 2 inferences/s wanted | pipeline reused, **model needs INT8/Edge TPU or a smaller input** (owner's decision, phase 2) |
-| `mediad` camera (V4L2 720p, H.264 WebRTC) | `s1-cam` gives 720p NV12 at 30 fps through the stock's own sequence; no Rockchip encoder on the S1 | capture reused in kind, **software or Hantro H.264 encoder needed for the browser console** |
-| the duck's RL walking policy, ToF depth, BLE, the mouth servo | no legs, no depth sensor, no BLE, no mouth on the S1 | not applicable |
-| S1-only: follow modes, gimbal rate/recentre/sleep, goto, per-wheel rpm, lights, blaster, armour, PWM, volume, telemetry, events, raw frame | the S1 list (`s1.*`, `S1_API_VERSION` 1), `s1ctl` | new, documented in "The S1's own list" |
-
-- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/refute/e2e-refute.txt sha256=d265d16ae7a1b8f14fc4d94381481d6800cfb1dbd968e0c1608784de285b4e7f
-- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/refute/telemetry-refute.txt sha256=3872acd4deeb1c145be7c6cbc8a351f7a1800108ff8f09560b40c2ad4488d16e
-- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/refute/audio-refute.txt sha256=9e471908e26afb7ad47e1703b6b7d3c0f156b2f50326da2cc1455b7bd49521ef
-- artefato: /Users/alessandro/Development/RoboMaster-S1/out/2026-10-31-poc2/refute/cam-refute.txt sha256=4d7e048fa041d293410fc7126ef81037bee4c7e8f9b7d348eace795b5edeabf6
-
-## What closes phase 1, and the research that directs the console front (written 2026-10-31 18:4x; the research had lived only in the chat and a compaction summary — the owner's text, kept whole)
-
-**Left to close phase 1:** (1) one floor run, `bench.sh up` then `bench.sh floor` (~15 min, the owner watching), proving D1–D4 and
-D6–D8 and measuring the gimbal's retcode on sleep/wake (D5); (2) that run recorded with its artefacts; (3) the eighth gate (the diff
-outside the front's scope) is blocked by two earlier hand-offs in `docs/plans/`: the owner reopens the front with that directory in scope
-and marks them superseded, or accepts; (4) `/roadworthy:close` with the eight gates fresh. The robot's root adb (Wi-Fi or USB) comes back
-after a power cycle only through the app's Lab, the owner's hand. **Not a plan yet** for the console: by the house rite a plan has
-context, an impact sweep with commands and their output, changes per file, a scope in globs, acceptance in EARS form with the proving
-command, verification gates, out-of-scope and the overnight policy, written after every file to be changed is read whole and passed
-through the mechanical pre-flight. What follows is the research and the direction that plan starts from.
-
-### The research, as delivered to the owner on 2026-10-31 (morning), verbatim
-
-Pesquisa feita; o que as referências dizem converge e muda um detalhe do que eu tinha proposto. Resumo em uma linha: o estado da arte é
-um contrato único com evolução só aditiva, extensões por namespace tipadas no próprio contrato, e capacidades anunciadas no handshake para
-o cliente descobrir o que o corpo tem; contratos separados por dispositivo são o padrão apenas quando o transporte é genérico, o que não é
-o nosso caso.
-
-O que as fontes dizem
-
-- Protocolos JSON-RPC grandes (LSP, MCP) não fazem contrato por dispositivo: fazem um contrato com namespaces e negociação de
-  capacidades. O LSP marca métodos com prefixo `$/` como "dependentes de implementação", que um lado pode não suportar, e tem um bloco
-  `experimental` nas capacidades para funcionalidades que nem todo cliente adota; a regra é nunca assumir que o outro lado tem a função
-  sem checar as capacidades trocadas no `initialize` (especificação LSP 3.18, 3.17). O MCP copia o padrão: capacidades `experimental`
-  "coordenadas entre cliente e servidor", "não assuma presença sem checar" (MCP, capacidades). Mapeado para nós: as rotas do S1 entram
-  no contrato sob o namespace `s1.`, e o `hello` passa a anunciar as capacidades do corpo; o console mostra ou esconde controles por
-  capacidade, não por adivinhar o modelo.
-- Evolução aditiva é compatível; remoção e mudança de tipo não são (guia de compatibilidade do Google, AIP-180: adicionar métodos,
-  mensagens, campos e valores de enum dentro da mesma versão maior é permitido; remover ou mudar tipo não) (AIP-180, Google API design).
-  B é puramente aditivo; o risco que você perguntou ("peças que o pato não usa") não é incompatibilidade: é só superfície não
-  implementada, respondida com "método desconhecido", exatamente o que esses guias preveem.
-- Verificação de quebra de contrato em CI, a cada PR, é prática corrente no mundo Protobuf (`buf breaking`) (guia Protobuf). No nosso
-  mundo Rust o equivalente é `cargo-semver-checks` sobre a crate do contrato, que já tem lints específicas para enums e variantes
-  (cargo-semver-checks), somado a um teste de "fotografia" do `every_call()` serializado, para o PR mostrar o diff do fio.
-- `#[non_exhaustive]` versus `match` exaustivo: a literatura Rust trata o atributo como ferramenta para bibliotecas publicadas, onde
-  adicionar variante não pode quebrar terceiros (predr.ag, discussão interna do Rust). O nosso contrato é consumido dentro de um só
-  workspace; o `match` exaustivo nos transportes é o que obriga cada rota nova a ser classificada. Manter exaustivo é a escolha certa aqui.
-- ROS 2, o vizinho robótico: "use as interfaces padrão onde couberem; tipos próprios só quando semanticamente necessários; interfaces em
-  pacote próprio" (tutorial ROS 2); fabricantes publicam pacotes de interface por dispositivo (MotoROS2). Isso parece apoiar o contrato
-  separado, mas só funciona porque o transporte do ROS é genérico (qualquer tipo viaja). Os nossos transportes são concretos sobre
-  `proto::Call`; um contrato separado nos forçaria a forkar `mediad`, `btd` e `robotctl`. A lição aproveitável é a primeira metade: o
-  que é "de robô" usa nomes neutros (`robot.lights`, `robot.follow`, `robot.volume`); o que é só do S1 fica `s1.*`.
-
-O caminho, para um sênior que olha CI/CD, merges, extensibilidade, documentação e leitura por humanos e LLMs
-
-1. Um contrato (B), aditivo, com namespaces: rotas gerais com nome neutro em `robot.*`; rotas só do S1 em `s1.*`; variantes novas
-   agrupadas num bloco delimitado no fim do enum (merge com o upstream fica mecânico). Versão 44 → 45.
-2. Capacidades no `hello`: o corpo anuncia os namespaces e rotas que serve; `mediad`, `btd` e a página do console gateiam por isso
-   (padrão LSP/MCP), nunca por modelo.
-3. Portão de contrato em CI: `cargo semver-checks` na crate do contrato e a fotografia serializada de `every_call()`; toda rota nova
-   precisa de braço explícito nos transportes (o `match` exaustivo é o revisor automático) e de classificação de segurança.
-4. Documentação gerada do contrato, uma página por namespace, a partir dos próprios tipos (o repositório já faz isso com o manifesto de
-   políticas): uma fonte de verdade, legível por gente e por modelo.
-5. Contrato separado e via de passagem crua: descartados, com as razões acima.
-
-É B, feito do jeito que LSP e MCP fazem. Entra no plano da frente do console, após o fecho da Fase 1.
-
-### Also settled that morning
-- **Reuse the duck's own console**: `mediad` serves `webclient/index.html` on :8080 (WebRTC video, the control channel, state). The Hugging
-  Face `microduck-simulator` Space was looked at; the owner chose the duck's console. The console controls everything on the S1, and the
-  same system drives a duck if the owner buys that hardware; the brain lives above the contract, never inside `s1d`.
-- **Video**: the duck encodes with Rockchip's `mpph264enc`, absent on the S1. `s1-cam` becomes a `mediad` source; software H.264 is
-  measured first, then the Hantro encoder the stock uses (`hx280enc`) as a plugin if the CPU cannot carry it.
-- The 3D model in `~/Development/RoboMaster-S1/3D` (Sketchfab, visual only, 267 nodes, no articulation) is phase 5's input, not this front's.
-
-## State at the end of 2026-10-31 (19:0x), for the next window
-
-Robot ON on the floor (track clear ahead), USB cable in, root adb ACTIVE over Wi-Fi (`uid=0` at 19:0x, enabled from the Mac with the lab
-tool as the memory's "Conectar ao S1" says). **Today's binaries are NOT on the robot yet**: `s1-push.sh` failed earlier for lack of adb;
-the robot still runs the stock. Nothing of ours was started on it in this boot. Next acts, in order, all mine: `scripts/s1/s1-push.sh`;
-`S1_HOST=192.168.1.236:5555 S1_BAUD=921600 scripts/s1/bench.sh up`; the cable off; `scripts/s1/bench.sh floor` with the owner only
-watching and answering the prompts; record the run. Before calling anything delivered: the cold reader over the diff `f746b2e..HEAD`
-(rule 0b, not yet run), and four sentences of the audit ledger to correct because they claim more than was read — D1 "DJI's `ChassisCtrl.move`
-sends no wheel speeds during the task" (not read; inferred from the symptom), D2 "coordinates 3/4/5 are yaw relative to the car" (the
-DJI file says it of 4 and 5; of 3 it says only "pitch NED"; the chassis-relative yaw of 3 is inferred from the floor behaviour), D3 "the
-app re-sends the rate continuously" (not seen in any capture; inferred from the ~1° per frame measured), D7 the release threshold (0.15 m/s
-for 500 ms) is a design choice, not a measurement. The owner is not a developer: every command is mine to run; what is his is to watch the
-robot and answer the prompts. The eighth gate needs his decision on the two hand-offs in `docs/plans/`.
+Not reopened: what the text quotes from DJI's firmware under `out/2026-10-30-poc2/stock` beyond the
+files the classification cites; external pages cited in "Item 4"; the 16:58 capture's morning
+predecessor, which no longer exists.

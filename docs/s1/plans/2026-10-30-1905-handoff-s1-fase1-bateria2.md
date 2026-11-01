@@ -1,5 +1,5 @@
 ---
-status: aceito
+status: superado por ../project/s1-bringup.md
 ---
 
 # Handoff — S1 ← microduck, Fase 1, fim da bateria 2 (2026-10-30, 19:05)
