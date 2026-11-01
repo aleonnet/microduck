@@ -100,8 +100,8 @@ pub struct Intents {
     position_task_until_us: AtomicU64,
     /// `s1.gimbal speed`: a rate for the gimbal, degrees per second `[yaw, pitch]` in DJI's signs,
     /// stamped like the twist. The loop re-sends it every tick while it is fresher than the
-    /// deadman; that one frame is not enough is inferred (the discarded floor session), and that
-    /// the app re-sends it was not seen in any capture.
+    /// deadman; whether one frame would be enough has no valid measurement, and that the app
+    /// re-sends it was not seen in any capture.
     gimbal_rate: ArcSwap<Stamped<[f64; 2]>>,
 }
 

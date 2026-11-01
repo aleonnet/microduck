@@ -39,8 +39,8 @@ against the owner's words, unless a line quotes them.
 
 ## Every part of the robot, by stage
 
-Table sent to the owner on 2026-11-01, kept as sent, in Portuguese. One observation differs: **H71**,
-because the capture it said was still on the robot is in the lab. The category of each part is what
+Table sent to the owner on 2026-11-01, kept as sent, in Portuguese. Two cells differ: **H71**,
+because the capture it said was still on the robot is in the lab, and **H20 in stage 11**, sent as ✅, because that stage measures nothing. The category of each part is what
 the code and the artefacts show on that date. Which software touches each part is in
 [`docs/s1/design/s1-body.md`](../design/s1-body.md#every-part-by-component).
 
@@ -70,7 +70,7 @@ the code and the artefacts show on that date. Which software touches each part i
 | H15 | Coprocessador MA2100 | A | ⬜ | — | — | — | — | — | — | — | — | ⬜ | — | — | ⬜ | só em strings da DJI |
 | H16 | MCU M0, CPLD, GPIOs de energia | A | ⬜ | — | — | — | — | — | — | — | — | — | — | — | — | só em strings; desligar por software depende disto |
 | | **Câmera e áudio** | | | | | | | | | | | | | | | |
-| H20 | Câmera `ov5695`, 720p NV12 | D | ✅ | — | — | — | — | — | ✅ | — | ✅ | ✅ | — | — | ⬜ | 30,1 fps para arquivo, NV12; 1080p, foto e 360p nunca; sem saída ao vivo; `mediad` só aceita UYVY e `v4l2src` genérico reinicia o robô |
+| H20 | Câmera `ov5695`, 720p NV12 | D | ✅ | — | — | — | — | — | ✅ | — | ✅ | ⬜ | — | — | ⬜ | 30,1 fps para arquivo, NV12; 1080p, foto e 360p nunca; sem saída ao vivo; `mediad` só aceita UYVY e `v4l2src` genérico reinicia o robô |
 | H21 | Microfone (módulo da câmera) | D à mão | ✅ | — | — | — | — | — | — | ✅ | — | — | — | ⬜ | ⬜ | voz reconhecida por você (`audio/mic.wav`); sem rota no `s1d`; nem o pato leva áudio ao navegador |
 | H22 | Alto-falante | D+ | — | — | — | — | ✅ | ✅ | — | ✅ | — | — | — | ◐ | ⬜ | com `duckctl` real os gatilhos tocam no laptop por padrão |
 | H23 | Volume do alto-falante | C | — | — | — | — | 🟡 | — | — | 🟡 | — | — | — | ⬜ | ⬜ | prova só na rodada descartada |
@@ -183,7 +183,7 @@ stages 5, 6 and 8.
 The `items` stage is `s1-e2e robot` alone, with the daemons already up; `e2e` is the same program
 with no robot (`s1-e2e fake`), the pre-test every stage-5 and stage-6 item passes before the robot
 is plugged in; `bench-selftest.sh` runs every other stage against a stand-in `adb` and checks what
-each one asks of the robot. `s1-push.sh` does not install `mediad`, `s1-infer` or `pet-detect`; stage 12 pushes `s1-infer` itself.
+each one asks of the robot, except `items`, `infer`, `restore` and `app`. `s1-push.sh` does not install `mediad`, `s1-infer` or `pet-detect`; stage 12 pushes `s1-infer` itself.
 
 
 ## Measured on the Mac, 2026-10-30 (night)

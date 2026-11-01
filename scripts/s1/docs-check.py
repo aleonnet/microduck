@@ -80,7 +80,23 @@ WITHDRAWN = [
 ]
 
 # Help and prompt texts that the comments-only check accepts besides comments.
-PROSE = ['11 frames ', 'echo "stage 11 stops', '"ON THE FLOOR', '"the gimbal folds down', 'needs (`docs/']
+PROSE = [
+    r'11 frames +.+',
+    r'echo "stage 11 stops [^"]*" \| tee "\$D/blocked\.txt"',
+    r'"ON THE FLOOR[^"]*",',
+    r'"the gimbal folds down[^"]*",',
+    r'needs \(`docs/[\w./-]+`, item 1 of 2026-10-30 \(night\)\):',
+    r'"(the floor\'s worst case must not trip|a disagreement of 0\.13 m/s must not trip the detector)"',
+    r'"(the floor\'s worst case is not a lift|a disagreement of 0\.13 m/s is not a lift)"',
+]
+# A comment, by what the language says one is. Any other kind of file changing is logic.
+COMMENT = {".rs": "//", ".sh": "#", ".py": "#", ".toml": "#", ".conf": "#"}
+# The commits of the session the owner discarded, which the changelog must hold under that heading.
+DISCARDED_COMMITS = "c0aab5c 9b40ff7 67b16f5 3db7e58 a196808 75b0c60 333f075 9bd3800 1832c99 27d4b6e".split()
+# Cited as evidence nowhere but in the superseded copy.
+DISCARDED_PATHS = ["poc2/floor", "poc2/up/", "poc2/refute"]
+# Roots whose paths a page may name without a line number.
+REPO_ROOTS = "s1d s1-duml scripts deploy mediad robotctl netpadd pad-map duck-ipc-proto robotd-params duckctl".split()
 
 
 def run(*args):
@@ -99,10 +115,10 @@ def contract():
     body = proto[start : proto.index("\n    }\n", start)]
     names = {v: consts[c] for v, c in re.findall(r"Call::(\w+)(?:\(_\))? => method::(\w+)", body)}
     ipc = read("s1d/src/ipc.rs")
-    dispatch = ipc[ipc.index("pub fn dispatch(") :]
+    dispatch = re.sub(r"//[^\n]*", "", ipc[ipc.index("pub fn dispatch(") :])
     named = set(re.findall(r"proto::Call::(\w+)", dispatch))
     refused = set()
-    for arm in re.findall(r"((?:proto::Call::\w+(?:\(_\))?\s*\|?\s*)+)=>\s*\{?\s*refused\(", dispatch):
+    for arm in re.findall(r"((?:proto::Call::\w+(?:\(\w+\))?\s*\|?\s*)+)=>\s*\{?\s*refused\(", dispatch):
         refused |= set(re.findall(r"proto::Call::(\w+)", arm))
     return names, named, refused
 
@@ -119,7 +135,7 @@ def check_commands(fails):
     doc = read(COMMANDS)
     names, named, refused = contract()
     api = read("s1d/src/api.rs")
-    s1 = set(re.findall(r'pub const [A-Z]+: &str = "(s1\.[a-z]+)"', api))
+    s1 = set(re.findall(r'pub const [A-Z_0-9]+:\s*&str\s*=\s*"(s1\.[a-z_0-9]+)"', api))
     want = {
         "`robot.*` the body serves": {names[v] for v in named if v in names} - {names[v] for v in refused},
         "`robot.*` the body refuses with a reason": {names[v] for v in refused},
@@ -153,6 +169,9 @@ def check_citations(fails):
         for n, line in enumerate(read(rel).split("\n"), 1):
             last = None
             for t in token.findall(line):
+                if t.split("/")[0] in REPO_ROOTS and "/" in t and ":" not in t and "*" not in t and "<" not in t:
+                    if not (ROOT / t.rstrip("/")).exists() and not re.search(r"[{}]", t):
+                        fails.append(f"stale path: {rel}:{n} names {t}: no such path")
                 # `path:12`, `path:12-34`, `path:12,34` and, after one, a bare `:56`.
                 m = re.fullmatch(r"([\w./+-]*):(\d+)(?:-(\d+))?((?:,\d+)*)", t)
                 if not m or not (m.group(1) or last):
@@ -200,6 +219,35 @@ def check_hashes(fails):
             fails.append(f"commit missing: {h} is not in {CHANGELOG}")
 
 
+def check_tests(fails):
+    """Every function named in a `Test` column of the commands page exists in the S1's code."""
+    code = run("git", "grep", "-h", "-o", "-E", r"fn [a-z0-9_]+", "--", "s1d", "s1-duml").stdout
+    known = set(code.replace("fn ", "").split())
+    column = None
+    for n, line in enumerate(read(COMMANDS).split("\n"), 1):
+        if not line.startswith("|"):
+            column = None
+            continue
+        cells = [c.strip() for c in line.strip("|").split("|")]
+        if "Test" in cells:
+            column = cells.index("Test")
+        elif column is not None and column < len(cells):
+            for t in re.findall(r"`([a-z][a-z0-9]*(?:_[a-z0-9]+)+)`", cells[column]):
+                if t not in known:
+                    fails.append(f"bad citation: {COMMANDS}:{n} names the test {t}: no such function")
+
+
+def check_changelog_groups(fails):
+    log = read(CHANGELOG)
+    m = re.search(r"^### [^\n]*discarded by the owner[^\n]*\n.*?(?=^#{2,3} )", log, re.M | re.S)
+    if not m:
+        fails.append(f"commit missing: no group of the discarded session in {CHANGELOG}")
+        return
+    for h in DISCARDED_COMMITS:
+        if f"`{h}`" not in m.group(0):
+            fails.append(f"commit missing: {h} is not under the discarded session in {CHANGELOG}")
+
+
 def check_pieces(fails):
     record = read(RECORD)
     for p in PIECES:
@@ -240,15 +288,24 @@ def check_paths(fails):
 
 
 def check_record(fails):
-    record = read(RECORD)
+    flat = lambda t: re.sub(r"\s+", " ", t)
+    record = flat(read(RECORD))
     for s in WITHDRAWN:
-        if s in record:
+        if flat(s) in record:
             fails.append(f"withdrawn sentence: {s!r} is in {RECORD}")
+    for rel in CHECKED:
+        text = read(rel)
+        for s in DISCARDED_PATHS:
+            if s in text:
+                fails.append(f"withdrawn sentence: {rel} cites {s}, the discarded session")
+    found = run("git", "grep", "--untracked", "-l", "-F", "-e", "poc2/floor", "-e", "poc2/up/", "--", *S1_CODE,
+                ":!scripts/s1/docs-check.py")
+    for f in found.stdout.split():
+        fails.append(f"withdrawn sentence: {f} cites the discarded session")
 
 
 def comments_only(base, fails):
-    paths = ["s1d", "s1-duml", "scripts/s1", "deploy/s1", "Cargo.toml"]
-    diff = run("git", "diff", "-U0", base, "--", *paths)
+    diff = run("git", "diff", "-U0", base, "--", ".", ":!docs", ":!README.md", ":!CONTRIBUTING.md")
     if diff.returncode != 0:
         fails.append(f"logic line: git diff {base} failed: {diff.stderr.strip()}")
         return
@@ -266,10 +323,10 @@ def comments_only(base, fails):
         if current is None or current == "scripts/s1/docs-check.py":
             continue
         text = raw[1:].strip()
-        if not text or any(text.startswith(p) for p in PROSE):
+        if not text or any(re.fullmatch(p, text) for p in PROSE):
             continue
-        comment = "//" if current.endswith(".rs") else "#"
-        if not text.startswith(comment):
+        comment = COMMENT.get(pathlib.Path(current).suffix)
+        if comment is None or not text.startswith(comment):
             fails.append(f"logic line: {current}: {raw[:100]}")
 
 
@@ -288,6 +345,8 @@ def main():
         check_commands(fails)
         check_citations(fails)
         check_hashes(fails)
+        check_tests(fails)
+        check_changelog_groups(fails)
         check_pieces(fails)
         check_record(fails)
         check_mixed(fails)

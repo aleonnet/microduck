@@ -24,22 +24,26 @@ On the Mac: `adb`, `cargo-zigbuild` with `zig`, the Rust target `armv7-unknown-l
 
 | Variable | Default | |
 |---|---|---|
-| `S1_HOST` | `192.168.1.236:5555` | the robot for `adb`; over USB its serial, `0123456789ABCDEF` |
+| `S1_HOST` | `192.168.1.236:5555` | the robot for `adb`; over USB its serial, `0123456789ABCDEF`, and then set `S1_UDP` too, or its default is built from the serial |
 | `S1_BAUD` | none, required to start the daemons | `921600`, measured by `capture` |
 | `S1_OUT` | `~/Development/RoboMaster-S1/out/<date>-poc2` | where artefacts land |
 | `S1_CHROOT` | `/data/debian` | |
 | `S1_UDP` | `<host>:4210` | the robot's `netpadd` |
 | `S1_TCP` | `127.0.0.1:9000` | the forwarded socket |
 | `S1_VOLUME_CONTROL` | `Speaker` | no valid proof; set empty to pass none |
+| `S1_ARGS` | none | extra flags for `s1d`; the only way to pass `--blaster-gel` |
+| `S1_ROOTFS` | the lab's tar | `exec` |
+| `S1_STAGE`, `S1_PULL_SKIP` | `/sdcard/bk`; `blackbox userdata cache` | `backup` |
+| `S1_ORT`, `S1_ORT_VERSION`, `S1_ORT_MAC`, `S1_FRAMES` | the lab's | `infer` |
 
 ## From a cold robot
 
 1. **Power on, root adb.** Root `adb` comes from the DJI app's Lab, through `robomaster-s1-hacks` (`enable_root_adb.py`); it has to be enabled again after every power cycle. `adb devices` must list the robot. The owner's hand may be needed here; check first with `ping` and `adb`.
-2. **The chroot, once:** `scripts/s1/bench.sh exec`. It pushes and unpacks the rootfs when absent and makes the mounts. Every stage that enters the chroot makes them again, since a reboot drops them.
+2. **The chroot, once:** `scripts/s1/bench.sh exec`. It pushes and unpacks the rootfs when absent and makes the mounts. A reboot drops the mounts: `drive`, `up`, `camera`, `audio`, `frames`, `infer` and `telemetry-free` make them again; `events`, `items`, `floor` and `capture` do not.
 3. **Install, after a build:** `scripts/s1/s1-push.sh`. It builds and installs `s1d`, `s1ctl`, `s1-cam`, `netpadd`, `robotctl`, `robotd.toml`, `asound.conf`, `asound.state.stock`, and links the eight sounds. It does not install `mediad`, `s1-infer` or `pet-detect`.
-4. **Start:** either stage below stops DJI's body process and its monitor, then starts `s1d` and `netpadd` by hand. Nothing supervises them.
-   - `S1_BAUD=921600 scripts/s1/bench.sh drive` then runs the items. **Proved on 2026-10-30, wheels in the air, in the form that existed then.**
-   - `S1_BAUD=921600 scripts/s1/bench.sh up` only starts them, forwards the socket and checks four mixer controls against `deploy/s1/asound.state.stock`. **No valid proof:** its only run was the discarded floor session.
+4. **Start.** Both ways start `s1d` and `netpadd` by hand, and nothing supervises them.
+   - `scripts/s1/bench.sh stop`, then `S1_BAUD=921600 scripts/s1/bench.sh drive`, which runs the items. **`drive` does not stop DJI's process: without `stop` first, `s1d` writes to a UART DJI's program still holds.** Proved on 2026-10-30, wheels in the air, in the form that existed then.
+   - `S1_BAUD=921600 scripts/s1/bench.sh up` stops DJI's body process and its monitor itself, starts the daemons, forwards the socket and checks four mixer controls against `deploy/s1/asound.state.stock`. **No valid proof:** its only run was the discarded floor session.
 5. **Items, wheels in the air:** `scripts/s1/bench.sh items`, or some by name (`items F2 F10`). The prompts need a terminal; without one an item counts as `unwitnessed` and fails.
 6. **Floor:** `scripts/s1/bench.sh floor`, 1.5 m free. **No valid proof.** Read the [defects](s1-commands.md#open-defects) first: `robot.stop` does not cancel `s1.goto`.
 7. **By hand:** `s1ctl --tcp 127.0.0.1:9000 <command>` from the Mac; on the robot, `robotctl` in the chroot:
@@ -48,7 +52,7 @@ On the Mac: `adb`, `cargo-zigbuild` with `zig`, the Rust target `armv7-unknown-l
 
 ## The stages
 
-`scripts/s1/bench.sh help` lists them. Each leaves artefacts under `$S1_OUT/<stage>/`, and a re-run moves the earlier run aside first. The status of each is in [the record](../project/s1-bringup.md#the-bench-stage-by-stage).
+`scripts/s1/bench.sh help` lists them. Each leaves artefacts under `$S1_OUT/<stage>/`. A re-run moves the earlier run aside only where the stage wrote `cmd.txt`; `items`, `floor`, `e2e` and `app` never do, and overwrite. The status of each is in [the record](../project/s1-bringup.md#the-bench-stage-by-stage).
 
 | Stage | Needs | What it does |
 |---|---|---|
@@ -74,7 +78,7 @@ On the Mac: `adb`, `cargo-zigbuild` with `zig`, the Rust target `armv7-unknown-l
 ```
 cargo test -p s1-duml -p s1d                 # includes s1-e2e fake, 42 of 42
 scripts/s1/bench.sh e2e                      # the same, keeping the bytes
-scripts/s1/bench-selftest.sh                 # every stage against a stand-in adb
+scripts/s1/bench-selftest.sh                 # the stages against a stand-in adb, except items, infer, restore, app
 scripts/s1/e2e-refute.sh                     # a planted byte must fail; also telemetry-, audio-, cam-refute.sh
 scripts/s1/duml-strace.py --selftest         # also telemetry-free.py --selftest
 python3 scripts/s1/docs-check.py             # these pages against the code

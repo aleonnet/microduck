@@ -44,14 +44,14 @@ reads what the body sent, decodes it, publishes state and events.
 stops if the loop dies. The bytes are proroklab's; DJI's own are built and have never been sent.
 
 **Deadman.** A twist or wheel speeds older than 500 ms (`--deadman-ms`) become zero, with the heartbeat
-still on. A gimbal rate ends the same way. An angle target has no deadman: it holds.
+still on. A gimbal rate ends the same way while armed, with one zero-rate frame; disarming sends no such frame. An angle target has no deadman: it holds, and goes on being re-sent during `s1.gimbal sleep` and `recenter`.
 
-**Who owns the wheels on each tick**, first match wins (`s1d/src/tick.rs:512`): a position task sends nothing; lifted
+**Who owns the wheels on each tick**, first match wins (`s1d/src/tick.rs:512`): a position task sends nothing, unless lifted; lifted
 sends zero; fresh `s1.wheels` sends those rpm; `gimbal_lead` sends the twist as `0x3f/0x22`; otherwise the
 twist through mecanum kinematics as `0x3f/0x20`. `--twist speed` would send `0x3f/0x21`; it has never run.
 
 **Frames.** The duck's signs are converted where the wheels and the gimbal meet the wire: the duck's +yaw is left, DJI's is right.
-`s1.*` keeps DJI's signs. `robot.state` uses the duck's frames.
+`s1.gimbal` and `s1.telemetry` keep DJI's signs; `s1.goto` takes counter-clockwise yaw and negates it on the wire. `robot.state` uses the duck's frames.
 
 **Lift rule.** A detector compares the controller's fused velocity with what the four wheel speeds imply. Past
 the trip level for 300 ms it zeroes the wheels and sets `safety.picked_up`; gimbal, sound and lights go on. **The levels
@@ -145,7 +145,7 @@ shared. A browser and a pad work on both bodies. A conformance battery runs the 
 | Piece | Change | Touches the Pollen's code? |
 |---|---|---|
 | `mediad`, source | a new source without `v4l2src`, fed by the S1's camera sequence | yes |
-| Format | convert NV12 to UYVY at the source, or parametrise; UYVY is fixed in six files. Decided by measuring the CPU | no if converting, yes if parametrising |
+| Format | convert NV12 to UYVY at the source, or parametrise; UYVY is fixed in `mediad`, in `robotctl/src/frame.rs` and in the contract's `valid_uyvy`. Decided by measuring the CPU | no if converting, yes if parametrising |
 | `mediad`, permission | a way for `s1.*` through (`mediad/src/session.rs:218`) | yes, one place |
 | The page | show what this body has, no duck menu | yes |
 | `hello`, `system.info` | answered by `s1d`, through `mediad`'s `--updater-socket` and `--config-socket` (`mediad/src/main.rs:161-169`) | no |

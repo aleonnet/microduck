@@ -1,4 +1,4 @@
-//! The control loop: one tick every period, never waiting on a client.
+//! The control loop: one tick every period. It can wait on a client only at the speaker's lock.
 //!
 //! ```text
 //! snapshot intents → arm/disarm? → heartbeat → wheels (deadman) → gimbal → LED → read body →
@@ -246,7 +246,7 @@ pub fn head_from_gimbal(yaw_ddeg: i16, pitch_ddeg: i16) -> [f64; 4] {
 }
 
 /// The wheels-stop rule's thresholds. **They have no valid origin:** the two levels come from the
-/// floor session of 2026-10-31, which the owner discarded (`out/2026-10-31-poc2/floor/`), and the
+/// floor session of 2026-10-31, which the owner discarded, so they are not evidence, and the
 /// release level and both times are design choices, not measurements. The tests prove the
 /// mechanism, not these numbers; measure again before relying on them. What does stand: lifted,
 /// the wheels stop (owner's rule, 2026-10-30); DJI's `pick_up` bit never set in the captures of
@@ -260,8 +260,8 @@ pub const LIFT_RELEASE_FOR: Duration = Duration::from_millis(500);
 
 /// The body speed the four ESC speeds imply, metres per second — the forward mecanum kinematics,
 /// the inverse of [`mecanum_rpm`] with the wire's sign convention (the left wheels read negative
-/// when the robot drives forward: `[27, −26, −33, 31]` rpm, a sample of the discarded floor session,
-/// reads as 0.153 m/s). Order as the ESC subject and the wire have it: front-right,
+/// when the robot drives forward, by that convention; the unit test's sample shows the arithmetic,
+/// it is not a measurement). Order as the ESC subject and the wire have it: front-right,
 /// front-left, back-left, back-right.
 pub fn wheel_speed_m_s(esc_rpm: [i16; 4], radius_m: f64) -> f64 {
     let [fr, fl_w, bl_w, br] = esc_rpm.map(f64::from);
@@ -551,8 +551,8 @@ pub fn run(body: &mut dyn S1Body, state: Arc<State>, intents: Arc<Intents>, cfg:
 
             // The gimbal: a rate while one is fresh, else the angle target.
             //
-            // The rate (`s1.gimbal speed`) goes out every tick while fresher than the deadman — the
-            // one measurement of a single frame is from the discarded floor session — and the
+            // The rate (`s1.gimbal speed`) goes out every tick while fresher than the deadman —
+            // whether one frame would be enough has no valid measurement — and the
             // angle hold is silent meanwhile, or it would pull the gimbal back every 100 ms.
             // When the rate ends (`stop`, or the deadman) one zero-rate frame goes out and the
             // head target becomes where the gimbal is, read from its own push, so the hold does
@@ -990,7 +990,7 @@ mod tests {
         assert_eq!(dds_retcode_meaning(0x02, None), "empty answer");
     }
 
-    /// A sample of the discarded floor session (`[27, −26, −33, 31]` rpm) reads as 0.153 m/s;
+    /// The arithmetic on one sample (`[27, −26, −33, 31]` rpm) gives 0.153 m/s; not a measurement;
     /// a turn in place (sides opposed) has wheel speed and no body speed; a strafe is lateral.
     #[test]
     fn wheel_speed_is_the_forward_mecanum_kinematics_in_the_wires_signs() {
@@ -1007,8 +1007,8 @@ mod tests {
         assert!((v - 0.3).abs() < 0.01, "{v}");
     }
 
-    /// Over 0.4 m/s for 300 ms trips; under 0.15 m/s for 500 ms releases; 0.13 m/s (a figure of the
-    /// discarded floor session) never trips; a brief spike alone does not either.
+    /// Over 0.4 m/s for 300 ms trips; under 0.15 m/s for 500 ms releases; 0.13 m/s (a test value, not
+    /// a measurement) never trips; a brief spike alone does not either.
     #[test]
     fn the_lift_detector_needs_persistence_both_ways() {
         let t0 = Instant::now();
@@ -1017,7 +1017,7 @@ mod tests {
         for ms in (0..=1000).step_by(20) {
             assert!(
                 !d.update(0.13, at(ms)),
-                "the floor's worst case must not trip"
+                "a disagreement of 0.13 m/s must not trip the detector"
             );
         }
         assert!(

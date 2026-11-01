@@ -44,7 +44,7 @@ The camera's sequence decoded after two reboots; speaker proven; a microphone co
 
 ### Hand-offs and their corrections
 
-Documents. The hand-offs are now superseded.
+Documents, with the bench's stages 7 and 11 stopping before any generic stream (`26fe0f5`). The hand-offs are now superseded.
 
 `5ad758c` · `b535a8b` · `a7aa5be` · `26fe0f5`
 
@@ -114,4 +114,4 @@ The old history is kept in the local branch `backup/s1-fase1-antes-dos-trailers`
 
 ## The front of 2026-10-30, abandoned
 
-The work plan of 2026-10-30 was closed as abandoned on 2026-11-01 with its reason on record: phase 1 was not proven through the duck's path, the floor proof was discarded by the owner, and its eighth gate was red. The code stayed. A cold reader ran twice on this branch on 2026-10-30, both rejected, up to `88187a9`; the 72 commits after it have had no such reading, which is the code front's to do.
+The work plan of 2026-10-30 was closed as abandoned on 2026-11-01 with its reason on record: phase 1 was not proven through the duck's path, the floor proof was discarded by the owner, and its eighth gate was red. The code stayed. Cold readers read parts of this branch on 2026-10-30: two rounds up to `88187a9`, both rejected; the first cut of `s1-e2e`, before `b325606`; a hand-off, before `26fe0f5`. The 48 commits after `26fe0f5` have had no such reading, and the rounds before it were not of the whole. That is the code front's to do.

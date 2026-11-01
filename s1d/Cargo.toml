@@ -5,7 +5,7 @@
 # Below the contract it speaks DUML (`s1-duml`) on `/dev/ttyS3`. It is deliberately not a port of
 # `robotd`: that daemon is fifteen servos and a policy; this one is a twist, two angles, twenty LEDs
 # and the telemetry the motion controller pushes back. What it copies from `robotd` is the shape
-# that made the contract honest — stamped intent slots, a loop that never waits on a client, health
+# that made the contract honest — stamped intent slots, a loop meant not to wait on a client, health
 # computed from atomics the loop publishes — and the IPC server around the socket.
 [package]
 name = "s1d"

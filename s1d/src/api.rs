@@ -95,8 +95,8 @@ fn default_times() -> u8 {
 }
 
 /// One gimbal action. `recenter` and the speeds are degrees per second (5..540); `speed` is a
-/// continuous rate in degrees per second on each axis (±540) that lasts until the next `speed`
-/// or a `stop`; `sleep` folds the gimbal, `wake` levels it. Signs are DJI's own, as this list
+/// continuous rate in degrees per second on each axis (±540) that lasts until the next `speed`,
+/// a `stop` or the deadman, while armed; `sleep` folds the gimbal, `wake` levels it. Signs are DJI's own, as this list
 /// is DJI's library on the duck's socket: yaw positive turns **right**, pitch positive looks
 /// **up** — the opposite of `robot.head`, which keeps the duck's frame (`tick::gimbal_ddeg`).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]

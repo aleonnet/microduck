@@ -758,7 +758,7 @@ fn stock_push(seq: u16, rpm: [i16; 4], body: [f32; 3]) -> Vec<u8> {
     .unwrap()
 }
 
-/// The wheels-stop rule on the loop, with synthetic pushes (the shape, a discarded session's):
+/// The wheels-stop rule on the loop, with synthetic pushes, which prove no threshold:
 /// driving at 0.15 m/s with the fused velocity agreeing, the wheels turn; the fused velocity
 /// running away to 0.9 m/s while the wheels still read 0.15 (the robot in a hand) zeroes the
 /// wheels within the trip time and marks `picked_up`; agreement again for the release time gives
@@ -778,8 +778,8 @@ fn lifted_stops_the_wheels_and_the_floor_does_not() {
     intents.set_enabled(true);
     let (s, i) = (Arc::clone(&state), Arc::clone(&intents));
     let handle = std::thread::spawn(move || run(&mut body, s, i, Config::default()));
-    // Driving at 0.15 m/s: the rpm, the fused velocity a little above (0.26, a figure of the
-    // discarded floor session).
+    // Driving at 0.15 m/s: the rpm, the fused velocity a little above (0.26, a test value,
+    // not a measurement).
     let mut seq = 0u16;
     let mut push = |rpm: [i16; 4], body: [f32; 3]| {
         seq = seq.wrapping_add(1);
@@ -802,7 +802,7 @@ fn lifted_stops_the_wheels_and_the_floor_does_not() {
     let floor_end = std::fs::metadata(&wire).unwrap().len() as usize;
     assert!(
         !state.lifted.load(Ordering::Relaxed),
-        "the floor's worst case is not a lift"
+        "a disagreement of 0.13 m/s is not a lift"
     );
     drive(700, [0.9, 0.0, 0.0], &mut push);
     let lifted_end = std::fs::metadata(&wire).unwrap().len() as usize;

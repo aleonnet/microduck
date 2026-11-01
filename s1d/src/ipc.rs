@@ -3,8 +3,8 @@
 //! Claiming the endpoint, serving connections, notifications versus requests, the per-subscriber
 //! decimation of `robot.state` — all as `robotd/src/main.rs` does them, so a client cannot tell
 //! which daemon is behind `/run/robotd.sock` until it asks something only legs can do. Those
-//! calls are refused *with a reason* (`IntentResult::refused`): a route that exists in the
-//! contract is served, never answered "method not found" — that is for routes that are not ours.
+//! calls are refused *with a reason* (`IntentResult::refused`): a route of the robot in the
+//! contract is served or refused; "method not found" is for every other service's, as `other =>`.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -637,8 +637,8 @@ pub fn dispatch(
             });
             accepted(id)
         }
-        // Routes that exist in the contract and that this body cannot honour: refused with the
-        // reason, never "method not found". `robot.do`'s wording contains "not driving", which
+        // Robot routes in the contract that this body cannot honour: refused with the reason,
+        // not "method not found". `robot.do`'s wording contains "not driving", which
         // is what `pad-map`'s pad-loss handler reads to stop asking for a sit.
         proto::Call::RobotDo(_) => refused(
             id,
