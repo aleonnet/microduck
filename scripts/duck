@@ -1,0 +1,42 @@
+#!/bin/sh
+# The duck and its console, with the page open, in one command.
+#
+#   scripts/duck            # starts everything and opens the console in the browser
+#   scripts/duck down       # stops everything
+#   scripts/duck status     # anything else goes to scripts/duck-sim as it is
+#
+# `scripts/duck-sim` is the recipe. This only fills in what the console needs, and a value already
+# set by whoever calls it stays.
+set -eu
+
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+PAGE=http://127.0.0.1:8080
+
+# Beside this repo, where the docs say; the recipe's own default is ~/Pollen/microduck_rl.
+if [ -z "${DUCK_SIM_RL:-}" ] && [ -d "$REPO/../microduck_rl" ]; then
+    DUCK_SIM_RL="$(cd "$REPO/../microduck_rl" && pwd)"
+    export DUCK_SIM_RL
+fi
+# The console's video comes from this camera.
+DUCK_SIM_CAMERAS="${DUCK_SIM_CAMERAS:-a}"
+# No window: closing it stops the physics, and the console is left with no duck behind it.
+DUCK_SIM_VIEWER="${DUCK_SIM_VIEWER:-0}"
+export DUCK_SIM_CAMERAS DUCK_SIM_VIEWER
+
+[ $# -eq 0 ] || exec "$REPO/scripts/duck-sim" "$@"
+
+"$REPO/scripts/duck-sim" up
+
+tries=0
+until curl -fsS -o /dev/null --max-time 1 "$PAGE" 2>/dev/null; do
+    tries=$((tries + 1))
+    [ "$tries" -lt 30 ] || { echo "the console did not answer at $PAGE" >&2; exit 1; }
+    sleep 1
+done
+
+case "$(uname -s)" in
+    Darwin) open "$PAGE"; address="$(ipconfig getifaddr en0 || true)" ;;
+    *)      xdg-open "$PAGE"; address="$(hostname -I 2>/dev/null | cut -d' ' -f1 || true)" ;;
+esac
+echo "console: $PAGE"
+[ -z "$address" ] || echo "from another machine on this network: http://$address:8080"

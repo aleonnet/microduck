@@ -71,6 +71,10 @@ scripts/duck-sim realtime       # how fast the world is running (see below)
 scripts/duck-sim down
 ```
 
+**The short way, for the console.** `scripts/duck` starts all of this with a camera and no window,
+waits for the console and opens it in the browser; `scripts/duck down` stops it. There is no window
+because closing it stops the physics. `DUCK_SIM_VIEWER=1 scripts/duck` brings it back.
+
 Without an argument the script builds the daemons from the branch you are on, writes a params file
 naming the policies in this repo, starts `duck-body`, `tofd --sim` and `robotd --sim` under
 `~/.cache/duck-sim`, and enables the standing policy. `ctl` is `robotctl` pointed at that duck's
