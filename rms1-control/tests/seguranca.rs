@@ -471,6 +471,73 @@ fn com_a_torre_seguindo_o_estado_nao_mostra_yaw_pedido() {
     assert!(e.limitado_por.is_empty(), "{:?}", e.limitado_por);
 }
 
+/// Ligar não move o robô: o que foi pedido antes de armar não vale depois, mesmo dentro do prazo.
+#[test]
+fn armar_nao_cumpre_o_que_foi_pedido_antes() {
+    let mut b = banca();
+    b.intencoes.pedir_twist([1.0, 0.0, 0.0]);
+    b.intencoes.pedir_torre(0.5, 0.1);
+    b.intencoes.pedir_armar(true);
+    b.agora = Instant::now();
+    let e = b.laco.ciclo(b.agora, true).unwrap();
+    assert_eq!(b.ultimas_rodas(), [0; 4]);
+    assert_eq!(e.aplicado, [0.0; 3]);
+    assert!(
+        b.de(id::TORRE_ANGULOS).is_empty(),
+        "{:?}",
+        b.corpo.quadros()
+    );
+    // O pedido seguinte vale.
+    b.pedir_e_ciclar([1.0, 0.0, 0.0]);
+    assert_ne!(b.ultimas_rodas(), [0; 4]);
+}
+
+/// O pedido feito logo depois de armar vale, mesmo antes de o laço ver o armar: é o que um programa faz.
+#[test]
+fn pedido_logo_depois_de_armar_vale() {
+    let mut b = banca();
+    b.intencoes.pedir_armar(true);
+    b.intencoes.pedir_twist([1.0, 0.0, 0.0]);
+    b.intencoes.pedir_torre(0.2, 0.0);
+    b.agora = Instant::now();
+    b.laco.ciclo(b.agora, true).unwrap();
+    assert_ne!(b.ultimas_rodas(), [0; 4]);
+    assert!(!b.de(id::TORRE_ANGULOS).is_empty());
+}
+
+/// Armar de novo, já armado, não atrapalha quem está pilotando.
+#[test]
+fn armar_de_novo_nao_esquece_o_pedido() {
+    let mut b = banca();
+    b.armar();
+    b.intencoes.pedir_twist([1.0, 0.0, 0.0]);
+    b.intencoes.pedir_armar(true);
+    b.agora = Instant::now();
+    b.laco.ciclo(b.agora, true).unwrap();
+    assert_ne!(b.ultimas_rodas(), [0; 4]);
+}
+
+/// Seguindo a torre, o giro vira taxa, que tem limite: o estado diz o que coube, e por quê.
+#[test]
+fn seguindo_a_torre_o_giro_aplicado_e_o_da_taxa_e_o_limite_e_dito() {
+    let mut b = banca();
+    b.armar();
+    b.intencoes.pedir_modo(Modo::ChassiSegueTorre);
+    let e = b.pedir_e_ciclar([0.0, 0.0, 10.0]);
+    let t = b.de(id::TORRE_TAXA).pop().unwrap();
+    assert_eq!(i16_em(&t, 0), -5400);
+    assert!(
+        (e.aplicado[2] - 540f64.to_radians()).abs() < 1e-9,
+        "{:?}",
+        e.aplicado
+    );
+    assert!(
+        e.limitado_por.contains(&"max_velocity"),
+        "{:?}",
+        e.limitado_por
+    );
+}
+
 /// O último pedido de energia vence, e é lido uma vez por ciclo.
 #[test]
 fn o_ultimo_pedido_de_energia_vence() {

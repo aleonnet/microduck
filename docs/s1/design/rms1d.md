@@ -39,6 +39,7 @@ console, robotctl, rms1d-roteiro, e depois a inteligência
 - O laço nunca espera cliente. Intenções são trocas atômicas; o estado sai num canal limitado, e só é montado com assinante.
 - A saúde é publicada pelo laço, então um laço travado se denuncia pela idade do último ciclo.
 - Sair para o robô. `SIGTERM` e Ctrl-C passam pelo laço, que desarma e descarrega a gravação antes de o processo terminar. `kill -9` não tem esse caminho.
+- Armar não cumpre pedido antigo: o que foi pedido antes de armar é esquecido, mesmo dentro do prazo.
 - `<socket>.lock` garante um só dono, e nunca é apagado.
 - `MissedTickBehavior::Skip`, em executor próprio.
 

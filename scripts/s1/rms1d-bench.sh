@@ -2,7 +2,8 @@
 # Prepara e encerra a prova no robô real. Não comanda nada que um cliente real não comande: quem manda é o
 # console, `robotctl` e `rms1d-roteiro`, pelo socket, como no simulador. Só muda o corpo, em `deploy/s1/rms1d.toml`.
 #
-#   scripts/s1/rms1d-bench.sh up       acesso, envia, para só o que segura a serial, sobe o `rms1d`. Nada se move.
+#   scripts/s1/rms1d-bench.sh up       acesso, envia, para só o que segura a serial, sobe o `rms1d`. Nada se move. De novo:
+#                                      o anterior sai primeiro, e a gravação dele fica em `out/`.
 #   scripts/s1/rms1d-bench.sh console  `mediad` neste Mac, com padrão de teste, e abre o console.
 #   scripts/s1/rms1d-bench.sh volta    guarda a gravação, reinicia o robô e confere que a DJI voltou.
 #
@@ -40,6 +41,15 @@ confere() { # confere <palavra> <mensagem> <comando no robô>
     esac
 }
 
+# Uma gravação por processo: quem encerra o `rms1d` guarda a dele, ou o seguinte a sobrescreve.
+guardar_gravacao() { # guardar_gravacao <nome em $OUT>
+    local g
+    g="$(python3 -I -c 'import sys,tomllib; print(tomllib.load(open(sys.argv[1],"rb"))["corpo"].get("gravar",""))' "$TOML")"
+    if [ -n "$g" ]; then
+        if "${A[@]}" pull "$CHROOT$g" "$OUT/$1" >/dev/null 2>&1; then diz "gravação guardada: $OUT/$1"; else diz "sem gravação para guardar"; fi
+    fi
+}
+
 up() {
     mkdir -p "$ESTADO" "$OUT"
     if [ -z "${S1_SEM_COMPILAR:-}" ]; then
@@ -57,6 +67,7 @@ up() {
     # Um `rms1d` de antes sai pelo caminho que para o robô, e antes do envio: binário em uso não se sobrescreve, e a trava
     # faria o novo morrer em silêncio, com o velho respondendo no lugar dele.
     confere sem_rms1d "o rms1d anterior não saiu; desligue o robô na chave" "$BB pkill -TERM rms1d; $BB sleep 1; $BB pidof rms1d >/dev/null && echo RMS1D_ANTIGO_VIVO || echo sem_rms1d"
+    guardar_gravacao "robo-$(date +%H%M%S).quadros"
     "${A[@]}" push "$BIN" "$CHROOT/opt/robot/bin/rms1d" >/dev/null
     "${A[@]}" push "$TOML" "$CHROOT/etc/robot/rms1d.toml" >/dev/null
     "${A[@]}" shell "chmod 755 $CHROOT/opt/robot/bin/rms1d"
@@ -81,7 +92,14 @@ up() {
     echo $! > "$ESTADO/ponte.pid"
     sleep 1
     diz "saúde, pelo socket:"
-    "$ROBOTCTL" --robot-socket "$SOCKET" --config-socket "$SOCKET" --socket "$SOCKET" health | tee "$OUT/saude.txt" || falha "o rms1d está doente"
+    local rc=0
+    "$ROBOTCTL" --robot-socket "$SOCKET" --config-socket "$SOCKET" --socket "$SOCKET" health > "$OUT/saude.txt" 2>&1 || rc=$?
+    cat "$OUT/saude.txt"
+    if [ "$rc" != 0 ]; then
+        # Serial muda é o que esta prova quer saber, e o resto dela diz o que é: avisa e segue. Qualquer outra coisa para.
+        grep -q "mudo" "$OUT/saude.txt" || falha "o rms1d está doente"
+        diz "AVISO: nada chegou do corpo pela serial. Se as rodas também não obedecerem, comece por aqui."
+    fi
     diz "no ar, desarmado. Nada se moveu. Socket deste Mac: $SOCKET"
     diz "roteiro: target/debug/rms1d-roteiro --socket $SOCKET"
 }
@@ -93,11 +111,9 @@ console() {
 
 volta() {
     mkdir -p "$OUT"
-    local g
-    g="$(python3 -I -c 'import sys,tomllib; print(tomllib.load(open(sys.argv[1],"rb"))["corpo"].get("gravar",""))' "$TOML")"
     # SIGTERM: o `rms1d` para o robô e descarrega a gravação antes de sair.
     "${A[@]}" shell "$BB pkill -TERM rms1d; $BB sleep 1" || true
-    if [ -n "$g" ]; then "${A[@]}" pull "$CHROOT$g" "$OUT/robo.quadros" >/dev/null || diz "sem gravação para guardar"; fi
+    guardar_gravacao "robo-$(date +%H%M%S).quadros"
     if [ -f "$ESTADO/ponte.pid" ]; then kill "$(cat "$ESTADO/ponte.pid")" 2>/dev/null || true; fi
     "${A[@]}" forward --remove "tcp:$TCP" >/dev/null 2>&1 || true
     diz "reiniciando o robô"

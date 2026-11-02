@@ -311,6 +311,57 @@ fn sigterm_armado_para_o_robo_e_a_gravacao_guarda_o_fim() {
     }
 }
 
+/// Andar reto é com as rodas, mesmo que o último cliente tenha deixado o chassi seguindo a torre.
+#[test]
+fn so_andar_nao_herda_o_modo_do_cliente_anterior() {
+    let d = pasta("heranca");
+    let g = d.join("q");
+    let toml = format!("[corpo]\ntipo = \"falso\"\ngravar = \"{}\"\n", g.display());
+    let mut p = subir(&d, &toml);
+    let mut c = Cliente::novo(&p.socket);
+    c.chamar("robot.do", json!({"skill": "chassi_segue_torre"}));
+    let s = Command::new(ROTEIRO)
+        .args([
+            "--socket",
+            p.socket.to_str().unwrap(),
+            "--so-andar",
+            "--velocidade",
+            "1.2",
+        ])
+        .output()
+        .unwrap();
+    assert!(s.status.success(), "{}", String::from_utf8_lossy(&s.stderr));
+    encerrar(&mut p);
+    let r = rms1_control::gravacao::resumo(&g).unwrap();
+    assert!(
+        r[&(0x3f, 0x20)]
+            .iter()
+            .any(|(_, _, d)| d.iter().any(|v| *v != 0)),
+        "{r:?}"
+    );
+}
+
+/// O modo também vem como notificação, como no `robotd`.
+#[test]
+fn skill_de_modo_por_notificacao_vale() {
+    let d = pasta("notif");
+    let p = subir(&d, FALSO);
+    let mut a = Cliente::novo(&p.socket);
+    a.chamar("robot.subscribe", json!({}));
+    let mut c = Cliente::novo(&p.socket);
+    c.chamar("robot.enable", json!({"on": true}));
+    writeln!(
+        c.0,
+        "{}",
+        json!({"jsonrpc":"2.0","method":"robot.do","params":{"skill":"chassi_segue_torre"}})
+    )
+    .unwrap();
+    let t = Instant::now();
+    while a.estado()["policy"] != "chassi_segue_torre" {
+        assert!(t.elapsed() < Duration::from_secs(2), "não trocou");
+    }
+}
+
 /// Gravação sem nada é erro, e não `IGUAIS`.
 #[test]
 fn comparar_gravacao_vazia_reprova() {
@@ -332,13 +383,16 @@ fn comparar_gravacao_vazia_reprova() {
 fn processos_a_parar_sai_do_arquivo_validado() {
     let d = pasta("parar");
     let cfg = d.join("c.toml");
-    std::fs::write(&cfg, "[dji]\nparar = [\"a\", \"b\"]\n").unwrap();
+    std::fs::write(&cfg, "[dji]\nparar = [\"dji_monitor\", \"dji_hdvt_uav\"]\n").unwrap();
     let s = Command::new(RMS1D)
         .args(["--config", cfg.to_str().unwrap(), "--processos-a-parar"])
         .output()
         .unwrap();
     assert!(s.status.success());
-    assert_eq!(String::from_utf8_lossy(&s.stdout).trim(), "a b");
+    assert_eq!(
+        String::from_utf8_lossy(&s.stdout).trim(),
+        "dji_monitor dji_hdvt_uav"
+    );
     std::fs::write(&cfg, "[dji]\nparar = [\"dji_scratch\"]\n").unwrap();
     let s = Command::new(RMS1D)
         .args(["--config", cfg.to_str().unwrap(), "--processos-a-parar"])

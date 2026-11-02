@@ -8,9 +8,9 @@ use serde::Deserialize;
 
 pub const CAMINHO_PADRAO: &str = "/etc/robot/rms1d.toml";
 
-/// O que não pode ser parado no robô: parar `dji_scratch` derrubou `dji_sys`
-/// (`microduck/scripts/s1/bench.sh`), e `dji_network` e `dji_sys` são Wi-Fi e energia.
-const NAO_PARAR: [&str; 3] = ["dji_scratch", "dji_sys", "dji_network"];
+/// O único que pode ser parado no robô, os dois que seguram a serial. Lista de permitidos, e não de proibidos: parar
+/// `dji_scratch` derrubou `dji_sys` (`docs/s1/robot/rms1d-pontos-de-controle.md`), e o próximo nome ninguém conhece.
+const PODE_PARAR: [&str; 2] = ["dji_monitor", "dji_hdvt_uav"];
 
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields, default)]
@@ -297,10 +297,10 @@ impl Params {
             .dji
             .parar
             .iter()
-            .find(|p| NAO_PARAR.contains(&p.as_str()))
+            .find(|p| !PODE_PARAR.contains(&p.as_str()))
         {
             return ruim(format!(
-                "dji.parar não pode ter {p}: parar isso derruba o robô"
+                "dji.parar não pode ter `{p}`: só {PODE_PARAR:?} podem parar"
             ));
         }
         Ok(())
@@ -358,12 +358,23 @@ mod testes {
 
     /// Parar `dji_scratch` derrubou `dji_sys` no robô.
     #[test]
-    fn nao_aceita_parar_o_que_derruba_o_robo() {
-        for p in NAO_PARAR {
+    fn so_aceita_parar_o_que_segura_a_serial() {
+        for p in [
+            "dji_scratch",
+            "dji_sys",
+            "dji_network",
+            "dji_camera",
+            "dji_scratch ",
+            "dji_monitor dji_scratch",
+            "",
+        ] {
             let e = de(&format!("[dji]\nparar = [\"{p}\"]\n"))
                 .unwrap_err()
                 .to_string();
-            assert!(e.contains(p), "{e}");
+            assert!(e.contains("dji.parar"), "{p}: {e}");
+        }
+        for p in PODE_PARAR {
+            de(&format!("[dji]\nparar = [\"{p}\"]\n")).unwrap();
         }
     }
 

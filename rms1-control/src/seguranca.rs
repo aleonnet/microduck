@@ -304,7 +304,13 @@ impl<C: Corpo> Seguranca<C> {
                     },
                     saude,
                 );
-                giro_para_torre = twist[2];
+                // O giro vira taxa da torre: o aplicado é o que cabe nela.
+                let limite = self.giro_torre_max.to_radians();
+                giro_para_torre = twist[2].clamp(-limite, limite);
+                if giro_para_torre != twist[2] {
+                    limites.push(LIMITE_VELOCIDADE);
+                    twist[2] = giro_para_torre;
+                }
             }
         }
         self.torre(leitura, giro_para_torre, agora, saude, &mut limites);

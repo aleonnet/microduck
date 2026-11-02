@@ -8,12 +8,15 @@ parar_ponte() { if [ -f "$T/e/ponte.pid" ]; then kill "$(cat "$T/e/ponte.pid")" 
 trap parar_ponte EXIT
 mkdir -p "$T/bin" "$T/e" "$T/out"
 export ADB_LOG="$T/adb.log"; : > "$ADB_LOG"
+# Tudo o que foi pedido nesta execução, em todos os cenários: é aqui que se procura o proibido.
+export ADB_TUDO="$T/adb-tudo.log"; : > "$ADB_TUDO"
 # O `adb` falso devolve sempre 0, como o do Android 4.4: quem reprova é a palavra na saída. Cada defeito do robô é um arquivo
 # em $T/defeito.
 export DEFEITO="$T/defeito"; : > "$DEFEITO"
 cat > "$T/bin/adb" <<'SHIM'
 #!/bin/sh
 echo "$*" >> "$ADB_LOG"
+echo "$*" >> "$ADB_TUDO"
 tem() { grep -qx "$1" "$DEFEITO"; }
 case "$*" in
   *"test -d"*) tem sem_chroot || echo chroot_ok ;;
@@ -31,15 +34,17 @@ print("acesso", sys.argv[1:])
 SHIM
 cat > "$T/bin/robotctl" <<'SHIM'
 #!/bin/sh
+if grep -qx serial_muda "$DEFEITO"; then echo "robot     degraded: o corpo está mudo: nenhum quadro recebido em 4 s"; exit 1; fi
+if grep -qx doente "$DEFEITO"; then echo "robot     unhealthy: o laço parou"; exit 1; fi
 echo "robot     healthy"
 SHIM
 chmod +x "$T/bin/robotctl"
 export PATH="$T/bin:$PATH" S1_ACESSO="$T/acesso.py" S1_SEM_COMPILAR=1 S1_ESTADO="$T/e" S1_OUT="$T/out" S1_ESPERA_REBOOT=0 S1_ROBOTCTL="$T/bin/robotctl"
 falhou=0
 pediu() { if grep -qF -- "$1" "$ADB_LOG"; then echo "pediu: $1"; else echo "NÃO PEDIU: $1"; falhou=1; fi; }
-nunca() { if grep -qF -- "$1" "$ADB_LOG"; then echo "PEDIU O PROIBIDO: $1"; falhou=1; else echo "nunca: $1"; fi; }
+nunca() { if grep -qF -- "$1" "$ADB_TUDO"; then echo "PEDIU O PROIBIDO: $1"; falhou=1; else echo "nunca: $1"; fi; }
 antes() { # antes <primeiro> <segundo>: as duas linhas existem, nessa ordem
-    p="$(grep -nF -- "$1" "$ADB_LOG" | head -1 | cut -d: -f1)"; s="$(grep -nF -- "$2" "$ADB_LOG" | head -1 | cut -d: -f1)"
+    p="$(grep -nF -- "$1" "$ADB_LOG" | head -1 | cut -d: -f1 || true)"; s="$(grep -nF -- "$2" "$ADB_LOG" | head -1 | cut -d: -f1 || true)"
     if [ -n "$p" ] && [ -n "$s" ] && [ "$p" -lt "$s" ]; then echo "antes: $1, depois: $2"; else echo "FORA DE ORDEM: $1 ($p), $2 ($s)"; falhou=1; fi
 }
 # reprova <nome> <palavra na mensagem> <o que não pode ter sido pedido>: `up` tem de parar, com a mensagem.
@@ -62,6 +67,8 @@ pediu "forward tcp:9000 localfilesystem:/data/debian/run/robotd.sock"
 pediu "push deploy/s1/rms1d.toml /data/debian/etc/robot/rms1d.toml"
 antes "pkill -TERM rms1d" "push target/armv7-unknown-linux-gnueabihf/release/rms1d"
 antes "stop dji_monitor" "/opt/robot/bin/rms1d --config"
+antes "pkill -TERM rms1d" "pull /data/debian/var/lib/robot/rms1d-quadros.ndjson"
+antes "pull /data/debian/var/lib/robot/rms1d-quadros.ndjson" "/opt/robot/bin/rms1d --config"
 grep "stop dji_monitor" "$ADB_LOG" | grep -q "stop dji_monitor.*stop dji_hdvt_uav" || { echo "O MONITOR NÃO VEIO PRIMEIRO"; falhou=1; }
 
 echo "--- o que tem de parar a subida"
@@ -81,6 +88,12 @@ echo serial_presa > "$DEFEITO"
 reprova "serial presa" "não ficou livre" "/opt/robot/bin/rms1d --config"
 echo rms1d_morto > "$DEFEITO"
 reprova "rms1d morre ao subir" "não subiu" "forward tcp:9000"
+echo doente > "$DEFEITO"
+reprova "rms1d doente" "doente" ""
+echo serial_muda > "$DEFEITO"
+: > "$ADB_LOG"
+scripts/s1/rms1d-bench.sh up > "$T/up.txt" 2>&1 || { echo "SERIAL MUDA PAROU A SUBIDA:"; tail -5 "$T/up.txt"; falhou=1; }
+if grep -q "AVISO: nada chegou do corpo" "$T/up.txt"; then echo "serial muda: avisa e segue"; else echo "SERIAL MUDA SEM AVISO"; falhou=1; fi
 : > "$DEFEITO"
 
 echo "--- a volta"
@@ -94,6 +107,8 @@ nunca "dji_scratch"
 nunca "dji_sys"
 nunca "dji_network"
 nunca "dji_camera"
+nunca "0x48"
+nunca "stop dji_vision"
 nunca "dd if="
 nunca "remount"
 [ "$falhou" = 0 ] || { echo "BANCADA FALSA REPROVOU"; exit 1; }

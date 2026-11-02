@@ -16,8 +16,8 @@ Cada ponto diz como a DJI faz, como `rms1d` faz, o que o dono viu, o que falta p
 | Modo da torre | `0x04/0x4c` | 0 ou 2, conforme o modo | 0 livre, 1 FPV, 2 seguindo | | giro errado |
 | Prazo sem comando | não lido; o pato usa 500 ms | 500 ms, em `rms1d.toml`; zera o giro e a velocidade, nos três modos | | que para em 500 ms | segue andando |
 | Parar ao desarmar ou sair | `_set_chassis_stop_depend_mode`, `_stop_rotate` | rodas ou seguir a zero, dez vezes, conforme o modo; taxa zero com controle 0, se ligada. `SIGTERM` faz o mesmo | | que para. O que o corpo faz com `kill -9`, sem o comando de parar, não foi lido | segue andando |
-| Reset de nó, `0x48/0x02` | deixou o barramento morto até desligar | não existe no código, e um teste varre | | | |
-| Processos parados | | só `dji_monitor` e `dji_hdvt_uav`, nessa ordem; `dji_scratch`, `dji_sys` e `dji_network` são recusados em `rms1d.toml`, antes de o script tocar no robô | | `up` confere que os dois saíram e que ninguém segura `/dev/ttyS3` | `up` para e diz quem |
+| Reset de nó, `0x48/0x02` | deixou o barramento morto até desligar | nenhum comando de `rms1-proto` é desse conjunto, e um teste confere | | | |
+| Processos parados | | só `dji_monitor` e `dji_hdvt_uav`, nessa ordem; `rms1d.toml` recusa qualquer outro nome, antes de o script tocar no robô | | `up` confere que os dois saíram e que ninguém segura `/dev/ttyS3` | `up` para e diz quem |
 
 ## O que a leitura não fecha, e só o robô responde
 
@@ -25,6 +25,10 @@ Cada ponto diz como a DJI faz, como `rms1d` faz, o que o dono viu, o que falta p
 - `0x3f/0x28` e `0x04/0x4c` saem sem pedir resposta; a DJI pede. A gravação de `0x3f/0x19` sem pedir moveu o robô, e as outras duas não têm gravação nossa.
 - A ordem frente-direita, frente-esquerda, trás-esquerda, trás-direita vem do `s1d`. A gravação só cobre andar reto: lado e giro, com as rodas fora do chão, respondem.
 - Sair de "chassi segue a torre" manda rodas. `rm_ctrl.py:402` recusa rodas nesse modo, na camada de script; o que o controlador faz, só ele diz.
+- Um alvo da torre em coordenada 4, uma vez, com o chassi seguindo: o simulador trata como rumo no mundo, e o chassi gira até lá e para. Se no robô o chassi correr atrás sem parar, é aqui.
+- Identificador de tarefa novo a cada 100 ms: a DJI só manda quando muda. Se a torre tremer ou parar, é o próximo suspeito, e `torre.reenvio_ms` em `rms1d.toml` resolve.
+- Sem o comando de parar, com `kill -9`, o que o corpo faz não foi lido. O simulador desarma em 0,5 s, e isso é hipótese nossa. Os scripts da DJI contam com um envio de rodas durando até 20 s (`_move`, `rm_ctrl.py`): o prazo sem batimento é o que a prova precisa medir, com as rodas fora do chão.
+- Se os dez quadros de parar saem da fila da serial antes de o processo fechar: passo 7 do roteiro.
 
 ## Comparação com o `s1d`
 

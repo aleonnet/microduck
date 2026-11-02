@@ -127,8 +127,14 @@ impl Intencoes {
         Modo::de_codigo(self.modo.load(Ordering::Relaxed))
     }
 
+    /// Ao armar, o que foi pedido antes não vale: ligar não move o robô, nem com um pedido de meio segundo atrás. É
+    /// aqui, e não no laço, para o pedido feito logo depois da resposta valer.
     pub fn pedir_armar(&self, sim: bool) {
-        self.armado_pedido.store(sim, Ordering::Relaxed);
+        let antes = self.armado_pedido.swap(sim, Ordering::Relaxed);
+        if sim && !antes {
+            self.parar();
+            self.torre.store(Arc::new(None));
+        }
         self.energia.store(
             if sim { ENERGIA_ARMAR } else { ENERGIA_DESARMAR },
             Ordering::Relaxed,

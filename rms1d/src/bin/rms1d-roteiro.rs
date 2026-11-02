@@ -269,6 +269,8 @@ impl Roteiro {
         let r = self.c.chamar("robot.enable", json!({"on": true}))?;
         self.passo("robot.enable arma", r["accepted"] == true, &r)?;
         std::thread::sleep(Duration::from_millis(100));
+        // O modo fica de um cliente para o outro, e andar reto é com as rodas.
+        self.do_skill("modo_livre")?;
         let t = [v, 0.0, 0.0];
         let e = self.segurar(t, Duration::from_millis(1000))?;
         self.checa_aplicado("anda", &e, t)?;

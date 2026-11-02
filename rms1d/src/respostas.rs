@@ -2,6 +2,7 @@
 //! compilação aqui, e alguém decide o que ela é neste corpo.
 
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use duck_ipc_proto as proto;
@@ -18,6 +19,8 @@ pub struct Contexto {
 /// O contrato modela o pato; este corpo responde `roller`, o que está sobre rodas, para `netpadd` usar
 /// os limites de rodas.
 const MODO_CONTRATO: &str = "roller";
+/// Quanto esperar antes de dizer que a serial está muda.
+const SERIAL_MUDA_S: f64 = 3.0;
 /// `robot.modelApi`: o contrato com o atualizador, igual ao do `s1d`.
 const MODEL_API: u32 = 2;
 
@@ -62,16 +65,37 @@ pub fn aplicar_intencao(i: &Intencoes, call: &proto::Call) -> bool {
             i.pedir_torre(p.head_yaw, p.head_pitch);
             true
         }
+        // O `robotd` também aceita a skill como notificação. Nome errado, aqui, não tem a quem responder.
+        proto::Call::RobotDo(p) => {
+            if let Some(m) = Modo::de_nome(&p.skill) {
+                i.pedir_modo(m);
+            }
+            true
+        }
         _ => false,
     }
 }
 
 pub fn saude_do_contrato(c: &Contexto) -> proto::HealthResult {
-    let v = c.saude.veredito(
+    let mut v = c.saude.veredito(
         Instant::now(),
         c.params.laco.hz_minimo,
         Duration::from_millis(c.params.laco.idade_maxima_ms),
     );
+    // O controlador empurra telemetria com a DJI parada (`scripts/s1/bench.sh`, medido em 2026-10-30). Desarmado nada é
+    // enviado, então sem isto uma serial morta passaria por saudável. O simulador não devolve nada, e fica de fora.
+    if v.saudavel
+        && c.params.corpo.tipo == TipoCorpo::Serial
+        && c.saude.segundos() > SERIAL_MUDA_S
+        && c.saude.quadros_recebidos.load(Ordering::Relaxed) == 0
+    {
+        v.saudavel = false;
+        v.degradado = true;
+        v.motivo = Some(format!(
+            "o corpo está mudo: nenhum quadro recebido em {:.0} s",
+            c.saude.segundos()
+        ));
+    }
     proto::HealthResult {
         healthy: v.saudavel,
         degraded: v.degradado,

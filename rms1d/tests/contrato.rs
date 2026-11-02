@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use duck_ipc_proto as proto;
 use rms1_control::{Intencoes, Saude};
-use rms1d::respostas::{Contexto, olhar, responder};
+use rms1d::respostas::{Contexto, olhar, responder, saude_do_contrato};
 use rms1d_params::Params;
 
 fn contexto() -> Contexto {
@@ -38,17 +38,46 @@ fn o_que_responde_documento_e_erro_e_nao_recusa() {
     }
 }
 
-/// O prazo é o de `rms1d.toml`, e não um número no código.
+/// O prazo é o de `rms1d.toml`, e não um número no código, nos dois sentidos.
 #[test]
 fn seguro_para_reiniciar_usa_o_prazo_do_arquivo() {
+    let seguro = |prazo_ms| {
+        let mut c = contexto();
+        c.params.seguranca.prazo_ms = prazo_ms;
+        c.intencoes.pedir_armar(true);
+        c.intencoes.pedir_twist([0.5, 0.0, 0.0]);
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let r = responder(&c, proto::Id::Number(1), &proto::Call::RobotSafeToRestart);
+        serde_json::to_value(&r).unwrap()["result"]["safe"].clone()
+    };
+    assert_eq!(seguro(3000), false, "ainda dentro do prazo");
+    assert_eq!(seguro(100), true, "passou do prazo");
+}
+
+/// No robô, o controlador fala o tempo todo: serial sem nada chegando é fio solto ou processo errado, e `healthy` mentiria.
+#[test]
+fn serial_muda_nao_e_saudavel() {
     let mut c = contexto();
-    c.params.seguranca.prazo_ms = 3000;
-    c.intencoes.pedir_armar(true);
-    c.intencoes.pedir_twist([0.5, 0.0, 0.0]);
-    std::thread::sleep(std::time::Duration::from_millis(600));
-    let r = responder(&c, proto::Id::Number(1), &proto::Call::RobotSafeToRestart);
-    let v = serde_json::to_value(&r).unwrap();
-    assert_eq!(v["result"]["safe"], false, "{v}");
+    c.params.corpo.tipo = rms1d_params::TipoCorpo::Serial;
+    let agora = || std::time::Instant::now();
+    c.saude.carimbar_ciclo(agora());
+    assert!(saude_do_contrato(&c).healthy, "logo ao subir ainda é cedo");
+    std::thread::sleep(std::time::Duration::from_millis(3100));
+    c.saude.carimbar_ciclo(agora());
+    let h = saude_do_contrato(&c);
+    assert!(!h.healthy && h.degraded, "{h:?}");
+    assert!(h.reason.unwrap().contains("mudo"));
+    // Chegou um quadro: acabou o problema.
+    c.saude
+        .quadros_recebidos
+        .store(1, std::sync::atomic::Ordering::Relaxed);
+    assert!(saude_do_contrato(&c).healthy);
+    // No simulador nada volta, e isso não é defeito.
+    c.params.corpo.tipo = rms1d_params::TipoCorpo::Rede;
+    c.saude
+        .quadros_recebidos
+        .store(0, std::sync::atomic::Ordering::Relaxed);
+    assert!(saude_do_contrato(&c).healthy);
 }
 
 /// Os modos passam por `robot.do`, porque o console recusa `s1.*` (`mediad/src/session.rs`).

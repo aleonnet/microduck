@@ -30,12 +30,12 @@ Robô ligado com a DJI, na mesma rede, `rodas fora do chão` para os passos 2 a 
 
 | Passo | Faça | Esperado | Reprova se |
 |---|---|---|---|
-| 1 | `scripts/s1/rms1d-bench.sh up` | `robot healthy`, e nada se move. Pode rodar de novo: o `rms1d` anterior sai primeiro | doente, moveu, ou parou dizendo que a serial não ficou livre |
+| 1 | `scripts/s1/rms1d-bench.sh up` | `robot healthy`, e nada se move. Pode rodar de novo: o `rms1d` anterior sai primeiro. `AVISO` de serial muda não para a subida, mas anote: a leitura de 2026-10-30 diz que o corpo fala sozinho | doente, moveu, ou parou dizendo que a serial não ficou livre |
 | 2 | `target/debug/rms1d-roteiro --socket /tmp/rms1d-bench/robot.sock` | `ROTEIRO COMPLETO`; cada roda no sentido da simulação; sem comando, para em 500 ms; a torre obedece e os modos trocam | sentido errado ou segue andando |
-| 3 | compare os quadros: `target/debug/rms1d-roteiro --comparar <robo.quadros> <sim.quadros>`, com a gravação do robô que o passo 7 guarda e uma do roteiro no simulador | `IGUAIS` | diferença sem razão |
+| 3 | `scripts/s1/rms1d-bench.sh up` de novo: a gravação do roteiro fica em `out/` do laboratório, em `robo-<hora>.quadros`. Compare: `target/debug/rms1d-roteiro --comparar <robo-hora.quadros> <sim.quadros>`. Para ter `sim.quadros`: `scripts/rms1d-sim`, só o roteiro do passo 2 com `--socket /tmp/rms1d-sim/robot.sock`, `scripts/rms1d-sim down`, e fica em `/tmp/rms1d-sim/sim.quadros` | `IGUAIS` | diferença sem razão |
 | 4 | se as rodas não obedecerem | em `deploy/s1/rms1d.toml`, `permissao = "proroklab"`, e `up` de novo. Se a torre errar, `coordenada = 3`. Registre qual valeu | os dois falham |
 | 5 | no chão, `scripts/s1/rms1d-bench.sh console`, e pilote nos três modos. Em `chassi_segue_torre`, confira `A` e `D`, e veja se `W` é a frente do chassi ou a da torre | obedece, a até 0,3 m/s | não obedece, ou lado trocado |
-| 6 | em espaço que o dono liberar: `target/debug/rms1d-roteiro --socket /tmp/rms1d-bench/robot.sock --so-andar --velocidade 1.2` | anda e para | não anda ou não para |
+| 6 | em espaço que o dono liberar: `target/debug/rms1d-roteiro --socket /tmp/rms1d-bench/robot.sock --so-andar --velocidade 1.2`. Ele volta ao modo livre antes de andar | anda e para | não anda ou não para |
 | 7 | com as rodas fora do chão, ande pelo console e rode `scripts/s1/rms1d-bench.sh volta` | as rodas param ao sair; a DJI volta; a gravação, que termina no comando de parar, fica em `out/` do laboratório | segue andando, ou não volta |
 
 Ao terminar, desligue na chave: só isso fecha a porta root.

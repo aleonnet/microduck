@@ -107,7 +107,7 @@ echo "--- a verdade do simulador: cada sentido, nos três modos, pelo socket"
 # pilotar <socket> <skill> <vx> <vy> <vyaw>: segura o pedido por 1,5 s a 10 Hz, como o console, e desarma.
 pilotar() {
     "$PYTHON" -I -c '
-import json, socket, sys, time
+import json, os, socket, sys, time
 s = socket.socket(socket.AF_UNIX)
 s.connect(sys.argv[1])
 f = s.makefile()
@@ -123,6 +123,8 @@ time.sleep(0.1)
 chamar("robot.do", {"skill": sys.argv[2]})
 time.sleep(0.2)
 vx, vy, vyaw = map(float, sys.argv[3:6])
+if os.environ.get("HEAD_YAW"):
+    chamar("robot.head", {"neck_pitch": 0, "head_pitch": 0, "head_yaw": float(os.environ["HEAD_YAW"]), "head_roll": 0})
 fim = time.time() + 1.5
 while time.time() < fim:
     s.sendall((json.dumps({"jsonrpc": "2.0", "method": "robot.move", "params": {"vx": vx, "vy": vy, "vyaw": vyaw}}) + "\n").encode())
@@ -159,6 +161,9 @@ mede "torre segue, à direita" torre_segue_chassi 0 -0.3 0 "lado < -0.2 and abs(
 mede "chassi segue, à esquerda" chassi_segue_torre 0 0.3 0 "lado > 0.2 and abs(frente) < 0.1"
 mede "chassi segue, à direita" chassi_segue_torre 0 -0.3 0 "lado < -0.2 and abs(frente) < 0.1"
 mede "chassi segue, giro à esquerda" chassi_segue_torre 0 0 1 "giro > 20"
+# Um alvo da torre, uma vez: o chassi gira até ela e para, sem correr atrás de um alvo que anda junto. 0,3 rad são 17°, e a 30°/s
+# a torre chega em 0,6 s.
+HEAD_YAW=0.3 mede "chassi segue, alvo da torre" chassi_segue_torre 0 0 0 "10 < giro < 20"
 
 echo "--- sair armado para o robô"
 subir sigterm rede
@@ -176,12 +181,17 @@ while time.time() < fim:
 PILOTO=$!
 sleep 0.8
 descer
-wait "$PILOTO" 2>/dev/null || true
-sleep 0.5
+# Antes do prazo do corpo simulado, de 0,5 s: quem parou foi o comando de parar, e não ele. O kill e o wait de `descer` levam
+# dezenas de milissegundos.
+sleep 0.2
 A="$(verdade sim.verdade)"
 RPM="$(campo "$A" 'max(abs(r) for r in v["rpm"])')"
+ARMADO="$(campo "$A" 'v["armado"]')"
+wait "$PILOTO" 2>/dev/null || true
 [ "$RPM" -lt 15 ] || falha "saiu andando: $RPM rpm"
-echo "PASSOU sair armado para as rodas: $RPM rpm"
+[ "$ARMADO" = True ] || falha "o corpo já tinha desarmado, então isto mediu o prazo dele, e não o rms1d"
+echo "PASSOU sair armado para as rodas: $RPM rpm, antes do prazo do corpo"
+sleep 0.7
 
 echo "--- o mesmo roteiro manda os mesmos quadros em outro corpo"
 subir falso falso
