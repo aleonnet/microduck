@@ -26,6 +26,8 @@ BB=/system/xbin/busybox
 ENTRA="$BB chroot $CHROOT /usr/bin/env PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 BIN=target/armv7-unknown-linux-gnueabihf/release/rms1d
 A=(adb -s "$ALVO")
+# Prova do reinício: `/tmp` é tmpfs (`init.rc`, `mount tmpfs tmpfs /tmp`), e só reiniciar apaga a marca.
+MARCA=/tmp/rms1d_antes_do_reinicio
 SOCKET="$ESTADO/robot.sock"
 
 diz() { echo "[rms1d-bench] $*"; }
@@ -49,11 +51,6 @@ guardar_gravacao() { # guardar_gravacao <nome em $OUT>
     if [ -n "$g" ]; then
         if "${A[@]}" pull "$CHROOT$g" "$OUT/$1" >/dev/null 2>&1; then diz "gravação anterior guardada em out/"; else diz "sem gravação anterior para guardar"; fi
     fi
-}
-
-# Segundos desde que o robô ligou, de `/proc/uptime`. Vazio se ele não respondeu.
-ligado_ha() {
-    { "${A[@]}" shell cat /proc/uptime 2>/dev/null || true; } | sed -n 's/^\([0-9][0-9]*\)\..*/\1/p' | sed -n 1p
 }
 
 up() {
@@ -122,30 +119,33 @@ volta() {
     # Quem chama a volta pode estar com o `adb` caído, depois de o Wi-Fi cair ou de o robô ser religado na chave. Sem reconectar,
     # nada abaixo chega ao robô, e o reinício não acontece.
     diz "conectando ao robô"
-    python3 -I "$ACESSO" abrir --host "$IP" >/dev/null 2>&1 || falha "não alcancei o robô em $IP. Confira se ele está ligado e na rede, e tente de novo"
+    local saida
+    # Sem buffer: o erro, que vai para stderr, tem de sair depois do resto, porque a última linha é o motivo.
+    saida="$(python3 -I -u "$ACESSO" abrir --host "$IP" 2>&1)" || {
+        echo "$saida"
+        falha "não consegui abrir o acesso ao robô em $IP: $(printf '%s\n' "$saida" | tail -1). O runbook do acesso diz o que fazer"
+    }
     diz "parando o rms1d no robô"
     # SIGTERM: o `rms1d` para o robô e descarrega a gravação antes de sair.
     "${A[@]}" shell "$BB pkill -TERM rms1d; $BB sleep 1" || true
     guardar_gravacao "robo-$(date +%H%M%S).quadros"
     if [ -f "$ESTADO/ponte.pid" ]; then kill "$(cat "$ESTADO/ponte.pid")" 2>/dev/null || true; fi
     "${A[@]}" forward --remove "tcp:$TCP" >/dev/null 2>&1 || true
-    local antes
-    antes="$(ligado_ha)"
-    # Sem o tempo de antes, a espera abaixo não teria como provar o reinício.
-    [ -n "$antes" ] || falha "não alcancei o robô em $IP. Confira se ele está ligado e na rede, e tente de novo"
+    confere marca_gravada "não consegui marcar o robô antes de reiniciar; o robô não foi reiniciado. Tente de novo" "echo x > $MARCA && echo marca_gravada"
     diz "reiniciando o robô"
     "${A[@]}" shell reboot || true
     diz "esperando o robô voltar"
-    # Sem espera fixa: só vale o robô que reiniciou de fato, com o tempo ligado menor que antes, e com a DJI no ar.
-    local limite=$((SECONDS + ${S1_ESPERA_REBOOT:-180})) agora
+    # Sem espera fixa: só vale o robô que reiniciou de fato, sem a marca, e com a DJI no ar.
+    local limite=$((SECONDS + ${S1_ESPERA_REBOOT:-180}))
     while :; do
         sleep "${S1_PASSO_REBOOT:-5}"
         if python3 -I "$ACESSO" abrir --host "$IP" >/dev/null 2>&1; then
-            agora="$(ligado_ha)"
-            if [ -n "$antes" ] && [ -n "$agora" ] && [ "$agora" -lt "$antes" ]; then
-                "${A[@]}" shell "$BB pidof dji_hdvt_uav && echo dji_voltou || echo DJI_NAO_VOLTOU" > "$OUT/volta.txt" || true
-                if grep -q dji_voltou "$OUT/volta.txt"; then break; fi
-            fi
+            case "$("${A[@]}" shell "$BB test -e $MARCA && echo marca_viva || echo marca_sumiu" 2>/dev/null || true)" in
+                *marca_sumiu*)
+                    "${A[@]}" shell "$BB pidof dji_hdvt_uav && echo dji_voltou || echo DJI_NAO_VOLTOU" > "$OUT/volta.txt" || true
+                    if grep -q dji_voltou "$OUT/volta.txt"; then break; fi
+                    ;;
+            esac
         fi
         [ "$SECONDS" -lt "$limite" ] || falha "a DJI não voltou em ${S1_ESPERA_REBOOT:-180} s; desligue na chave e ligue de novo"
     done

@@ -26,8 +26,9 @@ case "$*" in
   *parada_conferida*) tem dji_vivo && echo AINDA_NO_AR_dji_hdvt_uav; tem serial_presa && echo SERIAL_PRESA /proc/9/fd/3; echo parada_conferida ;;
   *"pidof rms1d"*) if tem rms1d_morto; then echo RMS1D_MORTO; else echo rms1d_no_ar; fi ;;
   *"pidof dji_hdvt_uav"*) echo dji_voltou ;;
-  *"/proc/uptime"*) if [ -f "$DEFEITO.uma_falha" ] && [ -f "$DEFEITO.reiniciou" ]; then rm -f "$DEFEITO.uma_falha"; exit 1; fi; if [ -f "$DEFEITO.reiniciou" ] && ! tem nao_reinicia; then echo "12.50 3.00"; else echo "900.50 300.00"; fi ;;
-  *"shell reboot"*) touch "$DEFEITO.reiniciou"; rm -f "$DEFEITO.conectado" ;;
+  *marca_gravada*) if tem sem_marca; then exit 0; fi; touch "$DEFEITO.marca"; echo marca_gravada ;;
+  *marca_viva*) if [ -f "$DEFEITO.uma_falha" ] && [ -f "$DEFEITO.reiniciou" ]; then rm -f "$DEFEITO.uma_falha"; exit 1; fi; if [ -f "$DEFEITO.marca" ]; then echo marca_viva; else echo marca_sumiu; fi ;;
+  *"shell reboot"*) touch "$DEFEITO.reiniciou"; rm -f "$DEFEITO.conectado"; tem nao_reinicia || rm -f "$DEFEITO.marca" ;;
 esac
 exit 0
 SHIM
@@ -37,6 +38,7 @@ import os, sys
 print("acesso", sys.argv[1:])
 defeito = os.environ["DEFEITO"]
 if "sem_robo" in open(defeito).read().split():
+    print("Lab is busy; leaving the existing program untouched", file=sys.stderr)
     sys.exit(1)
 open(defeito + ".conectado", "w").close()
 SHIM
@@ -111,7 +113,7 @@ pediu "pkill -TERM rms1d"
 pediu "shell reboot"
 pediu "forward --remove tcp:9010"
 pediu "pidof dji_hdvt_uav"
-antes "/proc/uptime" "shell reboot"
+antes "marca_gravada" "shell reboot"
 echo nao_reinicia > "$DEFEITO"
 rm -f "$DEFEITO.reiniciou"
 if scripts/s1/rms1d-bench.sh volta > "$T/volta.txt" 2>&1; then echo "DISSE QUE VOLTOU SEM REINICIAR"; falhou=1; fi
@@ -132,7 +134,15 @@ rm -f "$DEFEITO.uma_falha" "$DEFEITO.reiniciou" "$DEFEITO.conectado"
 printf 'adb_caiu\nsem_robo\n' > "$DEFEITO"
 : > "$ADB_LOG"
 if scripts/s1/rms1d-bench.sh volta > "$T/volta.txt" 2>&1; then echo "DISSE QUE VOLTOU SEM ROBÔ"; falhou=1; fi
-grep -qF "não alcancei o robô" "$T/volta.txt" && echo "sem robô: diz que não alcançou" || { echo "SEM ROBÔ, SEM DIZER:"; tail -3 "$T/volta.txt"; falhou=1; }
+grep -qF "PAROU: não consegui abrir o acesso ao robô" "$T/volta.txt" && grep "PAROU" "$T/volta.txt" | grep -qF "Lab is busy" && echo "acesso falhou: diz o motivo real" || { echo "ACESSO FALHOU SEM O MOTIVO:"; tail -3 "$T/volta.txt"; falhou=1; }
+if grep -qF "shell reboot" "$ADB_LOG"; then echo "REINICIOU SEM ACESSO"; falhou=1; fi
+: > "$DEFEITO"
+echo sem_marca > "$DEFEITO"
+rm -f "$DEFEITO.marca" "$DEFEITO.reiniciou"
+: > "$ADB_LOG"
+if scripts/s1/rms1d-bench.sh volta > "$T/volta.txt" 2>&1; then echo "VOLTOU SEM PROVA DO REINÍCIO"; falhou=1; fi
+grep -qF "não consegui marcar" "$T/volta.txt" && echo "sem marca: não reinicia às cegas" || { echo "SEM MARCA, SEM DIZER:"; tail -3 "$T/volta.txt"; falhou=1; }
+if grep -qF "shell reboot" "$ADB_LOG"; then echo "REINICIOU SEM MARCA"; falhou=1; fi
 : > "$DEFEITO"
 nunca "dji_scratch"
 nunca "dji_sys"
