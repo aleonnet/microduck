@@ -115,3 +115,8 @@ The old history is kept in the local branch `backup/s1-fase1-antes-dos-trailers`
 ## The front of 2026-10-30, abandoned
 
 The work plan of 2026-10-30 was closed as abandoned on 2026-11-01 with its reason on record: phase 1 was not proven through the duck's path, the floor proof was discarded by the owner, and its eighth gate was red. The code stayed. Cold readers read parts of this branch on 2026-10-30: two rounds up to `88187a9`, both rejected; the first cut of `s1-e2e`, before `b325606`; a hand-off, before `26fe0f5`. The 48 commits after `26fe0f5` have had no such reading, and the rounds before it were not of the whole. That is the code front's to do.
+
+### `rms1d`, etapas 1 e 2 (2026-11-02, branch `rms1d`)
+
+Serviço novo, com `s1d` sem mudança: `rms1-proto`, `rms1d-params`, `rms1-control` e `rms1d`, no desenho do pato e com bytes da biblioteca. Um comando, `scripts/rms1d-sim`, sobe tudo no simulador. Testado pelo caminho do robô, sem janela em `scripts/test-rms1d-sim.sh` e pilotando o console no navegador. A prova no robô está em [`../robot/rms1d-roteiro-chassi-torre.md`](../robot/rms1d-roteiro-chassi-torre.md).
+
