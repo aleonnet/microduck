@@ -135,10 +135,26 @@ impl Roteiro {
         }
     }
 
-    fn checa_aplicado(&self, nome: &str, e: &Value, esperado: [f64; 3]) -> Result<(), String> {
+    /// O que o laço diz que aplicou, e que o corpo aceitou os quadros. Isto não vê o robô andar: quem vê é o dono,
+    /// no robô, e `test-rms1d-sim.sh`, no simulador. A telemetria entra na etapa 3.
+    fn checa_aplicado(&mut self, nome: &str, e: &Value, esperado: [f64; 3]) -> Result<(), String> {
         let a = &e["move"]["applied"];
         let ok = (0..3).all(|i| (a[i].as_f64().unwrap_or(f64::NAN) - esperado[i]).abs() < 1e-6);
-        self.passo(nome, ok, e)
+        self.passo(nome, ok, e)?;
+        let saude = self.c.chamar("robot.health", json!({}))?;
+        self.passo(
+            &format!("{nome}: o corpo aceitou"),
+            saude["bus"]["consecutive_errors"] == 0,
+            &saude,
+        )
+    }
+
+    /// A torre tem de estar com o alvo publicado, em radianos do contrato.
+    fn checa_torre(&self, nome: &str, yaw: f64, pitch: f64) -> Result<(), String> {
+        let e = self.estado();
+        let h = &e["head"];
+        let perto = |v: &Value, alvo: f64| (v.as_f64().unwrap_or(f64::NAN) - alvo).abs() < 0.002;
+        self.passo(nome, perto(&h[1], pitch) && perto(&h[2], yaw), &e)
     }
 
     fn do_skill(&mut self, nome: &str) -> Result<(), String> {
@@ -192,6 +208,7 @@ impl Roteiro {
         )?;
         self.passo("robot.head", r["accepted"] == true, &r)?;
         std::thread::sleep(Duration::from_millis(600));
+        self.checa_torre("robot.head chega ao alvo", 0.3, -0.2)?;
 
         let r = self.c.chamar(
             "robot.look",
@@ -199,6 +216,8 @@ impl Roteiro {
         )?;
         self.passo("robot.look responde clamped", r["clamped"] == false, &r)?;
         std::thread::sleep(Duration::from_millis(600));
+        let pitch = r["head"]["head_pitch"].as_f64().unwrap_or(f64::NAN);
+        self.checa_torre("robot.look chega ao alvo", 0.0, pitch)?;
         let r = self.c.chamar(
             "robot.look",
             json!({"x": 1.0, "y": 0.0, "z": 5.0, "neck_pitch": 0.0}),
@@ -209,6 +228,8 @@ impl Roteiro {
             &r,
         )?;
         std::thread::sleep(Duration::from_millis(300));
+        let pitch = r["head"]["head_pitch"].as_f64().unwrap_or(f64::NAN);
+        self.checa_torre("o limite é o que aparece no estado", 0.0, pitch)?;
         self.c.chamar(
             "robot.head",
             json!({"neck_pitch": 0.0, "head_pitch": 0.0, "head_yaw": 0.0, "head_roll": 0.0}),
@@ -224,6 +245,9 @@ impl Roteiro {
         let t = [v, 0.0, 0.0];
         let e = self.segurar(t, Duration::from_millis(1000))?;
         self.checa_aplicado("chassi segue: anda", &e, t)?;
+        let t = [0.0, v, 0.0];
+        let e = self.segurar(t, Duration::from_millis(1000))?;
+        self.checa_aplicado("chassi segue: anda para a esquerda", &e, t)?;
         let t = [0.0, 0.0, 1.0];
         let e = self.segurar(t, Duration::from_millis(1000))?;
         self.checa_aplicado("chassi segue: a torre gira e ele vai atrás", &e, t)?;
@@ -236,6 +260,8 @@ impl Roteiro {
         std::thread::sleep(Duration::from_millis(100));
         let e = self.estado();
         self.passo("desarmado de novo", e["policy"] == "held", &e)?;
+        let saude = self.c.chamar("robot.health", json!({}))?;
+        self.passo("segue saudável no fim", saude["healthy"] == true, &saude)?;
         Ok(())
     }
 
@@ -248,21 +274,31 @@ impl Roteiro {
         self.checa_aplicado("anda", &e, t)?;
         self.c.chamar("robot.stop", json!({}))?;
         std::thread::sleep(Duration::from_millis(500));
-        self.checa_aplicado("para", &self.estado(), [0.0; 3])?;
+        let e = self.estado();
+        self.checa_aplicado("para", &e, [0.0; 3])?;
         self.c.chamar("robot.relax", json!({}))?;
         Ok(())
     }
 }
 
-fn principal(args: &Args) -> Result<(), String> {
-    if let [a, b] = args.comparar.as_slice() {
-        let d = rms1_control::gravacao::diferencas(a, b).map_err(|e| e.to_string())?;
-        if d.is_empty() {
+fn comparar(a: &std::path::Path, b: &std::path::Path) -> ExitCode {
+    match rms1_control::gravacao::diferencas(a, b) {
+        Ok(d) if d.is_empty() => {
             println!("IGUAIS");
-            return Ok(());
+            ExitCode::SUCCESS
         }
-        return Err(format!("quadros diferentes: {d:?}"));
+        Ok(d) => {
+            eprintln!("QUADROS DIFERENTES: {d:?}");
+            ExitCode::FAILURE
+        }
+        Err(e) => {
+            eprintln!("NÃO DÁ PARA COMPARAR: {e}");
+            ExitCode::FAILURE
+        }
     }
+}
+
+fn principal(args: &Args) -> Result<(), String> {
     let estado = assinar(&args.socket)?;
     let c =
         Cliente::conectar(&args.socket).map_err(|e| format!("{}: {e}", args.socket.display()))?;
@@ -277,6 +313,9 @@ fn principal(args: &Args) -> Result<(), String> {
 
 fn main() -> ExitCode {
     let args = Args::parse();
+    if let [a, b] = args.comparar.as_slice() {
+        return comparar(a, b);
+    }
     match principal(&args) {
         Ok(()) => {
             println!("ROTEIRO COMPLETO");

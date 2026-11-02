@@ -25,6 +25,32 @@ fn toda_chamada_do_contrato_responde() {
     }
 }
 
+/// Estas duas respondem um documento, e não `accepted`: a recusa viraria um caderno vazio em `robotctl vetbook`.
+/// Toda chamada que não é de intenção precisa de erro, ou o cliente acredita no vazio.
+#[test]
+fn o_que_responde_documento_e_erro_e_nao_recusa() {
+    let c = contexto();
+    for call in [proto::Call::RobotVetbook, proto::Call::RobotModel] {
+        let r = responder(&c, proto::Id::Number(1), &call);
+        let v = serde_json::to_value(&r).unwrap();
+        assert!(v["result"].is_null(), "{}: {v}", call.method());
+        assert_eq!(v["error"]["code"], proto::code::METHOD_NOT_FOUND, "{v}");
+    }
+}
+
+/// O prazo é o de `rms1d.toml`, e não um número no código.
+#[test]
+fn seguro_para_reiniciar_usa_o_prazo_do_arquivo() {
+    let mut c = contexto();
+    c.params.seguranca.prazo_ms = 3000;
+    c.intencoes.pedir_armar(true);
+    c.intencoes.pedir_twist([0.5, 0.0, 0.0]);
+    std::thread::sleep(std::time::Duration::from_millis(600));
+    let r = responder(&c, proto::Id::Number(1), &proto::Call::RobotSafeToRestart);
+    let v = serde_json::to_value(&r).unwrap();
+    assert_eq!(v["result"]["safe"], false, "{v}");
+}
+
 /// Os modos passam por `robot.do`, porque o console recusa `s1.*` (`mediad/src/session.rs`).
 #[test]
 fn skill_de_modo_chega_as_intencoes() {

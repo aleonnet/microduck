@@ -77,6 +77,7 @@ pub struct Intencoes {
     energia: AtomicU8,
     modo: AtomicU8,
     armado_pedido: AtomicBool,
+    encerrar: AtomicBool,
 }
 
 /// O que o laço lê no começo do ciclo.
@@ -97,6 +98,7 @@ impl Default for Intencoes {
             energia: AtomicU8::new(ENERGIA_NADA),
             modo: AtomicU8::new(Modo::Livre.codigo()),
             armado_pedido: AtomicBool::new(false),
+            encerrar: AtomicBool::new(false),
         }
     }
 }
@@ -136,6 +138,15 @@ impl Intencoes {
     /// O que o último cliente pediu, para a alternância de `robot.enable`.
     pub fn armado_pedido(&self) -> bool {
         self.armado_pedido.load(Ordering::Relaxed)
+    }
+
+    /// O processo vai sair: o laço para o robô, descarrega a gravação e termina.
+    pub fn pedir_encerrar(&self) {
+        self.encerrar.store(true, Ordering::Relaxed);
+    }
+
+    pub fn encerrando(&self) -> bool {
+        self.encerrar.load(Ordering::Relaxed)
     }
 
     pub fn tomar_energia(&self) -> Option<PedidoEnergia> {

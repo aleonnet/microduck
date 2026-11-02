@@ -245,9 +245,8 @@ fn o_roteiro_passa_e_duas_execucoes_mandam_os_mesmos_quadros() {
             .output()
             .unwrap();
         assert!(s.status.success(), "{}", String::from_utf8_lossy(&s.stderr));
-        // SIGTERM para descarregar a gravação.
-        let _ = Command::new("kill").arg(p.filho.id().to_string()).status();
-        let _ = p.filho.wait();
+        // SIGTERM é como `rms1d-bench.sh volta` encerra: o laço para o robô e a gravação descarrega.
+        encerrar(&mut p);
         gravacoes.push(g);
     }
     let s = Command::new(ROTEIRO)
@@ -261,4 +260,115 @@ fn o_roteiro_passa_e_duas_execucoes_mandam_os_mesmos_quadros() {
         String::from_utf8_lossy(&s.stdout),
         String::from_utf8_lossy(&s.stderr)
     );
+    // Comparar é só comparar: não diz que um roteiro rodou.
+    assert_eq!(String::from_utf8_lossy(&s.stdout).trim(), "IGUAIS");
+}
+
+fn encerrar(p: &mut Processo) {
+    let _ = Command::new("kill").arg(p.filho.id().to_string()).status();
+    let inicio = Instant::now();
+    loop {
+        if let Some(status) = p.filho.try_wait().unwrap() {
+            assert!(status.success(), "{status}");
+            return;
+        }
+        assert!(inicio.elapsed() < Duration::from_secs(3), "não saiu");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// SIGTERM com o robô andando: o fim da gravação é o comando de parar, nos dois jeitos de andar.
+#[test]
+fn sigterm_armado_para_o_robo_e_a_gravacao_guarda_o_fim() {
+    for (nome, skill, comando) in [
+        ("sl", "modo_livre", (0x3f, 0x20)),
+        ("ss", "chassi_segue_torre", (0x3f, 0x22)),
+    ] {
+        let d = pasta(nome);
+        let g = d.join("q");
+        let toml = format!("[corpo]\ntipo = \"falso\"\ngravar = \"{}\"\n", g.display());
+        let mut p = subir(&d, &toml);
+        let mut c = Cliente::novo(&p.socket);
+        c.chamar("robot.enable", json!({"on": true}));
+        c.chamar("robot.do", json!({"skill": skill}));
+        // O cliente segue pilotando até o processo morrer: é o laço quem para, e não o prazo.
+        let piloto = std::thread::spawn(move || {
+            let pedido = json!({"jsonrpc":"2.0","method":"robot.move","params":{"vx":0.5,"vy":0.1,"vyaw":1.0}});
+            while writeln!(c.0, "{pedido}").is_ok() {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        });
+        std::thread::sleep(Duration::from_millis(1800));
+        encerrar(&mut p);
+        piloto.join().unwrap();
+        let r = rms1_control::gravacao::resumo(&g).unwrap();
+        let (_, _, dados) = r[&comando].last().expect("há quadros").clone();
+        assert!(dados.iter().all(|v| *v == 0), "{skill}: {dados:?}");
+        if skill == "chassi_segue_torre" {
+            let (_, _, taxa) = r[&(0x04, 0x0c)].last().expect("a torre girava").clone();
+            assert!(taxa.iter().all(|v| *v == 0), "{taxa:?}");
+        }
+    }
+}
+
+/// Gravação sem nada é erro, e não `IGUAIS`.
+#[test]
+fn comparar_gravacao_vazia_reprova() {
+    let d = pasta("vazia");
+    let v = d.join("v");
+    std::fs::write(&v, "").unwrap();
+    let s = Command::new(ROTEIRO)
+        .arg("--comparar")
+        .args([&v, &v])
+        .output()
+        .unwrap();
+    assert!(!s.status.success());
+    assert!(String::from_utf8_lossy(&s.stderr).contains("não tem nenhum quadro"));
+    assert!(!String::from_utf8_lossy(&s.stdout).contains("IGUAIS"));
+}
+
+/// A lista do que parar sai do arquivo validado, sem tocar em nada: é a recusa vir antes de parar um processo.
+#[test]
+fn processos_a_parar_sai_do_arquivo_validado() {
+    let d = pasta("parar");
+    let cfg = d.join("c.toml");
+    std::fs::write(&cfg, "[dji]\nparar = [\"a\", \"b\"]\n").unwrap();
+    let s = Command::new(RMS1D)
+        .args(["--config", cfg.to_str().unwrap(), "--processos-a-parar"])
+        .output()
+        .unwrap();
+    assert!(s.status.success());
+    assert_eq!(String::from_utf8_lossy(&s.stdout).trim(), "a b");
+    std::fs::write(&cfg, "[dji]\nparar = [\"dji_scratch\"]\n").unwrap();
+    let s = Command::new(RMS1D)
+        .args(["--config", cfg.to_str().unwrap(), "--processos-a-parar"])
+        .output()
+        .unwrap();
+    assert!(!s.status.success());
+    assert!(String::from_utf8_lossy(&s.stderr).contains("dji_scratch"));
+    assert!(s.stdout.is_empty());
+}
+
+/// Um assinante que nunca lê enche o socket dele, e o laço nem percebe.
+#[test]
+fn cliente_que_nao_le_nao_atrasa_o_laco() {
+    let d = pasta("trava");
+    let p = subir(&d, FALSO);
+    let mut parado = Cliente::novo(&p.socket);
+    parado.chamar("robot.subscribe", json!({"hz": 50}));
+    let mut c = Cliente::novo(&p.socket);
+    c.chamar("robot.enable", json!({"on": true}));
+    // O bastante para encher o socket: mais de 8 KiB a 50 quadros por segundo de meio KiB.
+    std::thread::sleep(Duration::from_secs(3));
+    let inicio = Instant::now();
+    let h = c.chamar("robot.health", json!({}));
+    assert!(
+        inicio.elapsed() < Duration::from_millis(200),
+        "{:?}",
+        inicio.elapsed()
+    );
+    let hz = h["result"]["control_loop"]["achieved_hz"].as_f64().unwrap();
+    assert!(hz > 45.0, "{h}");
+    assert_eq!(h["result"]["control_loop"]["missed"], 0, "{h}");
+    assert_eq!(h["result"]["healthy"], true, "{h}");
 }

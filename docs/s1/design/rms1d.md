@@ -38,6 +38,7 @@ console, robotctl, rms1d-roteiro, e depois a inteligência
 - Ligar não move nada. Desarmada, ela não envia nenhum quadro; e armar não leva a torre a lugar nenhum enquanto ninguém pediu.
 - O laço nunca espera cliente. Intenções são trocas atômicas; o estado sai num canal limitado, e só é montado com assinante.
 - A saúde é publicada pelo laço, então um laço travado se denuncia pela idade do último ciclo.
+- Sair para o robô. `SIGTERM` e Ctrl-C passam pelo laço, que desarma e descarrega a gravação antes de o processo terminar. `kill -9` não tem esse caminho.
 - `<socket>.lock` garante um só dono, e nunca é apagado.
 - `MissedTickBehavior::Skip`, em executor próprio.
 
@@ -67,4 +68,6 @@ São os de `RobotCtrl.set_mode_attr` (`rm_ctrl.py`). `0x3f/0x46` vai a `dji_hdvt
 
 ## Limitação conhecida
 
-Sem telemetria, não há malha fechada: `rms1d` manda rpm às rodas. No simulador, pelo mesmo caminho, a 1,2 m/s por 3 s o desvio é 0,003 m. A 3,5 m/s o desvio medido varia de 0,07 a 0,36 m conforme a rampa, sem tendência: é o contato dos roletes. A malha fechada entra com a telemetria, na etapa 3.
+Sem telemetria, não há malha fechada: `rms1d` manda rpm às rodas. No simulador, pelo mesmo caminho, a 1,2 m/s por 3 s o desvio é de até 0,006 m, em 8 fases de início. A 3,5 m/s varia de 0,013 a 0,768 m, sem tendência: compatível com o contato dos roletes, mas a causa não está provada. A malha fechada entra com a telemetria, na etapa 3. Fonte: `tools/simulador/test_quadros.mjs`, no laboratório.
+
+Pelo mesmo motivo, `head`, no estado, é o último alvo pedido e limitado, e não onde a torre está. No modo em que o chassi segue a torre, a taxa move a torre sem mudar esse alvo.

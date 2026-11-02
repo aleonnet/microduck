@@ -18,7 +18,8 @@ CHROOT="${S1_CHROOT:-/data/debian}"
 ESTADO="${S1_ESTADO:-/tmp/rms1d-bench}"
 OUT="${S1_OUT:-$LAB/out/$(date +%Y-%m-%d)-rms1d-chassi-torre}"
 TCP=9000
-TOML=deploy/s1/rms1d.toml
+TOML="${S1_TOML:-deploy/s1/rms1d.toml}"
+ROBOTCTL="${S1_ROBOTCTL:-target/debug/robotctl}"
 BB=/system/xbin/busybox
 ENTRA="$BB chroot $CHROOT /usr/bin/env PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 BIN=target/armv7-unknown-linux-gnueabihf/release/rms1d
@@ -28,9 +29,15 @@ SOCKET="$ESTADO/robot.sock"
 diz() { echo "[rms1d-bench] $*"; }
 falha() { echo "[rms1d-bench] PAROU: $*" >&2; exit 1; }
 
-# Os processos a parar vêm do arquivo, validado pelo `rms1d`: dji_scratch e dji_sys são recusados lá.
-processos() {
-    python3 -I -c 'import sys,tomllib; print(" ".join(tomllib.load(open(sys.argv[1],"rb"))["dji"]["parar"]))' "$TOML"
+# `adb shell` do Android 4.4 não devolve o código de saída do comando: toda conferência no robô é por uma palavra na saída.
+confere() { # confere <palavra> <mensagem> <comando no robô>
+    local saida
+    saida="$("${A[@]}" shell "$3" || true)"
+    echo "$saida"
+    case "$saida" in
+        *"$1"*) ;;
+        *) falha "$2" ;;
+    esac
 }
 
 up() {
@@ -40,20 +47,30 @@ up() {
         cargo s1 -p rms1d
         cargo build -q -p rms1d -p robotctl
     fi
+    # Antes de qualquer coisa no robô: o arquivo recusado, com dji_scratch por exemplo, não chega a parar nada.
+    local parar
+    parar="$(target/debug/rms1d --config "$TOML" --processos-a-parar)" || falha "$TOML recusado; nada foi tocado no robô"
     python3 -I "$ACESSO" abrir --host "$IP"
-    "${A[@]}" shell "test -d $CHROOT/bin" || falha "sem chroot em $CHROOT; rode scripts/s1/bench.sh exec uma vez"
+    confere chroot_ok "sem chroot em $CHROOT; rode scripts/s1/bench.sh exec uma vez" "test -d $CHROOT/bin && echo chroot_ok"
     "${A[@]}" shell "$BB grep -q ' $CHROOT/dev ' /proc/mounts || mount -o bind /dev $CHROOT/dev; $BB grep -q ' $CHROOT/proc ' /proc/mounts || mount -t proc proc $CHROOT/proc; $BB grep -q ' $CHROOT/sys ' /proc/mounts || mount -t sysfs sys $CHROOT/sys"
     "${A[@]}" shell "mkdir -p $CHROOT/opt/robot/bin $CHROOT/etc/robot $CHROOT/run $CHROOT/var/lib/robot"
+    # Um `rms1d` de antes sai pelo caminho que para o robô, e antes do envio: binário em uso não se sobrescreve, e a trava
+    # faria o novo morrer em silêncio, com o velho respondendo no lugar dele.
+    confere sem_rms1d "o rms1d anterior não saiu; desligue o robô na chave" "$BB pkill -TERM rms1d; $BB sleep 1; $BB pidof rms1d >/dev/null && echo RMS1D_ANTIGO_VIVO || echo sem_rms1d"
     "${A[@]}" push "$BIN" "$CHROOT/opt/robot/bin/rms1d" >/dev/null
     "${A[@]}" push "$TOML" "$CHROOT/etc/robot/rms1d.toml" >/dev/null
     "${A[@]}" shell "chmod 755 $CHROOT/opt/robot/bin/rms1d"
-    local parar lista=""
-    parar="$(processos)"
+    local lista="" vivos=""
     for p in $parar; do
         lista="$lista stop $p; setprop ctl.stop $p; kill \$($BB pidof $p) 2>/dev/null;"
+        vivos="$vivos $BB pidof $p >/dev/null && echo AINDA_NO_AR_$p;"
     done
-    diz "parando: $parar. A telemetria da DJI segue; a serial fica livre."
-    "${A[@]}" shell "$lista $BB sleep 1"
+    diz "parando: $parar. A telemetria da DJI segue."
+    local saida
+    saida="$("${A[@]}" shell "$lista $BB sleep 1; $vivos for f in /proc/[0-9]*/fd/*; do $BB readlink \$f 2>/dev/null | $BB grep -q ttyS3 && echo SERIAL_PRESA \$f; done; echo parada_conferida" | tee "$OUT/parar.txt")"
+    echo "$saida"
+    case "$saida" in *parada_conferida*) ;; *) falha "a parada dos processos não respondeu" ;; esac
+    case "$saida" in *AINDA_NO_AR*|*SERIAL_PRESA*) falha "a serial não ficou livre: dois escritores nela é o que este passo evita. Reinicie o robô" ;; esac
     "${A[@]}" shell "($BB setsid $BB nohup $ENTRA /opt/robot/bin/rms1d --config /etc/robot/rms1d.toml --socket /run/robotd.sock </dev/null >/data/rms1d.log 2>&1 &); $BB sleep 1"
     sleep 2
     "${A[@]}" shell "$BB pidof rms1d >/dev/null && echo rms1d_no_ar || { echo RMS1D_MORTO; $BB tail -5 /data/rms1d.log; }" | tee "$OUT/up.txt"
@@ -64,7 +81,7 @@ up() {
     echo $! > "$ESTADO/ponte.pid"
     sleep 1
     diz "saúde, pelo socket:"
-    target/debug/robotctl --robot-socket "$SOCKET" --config-socket "$SOCKET" --socket "$SOCKET" health | tee "$OUT/saude.txt" || falha "o rms1d está doente"
+    "$ROBOTCTL" --robot-socket "$SOCKET" --config-socket "$SOCKET" --socket "$SOCKET" health | tee "$OUT/saude.txt" || falha "o rms1d está doente"
     diz "no ar, desarmado. Nada se moveu. Socket deste Mac: $SOCKET"
     diz "roteiro: target/debug/rms1d-roteiro --socket $SOCKET"
 }
@@ -78,6 +95,7 @@ volta() {
     mkdir -p "$OUT"
     local g
     g="$(python3 -I -c 'import sys,tomllib; print(tomllib.load(open(sys.argv[1],"rb"))["corpo"].get("gravar",""))' "$TOML")"
+    # SIGTERM: o `rms1d` para o robô e descarrega a gravação antes de sair.
     "${A[@]}" shell "$BB pkill -TERM rms1d; $BB sleep 1" || true
     if [ -n "$g" ]; then "${A[@]}" pull "$CHROOT$g" "$OUT/robo.quadros" >/dev/null || diz "sem gravação para guardar"; fi
     if [ -f "$ESTADO/ponte.pid" ]; then kill "$(cat "$ESTADO/ponte.pid")" 2>/dev/null || true; fi

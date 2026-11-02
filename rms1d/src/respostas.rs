@@ -244,9 +244,10 @@ pub fn responder(c: &Contexto, id: proto::Id, call: &proto::Call) -> proto::Resp
         ),
         RobotSafeToRestart => {
             let a = c.intencoes.ler(Instant::now());
+            let prazo = Duration::from_millis(c.params.seguranca.prazo_ms);
             let andando = c.intencoes.armado_pedido()
                 && a.twist != [0.0; 3]
-                && a.idade_twist.is_some_and(|i| i.as_millis() < 500);
+                && a.idade_twist.is_some_and(|i| i < prazo);
             proto::Response::ok(
                 Some(id),
                 &proto::SafeToRestartResult {
@@ -283,10 +284,9 @@ pub fn responder(c: &Contexto, id: proto::Id, call: &proto::Call) -> proto::Resp
         RobotSetMode(_) => recusado(id, "este corpo está sempre sobre rodas"),
         RobotTheremin(_) => recusado(id, "este corpo não tem sensor de profundidade"),
         RobotChorale(_) | ChoraleSubscribe => recusado(id, "este corpo não canta"),
-        RobotModel => recusado(id, "este corpo ainda não publica modelo cinemático"),
-        RobotVetbook | RobotVetbookNote(_) | RobotVetbookTally(_) => {
-            recusado(id, "este corpo não mantém caderno")
-        }
+        // Estas duas não respondem `accepted`, e sim um documento: uma recusa viraria um documento vazio no cliente.
+        RobotModel | RobotVetbook => nao_servida(id, call),
+        RobotVetbookNote(_) | RobotVetbookTally(_) => recusado(id, "este corpo não mantém caderno"),
         RobotLoadPolicy(_) | RobotReloadPolicies | RobotSetSkill(_) | RobotRemoveSkill(_)
         | PadBind(_) => recusado(id, "este corpo não roda rede de política"),
         RobotRebootMotors(_) => recusado(

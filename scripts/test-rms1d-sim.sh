@@ -93,6 +93,8 @@ echo "--- o roteiro, pelo socket, contra o corpo simulado"
 Q="$(verdade sim.quadros)"
 [ "$(campo "$Q" 'v["desconhecidos"]')" = 0 ] || falha "quadros desconhecidos: $Q"
 [ "$(campo "$Q" 'v["descartados"]')" = 0 ] || falha "bytes descartados: $Q"
+[ "$(campo "$Q" 'v["invalidos"]')" = 0 ] || falha "quadros inválidos: $Q"
+[ "$(campo "$Q" 'v["avisos"]')" = 0 ] || falha "quadros com aviso: $Q"
 [ "$(campo "$Q" 'v["total"] > 100')" = True ] || falha "poucos quadros: $Q"
 echo "PASSOU todos os quadros entendidos: $(campo "$Q" 'v["total"]')"
 descer
@@ -100,6 +102,86 @@ sleep 1
 A="$(verdade sim.verdade)"
 [ "$(campo "$A" 'v["armado"]')" = False ] || falha "sem rms1d o corpo segue armado"
 echo "PASSOU sem rms1d o corpo desarma"
+
+echo "--- a verdade do simulador: cada sentido, nos três modos, pelo socket"
+# pilotar <socket> <skill> <vx> <vy> <vyaw>: segura o pedido por 1,5 s a 10 Hz, como o console, e desarma.
+pilotar() {
+    "$PYTHON" -I -c '
+import json, socket, sys, time
+s = socket.socket(socket.AF_UNIX)
+s.connect(sys.argv[1])
+f = s.makefile()
+def chamar(m, p, i=[0]):
+    i[0] += 1
+    s.sendall((json.dumps({"jsonrpc": "2.0", "id": i[0], "method": m, "params": p}) + "\n").encode())
+    while True:
+        v = json.loads(f.readline())
+        if v.get("id") == i[0]:
+            return v
+chamar("robot.enable", {"on": True})
+time.sleep(0.1)
+chamar("robot.do", {"skill": sys.argv[2]})
+time.sleep(0.2)
+vx, vy, vyaw = map(float, sys.argv[3:6])
+fim = time.time() + 1.5
+while time.time() < fim:
+    s.sendall((json.dumps({"jsonrpc": "2.0", "method": "robot.move", "params": {"vx": vx, "vy": vy, "vyaw": vyaw}}) + "\n").encode())
+    time.sleep(0.1)
+chamar("robot.relax", {})
+' "$@"
+}
+# mede <nome> <skill> <vx> <vy> <vyaw> <condição em frente, lado, giro>
+mede() {
+    subir sentido rede
+    sleep 0.5
+    M0="$(verdade sim.verdade)"
+    pilotar "$T/sentido.sock" "$2" "$3" "$4" "$5" || falha "$1: pilotar"
+    sleep 0.5
+    M1="$(verdade sim.verdade)"
+    descer
+    sleep 0.7
+    R="$("$PYTHON" -I -c '
+import json,math,sys
+a,b=json.loads(sys.argv[1]),json.loads(sys.argv[2])
+dx,dy=b["pos"][0]-a["pos"][0],b["pos"][1]-a["pos"][1]
+y=a["yaw"]
+d=math.degrees(math.atan2(math.sin(b["yaw"]-y),math.cos(b["yaw"]-y)))
+print(round(math.cos(y)*dx+math.sin(y)*dy,3), round(-math.sin(y)*dx+math.cos(y)*dy,3), round(d,1))' "$M0" "$M1")"
+    "$PYTHON" -I -c '
+import sys
+frente,lado,giro=map(float,sys.argv[1].split())
+sys.exit(0 if eval(sys.argv[2]) else 1)' "$R" "$6" || falha "$1: $R (frente, lado, giro), queria $6"
+    echo "PASSOU $1: $R (frente, lado, giro)"
+}
+mede "livre, à esquerda" modo_livre 0 0.3 0 "lado > 0.2 and abs(frente) < 0.1"
+mede "livre, giro à esquerda" modo_livre 0 0 1 "giro > 40"
+mede "torre segue, à direita" torre_segue_chassi 0 -0.3 0 "lado < -0.2 and abs(frente) < 0.1"
+mede "chassi segue, à esquerda" chassi_segue_torre 0 0.3 0 "lado > 0.2 and abs(frente) < 0.1"
+mede "chassi segue, à direita" chassi_segue_torre 0 -0.3 0 "lado < -0.2 and abs(frente) < 0.1"
+mede "chassi segue, giro à esquerda" chassi_segue_torre 0 0 1 "giro > 20"
+
+echo "--- sair armado para o robô"
+subir sigterm rede
+sleep 0.3
+"$PYTHON" -I -c '
+import json, socket, sys, time
+s = socket.socket(socket.AF_UNIX)
+s.connect(sys.argv[1])
+s.sendall(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"robot.enable\",\"params\":{\"on\":true}}\n")
+fim = time.time() + 1
+while time.time() < fim:
+    s.sendall(b"{\"jsonrpc\":\"2.0\",\"method\":\"robot.move\",\"params\":{\"vx\":0.5,\"vy\":0,\"vyaw\":0}}\n")
+    time.sleep(0.1)
+' "$T/sigterm.sock" 2>/dev/null &
+PILOTO=$!
+sleep 0.8
+descer
+wait "$PILOTO" 2>/dev/null || true
+sleep 0.5
+A="$(verdade sim.verdade)"
+RPM="$(campo "$A" 'max(abs(r) for r in v["rpm"])')"
+[ "$RPM" -lt 15 ] || falha "saiu andando: $RPM rpm"
+echo "PASSOU sair armado para as rodas: $RPM rpm"
 
 echo "--- o mesmo roteiro manda os mesmos quadros em outro corpo"
 subir falso falso

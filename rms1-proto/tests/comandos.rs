@@ -60,6 +60,7 @@ fn rodas_tem_posicao_e_tipo_da_biblioteca() {
 fn torre_com_coordenada_antiga_e_o_quadro_que_moveu_o_robo() {
     igual_ao_gravado(
         Comando::TorreAngulos {
+            tarefa: 0,
             yaw_ddeg: 150,
             pitch_ddeg: 100,
             eixos: EIXO_YAW | EIXO_PITCH,
@@ -73,6 +74,7 @@ fn torre_com_coordenada_antiga_e_o_quadro_que_moveu_o_robo() {
 #[test]
 fn torre_tem_posicoes_da_biblioteca() {
     let q = Comando::TorreAngulos {
+        tarefa: 7,
         yaw_ddeg: -1234,
         pitch_ddeg: 200,
         eixos: EIXO_PITCH,
@@ -83,6 +85,7 @@ fn torre_tem_posicoes_da_biblioteca() {
     assert_eq!((q.cmd_set, q.cmd_id), (0x3f, 0xb0));
     assert_eq!(q.destino, 0x04);
     assert_eq!(q.dados.len(), 17);
+    assert_eq!(q.dados[0], 7, "o identificador da tarefa");
     assert_eq!(q.dados[2], (4 << 3) | 0x04);
     let i = |p: usize| i16::from_le_bytes([q.dados[p], q.dados[p + 1]]);
     assert_eq!((i(3), i(5), i(7)), (-1234, 0, 200));
@@ -132,33 +135,93 @@ fn modos_tem_codigo_e_destino_da_biblioteca() {
     assert_eq!(((s.cmd_set, s.cmd_id), s.dados), ((0x3f, 0x28), vec![0]));
 }
 
-/// O reset de nó deixou o barramento do robô morto até desligar na chave, e parar `dji_scratch` derrubou
-/// `dji_sys`. Nenhum dos dois pode existir no código novo.
+/// Todo comando que pode sair, um de cada: se alguém criar uma variante nova, o `match` em `id()` obriga a
+/// dizer o código dela, e este teste precisa dela aqui para continuar valendo.
+fn um_de_cada() -> Vec<Comando> {
+    vec![
+        Comando::Permissao(PermissaoForma::Dji),
+        Comando::Permissao(PermissaoForma::Proroklab),
+        Comando::ModoChassi(1),
+        Comando::Rodas([0; 4]),
+        Comando::Seguir {
+            vx: 0.0,
+            vy: 0.0,
+            angulo: 0.0,
+        },
+        Comando::Sobrepor(0),
+        Comando::ModoTorre(0),
+        Comando::TorreAngulos {
+            tarefa: 1,
+            yaw_ddeg: 0,
+            pitch_ddeg: 0,
+            eixos: EIXO_YAW,
+            coordenada: 4,
+            velocidade: 30,
+        },
+        Comando::TorreTaxa {
+            yaw_ddeg_s: 0,
+            pitch_ddeg_s: 0,
+            controle: 0,
+        },
+    ]
+}
+
+/// O reset de nó é do conjunto 0x48: nenhum comando sai por ele.
 #[test]
-fn o_codigo_novo_nao_tem_reset_de_no_nem_para_dji_scratch() {
-    let raiz = concat!(env!("CARGO_MANIFEST_DIR"), "/..");
-    let mut achados = Vec::new();
+fn nenhum_comando_e_do_conjunto_do_reset_de_no() {
+    for c in um_de_cada() {
+        assert_ne!(c.id().0, 0x48, "{c:?}");
+        assert_ne!(c.quadro(&Nos::default(), 0).cmd_set, 0x48, "{c:?}");
+    }
+}
+
+fn varrer(caminho: &std::path::Path, arquivos: &mut Vec<std::path::PathBuf>) {
+    if caminho.is_dir() {
+        for a in std::fs::read_dir(caminho).unwrap().flatten() {
+            varrer(&a.path(), arquivos);
+        }
+    } else {
+        arquivos.push(caminho.to_owned());
+    }
+}
+
+/// Por texto, de leve: o reset de nó deixou o barramento morto até desligar, e parar `dji_scratch` derrubou
+/// `dji_sys`. Pega quem escreve o código do reset ou manda parar `dji_scratch`, em qualquer pasta do serviço
+/// e nos scripts dele. A garantia de verdade é o teste acima, mais `Seguranca` ser a única dona do corpo.
+#[test]
+fn o_codigo_novo_nao_cita_reset_de_no_nem_para_dji_scratch() {
+    let raiz = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/.."));
+    let mut arquivos = Vec::new();
     for pasta in [
         "rms1-proto/src",
         "rms1-control/src",
         "rms1d/src",
         "rms1d-params/src",
     ] {
-        let Ok(arquivos) = std::fs::read_dir(format!("{raiz}/{pasta}")) else {
-            continue;
-        };
-        for a in arquivos.flatten() {
-            let texto = std::fs::read_to_string(a.path()).unwrap_or_default();
-            let sem_espaco = texto.replace(' ', "").to_lowercase();
-            if sem_espaco.contains("(0x48,0x02)") || sem_espaco.contains("0x48/0x02") {
-                achados.push(format!("{:?}: reset de nó", a.path()));
-            }
-            if texto.contains("stop dji_scratch") {
-                achados.push(format!("{:?}: para dji_scratch", a.path()));
-            }
+        varrer(&raiz.join(pasta), &mut arquivos);
+    }
+    for script in [
+        "scripts/rms1d-sim",
+        "scripts/test-rms1d-sim.sh",
+        "scripts/s1/rms1d-bench.sh",
+        "scripts/s1/rms1d-ponte.py",
+    ] {
+        arquivos.push(raiz.join(script));
+    }
+    assert!(arquivos.len() > 15, "{arquivos:?}");
+    let mut achados = Vec::new();
+    for a in arquivos {
+        let texto = std::fs::read_to_string(&a).unwrap();
+        let junto = texto.replace(' ', "").to_lowercase();
+        // Só código: o reset em decimal é 72, e 0x48 pode vir de qualquer jeito.
+        if junto.contains("0x48") || junto.contains("(72,2)") || junto.contains("72/2") {
+            achados.push(format!("{}: reset de nó", a.display()));
+        }
+        if texto.contains("stop dji_scratch") || texto.contains("ctl.stop dji_scratch") {
+            achados.push(format!("{}: para dji_scratch", a.display()));
         }
     }
-    let toml = std::fs::read_to_string(format!("{raiz}/deploy/s1/rms1d.toml")).unwrap_or_default();
+    let toml = std::fs::read_to_string(raiz.join("deploy/s1/rms1d.toml")).unwrap();
     let ativas: String = toml
         .lines()
         .filter(|l| !l.trim_start().starts_with('#'))

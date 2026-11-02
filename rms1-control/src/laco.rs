@@ -20,6 +20,7 @@ pub struct Estado {
     pub pedido: [f64; 3],
     pub aplicado: [f64; 3],
     pub limitado_por: Vec<&'static str>,
+    /// O último alvo aplicado, depois do limite, e não o pedido.
     pub torre: Option<[f64; 2]>,
     pub modo: Modo,
     pub armado: bool,
@@ -76,12 +77,18 @@ impl<C: Corpo> Laco<C> {
             pedido: leitura.twist,
             aplicado: aplicado.twist,
             limitado_por: aplicado.limitado_por,
-            torre: leitura.torre,
+            torre: aplicado.torre,
             modo: leitura.modo,
             armado: self.seguranca.armado(),
             hz: self.saude.hz().unwrap_or(0.0),
             perdidos: self.saude.perdidos.load(Ordering::Relaxed),
         })
+    }
+
+    /// A última coisa antes de sair: para o robô, como `robot.relax`. A gravação descarrega quando o corpo sai
+    /// de escopo, ao fim da thread do laço.
+    pub fn encerrar(&mut self) {
+        self.seguranca.desarmar(&self.saude);
     }
 
     /// Quem chama avisa quando o trabalho passou do período.

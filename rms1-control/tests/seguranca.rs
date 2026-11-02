@@ -268,7 +268,11 @@ fn com_o_chassi_seguindo_o_movimento_vai_em_seguir_e_o_giro_na_torre() {
     assert!(b.de(id::RODAS).is_empty(), "as rodas são do controlador");
     let q = b.de(id::SEGUIR).pop().unwrap();
     let f = |p: usize| f32::from_le_bytes(q.dados[p..p + 4].try_into().unwrap());
-    assert_eq!((f(0), f(4), f(8)), (0.5, 0.25, 0.0));
+    assert_eq!(
+        (f(0), f(4), f(8)),
+        (0.5, -0.25, 0.0),
+        "contrato com y à esquerda, DJI com y à direita (`_move_ctrl` em rm_ctrl.py)"
+    );
     let t = b.de(id::TORRE_TAXA).pop().unwrap();
     assert_eq!(
         i16_em(&t, 0),
@@ -325,6 +329,146 @@ fn desarmar_zera_as_rodas_e_corta_a_permissao() {
     }
     assert!(b.corpo.quadros().is_empty());
     assert!(!b.saude.armado.load(Ordering::Relaxed));
+}
+
+/// Seguindo a torre, rodas não valem: parar é seguir a zero, e a torre que girava para (`rm_ctrl.py:1102` e `:1486`).
+#[test]
+fn desarmar_seguindo_a_torre_zera_o_seguir_e_a_taxa() {
+    let mut b = banca();
+    b.armar();
+    b.intencoes.pedir_modo(Modo::ChassiSegueTorre);
+    b.pedir_e_ciclar([0.5, 0.25, 1.0]);
+    b.corpo.limpar();
+    b.intencoes.pedir_armar(false);
+    b.ciclo();
+    assert!(b.de(id::RODAS).is_empty(), "rodas não valem neste modo");
+    let s = b.de(id::SEGUIR).pop().expect("seguir a zero");
+    assert_eq!(s.dados, vec![0; 12]);
+    let t = b.de(id::TORRE_TAXA).pop().expect("a taxa a zero");
+    assert_eq!((i16_em(&t, 0), t.dados[6]), (0, 0x00));
+}
+
+/// Desarmar nem a torre que não girava recebe taxa.
+#[test]
+fn desarmar_sem_taxa_ligada_nao_manda_taxa() {
+    let mut b = banca();
+    b.armar();
+    b.pedir_e_ciclar([0.5, 0.0, 0.0]);
+    b.corpo.limpar();
+    b.intencoes.pedir_armar(false);
+    b.ciclo();
+    assert!(b.de(id::TORRE_TAXA).is_empty());
+}
+
+/// O prazo vale nos três modos: seguindo a torre, a velocidade e o giro zeram.
+#[test]
+fn sem_comando_alem_do_prazo_seguindo_a_torre_tudo_zera() {
+    let mut p = Params::default();
+    p.seguranca.prazo_ms = 50;
+    let mut b = banca_com(&p);
+    b.armar();
+    b.intencoes.pedir_modo(Modo::ChassiSegueTorre);
+    b.pedir_e_ciclar([0.5, 0.25, 1.0]);
+    b.corpo.limpar();
+    std::thread::sleep(Duration::from_millis(80));
+    b.agora = Instant::now();
+    let e = b.laco.ciclo(b.agora, true).unwrap();
+    assert_eq!(b.de(id::SEGUIR).pop().unwrap().dados, vec![0; 12]);
+    let t = b.de(id::TORRE_TAXA).pop().expect("a taxa a zero");
+    assert_eq!((i16_em(&t, 0), t.dados[6]), (0, 0x00));
+    assert_eq!(e.limitado_por, vec!["deadman"]);
+}
+
+/// Encerrar o processo armado para o robô, em qualquer modo.
+#[test]
+fn encerrar_armado_para_como_desarmar() {
+    for (modo, cmd) in [
+        (Modo::Livre, id::RODAS),
+        (Modo::ChassiSegueTorre, id::SEGUIR),
+    ] {
+        let mut b = banca();
+        b.armar();
+        b.intencoes.pedir_modo(modo);
+        b.pedir_e_ciclar([0.5, 0.0, 0.0]);
+        b.corpo.limpar();
+        b.laco.encerrar();
+        let q = b.de(cmd);
+        assert_eq!(q.len(), 10, "{modo:?}");
+        assert!(q.iter().all(|x| x.dados.iter().all(|v| *v == 0)), "{q:?}");
+    }
+}
+
+/// O identificador de tarefa troca a cada envio, nunca é 0, e dá a volta (`rm_module.py:429`).
+#[test]
+fn a_tarefa_da_torre_troca_a_cada_envio_e_nunca_e_zero() {
+    let mut b = banca();
+    b.armar();
+    let mut vistas = Vec::new();
+    for i in 0..300u32 {
+        // De 0,002 rad em 0,002 rad: mais de um décimo de grau, então cada alvo é novo e sai neste ciclo.
+        b.intencoes.pedir_torre(f64::from(i) * 0.002, 0.0);
+        b.ciclo();
+        vistas.push(b.de(id::TORRE_ANGULOS).pop().unwrap().dados[0]);
+    }
+    assert_eq!(&vistas[..3], &[1, 2, 3]);
+    assert!(vistas.iter().all(|t| *t != 0 && *t != 255), "{vistas:?}");
+    assert_eq!(vistas[253], 254);
+    assert_eq!(vistas[254], 1, "dá a volta");
+}
+
+/// O estado diz o que as rodas receberam, e não o que foi pedido antes de encolher.
+#[test]
+fn o_aplicado_encolhe_junto_com_as_rodas() {
+    let mut b = banca();
+    b.armar();
+    let e = b.pedir_e_ciclar([3.5, 3.5, 0.0]);
+    let p = Params::default();
+    let de_verdade = rpm_de_twist(e.aplicado, p.geometria.raio_roda_m, p.geometria.meia_soma_m);
+    let maior = de_verdade.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
+    assert!(
+        (maior - 1000.0).abs() < 1e-6,
+        "{:?} dá {maior} rpm",
+        e.aplicado
+    );
+    assert!(
+        (e.aplicado[0] - e.aplicado[1]).abs() < 1e-9,
+        "encolhe sem mudar o rumo"
+    );
+}
+
+/// O estado da torre é o alvo depois do limite, e o limite é dito.
+#[test]
+fn o_estado_da_torre_e_o_alvo_limitado_e_diz_que_limitou() {
+    let mut b = banca();
+    b.armar();
+    assert_eq!(b.ciclo().torre, None, "ninguém pediu");
+    b.intencoes.pedir_torre(6.0, -2.0);
+    let e = b.ciclo();
+    let [yaw, pitch] = e.torre.unwrap();
+    assert!((yaw - 250f64.to_radians()).abs() < 1e-3, "{yaw}");
+    assert!((pitch + 35f64.to_radians()).abs() < 1e-3, "{pitch}");
+    assert!(
+        e.limitado_por.contains(&"gimbal_range"),
+        "{:?}",
+        e.limitado_por
+    );
+    b.intencoes.pedir_torre(0.1, 0.1);
+    let e = b.ciclo();
+    assert!(e.limitado_por.is_empty(), "{:?}", e.limitado_por);
+}
+
+/// Com a torre seguindo o chassi, o yaw pedido não é nosso: não aparece como aplicado, nem como limite.
+#[test]
+fn com_a_torre_seguindo_o_estado_nao_mostra_yaw_pedido() {
+    let mut b = banca();
+    b.armar();
+    b.intencoes.pedir_modo(Modo::TorreSegueChassi);
+    b.intencoes.pedir_torre(6.0, 0.1);
+    let e = b.ciclo();
+    let [yaw, pitch] = e.torre.unwrap();
+    assert_eq!(yaw, 0.0);
+    assert!((pitch - 0.1).abs() < 2e-3, "{pitch}");
+    assert!(e.limitado_por.is_empty(), "{:?}", e.limitado_por);
 }
 
 /// O último pedido de energia vence, e é lido uma vez por ciclo.
@@ -394,9 +538,10 @@ fn sem_assinante_o_estado_nao_e_montado() {
     assert!(b.laco.ciclo(Instant::now(), false).is_none());
 }
 
-/// Um cliente martelando pedidos não atrasa o laço: não há trava entre os dois.
+/// Um cliente martelando pedidos não atrasa o laço: não há trava entre os dois. Cliente travado de verdade,
+/// no socket, é `cliente_que_nao_le_nao_atrasa_o_laco`, em `rms1d/tests/processo.rs`.
 #[test]
-fn cliente_travado_nao_atrasa_o_laco() {
+fn pedidos_em_rajada_nao_atrasam_o_laco() {
     let mut b = banca();
     b.armar();
     let i = b.intencoes.clone();

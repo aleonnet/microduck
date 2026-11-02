@@ -24,10 +24,16 @@ struct Args {
     /// Onde servir o contrato.
     #[arg(long, default_value = proto::socket::ROBOT)]
     socket: PathBuf,
+    /// Valida o arquivo, imprime os processos da DJI a parar e sai, sem tocar em nada. É a lista que
+    /// `scripts/s1/rms1d-bench.sh` usa, para a recusa vir antes de parar qualquer processo.
+    #[arg(long)]
+    processos_a_parar: bool,
 }
 
 /// Quadros de estado guardados para quem ficou para trás. Cliente mais lento que isso recebe um buraco.
 const ESTADOS_NA_FILA: usize = 64;
+/// Quanto esperar o laço parar o robô. Um corpo travado não pode prender o processo para sempre.
+const ESPERA_ENCERRAR: Duration = Duration::from_secs(2);
 
 fn montar_corpo(p: &Params) -> std::io::Result<Box<dyn Corpo>> {
     let corpo: Box<dyn Corpo> = match p.corpo.tipo {
@@ -57,12 +63,16 @@ fn rodar_laco(
         .name("laco".to_owned())
         .spawn(move || {
             executor.block_on(async move {
-                let mut laco = Laco::new(corpo, &p, intencoes, saude);
+                let mut laco = Laco::new(corpo, &p, intencoes.clone(), saude);
                 let mut ritmo = tokio::time::interval(periodo);
                 // `Burst` empilharia comandos atrasados; `Delay` faria o período escorregar.
                 ritmo.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
                 loop {
                     ritmo.tick().await;
+                    if intencoes.encerrando() {
+                        laco.encerrar();
+                        return;
+                    }
                     let inicio = Instant::now();
                     let quer = estados.receiver_count() > 0;
                     if let Some(e) = laco.ciclo(inicio, quer) {
@@ -98,6 +108,11 @@ fn main() -> ExitCode {
         }
     };
 
+    if args.processos_a_parar {
+        println!("{}", params.dji.parar.join(" "));
+        return ExitCode::SUCCESS;
+    }
+
     let executor = match tokio::runtime::Runtime::new() {
         Ok(e) => e,
         Err(e) => {
@@ -124,20 +139,23 @@ fn main() -> ExitCode {
         let intencoes = Arc::new(Intencoes::default());
         let saude = Arc::new(Saude::default());
         let (estados, _) = broadcast::channel(ESTADOS_NA_FILA);
-        if let Err(e) = rodar_laco(
+        let laco = match rodar_laco(
             corpo,
             params.clone(),
             intencoes.clone(),
             saude.clone(),
             estados.clone(),
         ) {
-            eprintln!("rms1d: sem laço: {e}");
-            return ExitCode::FAILURE;
-        }
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("rms1d: sem laço: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
         tracing::warn!(corpo = ?params.corpo.tipo, socket = %args.socket.display(), "rms1d no ar, desarmado");
         let contexto = Arc::new(Contexto {
             params,
-            intencoes,
+            intencoes: intencoes.clone(),
             saude,
         });
         let socket = args.socket.clone();
@@ -145,6 +163,15 @@ fn main() -> ExitCode {
             () = rms1d::servidor::servir(ouvinte, contexto, estados) => {}
             _ = tokio::signal::ctrl_c() => {}
             () = termino() => {}
+        }
+        // Sair armado deixaria o último comando valendo no robô. É o laço quem para, porque só ele tem o corpo.
+        intencoes.pedir_encerrar();
+        let inicio = Instant::now();
+        while !laco.is_finished() && inicio.elapsed() < ESPERA_ENCERRAR {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        if !laco.is_finished() {
+            tracing::error!("o laço não parou a tempo: o corpo pode ter ficado sem o comando de parar");
         }
         let _ = std::fs::remove_file(socket);
         ExitCode::SUCCESS

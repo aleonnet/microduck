@@ -52,6 +52,45 @@ fn um_comando_diferente_aparece_na_comparacao() {
     assert!(dif[0].contains("0x3f/0x20"), "{dif:?}");
 }
 
+/// O identificador de tarefa muda a cada envio: dois roteiros de durações diferentes têm de dar iguais.
+#[test]
+fn o_identificador_de_tarefa_nao_conta_como_diferenca() {
+    let d = tempfile_dir();
+    let (a, b) = (d.join("ta"), d.join("tb"));
+    for (arquivo, repete) in [(&a, 2), (&b, 50)] {
+        let corpo: Box<dyn Corpo> = Box::new(CorpoFalso::default());
+        let gravando = Gravando::new(corpo, arquivo).unwrap();
+        let intencoes = Arc::new(Intencoes::default());
+        let mut laco = Laco::new(
+            gravando,
+            &Params::default(),
+            intencoes.clone(),
+            Arc::new(Saude::default()),
+        );
+        intencoes.pedir_armar(true);
+        intencoes.pedir_torre(0.2, 0.1);
+        let mut t = Instant::now();
+        for _ in 0..repete {
+            t += Duration::from_millis(200);
+            laco.ciclo(t, false);
+        }
+    }
+    assert_eq!(diferencas(&a, &b).unwrap(), Vec::<String>::new());
+}
+
+/// Dois nadas iguais não provam nada.
+#[test]
+fn gravacao_vazia_nao_e_igual_a_nada() {
+    let d = tempfile_dir();
+    let (a, b) = (d.join("va"), d.join("vb"));
+    std::fs::write(&a, "").unwrap();
+    gravar(&b, 3, 1.0);
+    let e = diferencas(&a, &b).unwrap_err().to_string();
+    assert!(e.contains("não tem nenhum quadro"), "{e}");
+    let e = diferencas(&a, &a).unwrap_err().to_string();
+    assert!(e.contains("não tem nenhum quadro"), "{e}");
+}
+
 fn tempfile_dir() -> std::path::PathBuf {
     let d = std::env::temp_dir().join(format!(
         "rms1-gravacao-{}-{:?}",

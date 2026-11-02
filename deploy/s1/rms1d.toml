@@ -17,4 +17,5 @@ coordenada = 4
 velocidade = 30
 
 [dji]
-parar = ["dji_hdvt_uav", "dji_monitor"]
+# O monitor primeiro: ele religa quem cair.
+parar = ["dji_monitor", "dji_hdvt_uav"]

@@ -11,7 +11,9 @@
 
 use std::time::{Duration, Instant};
 
-use rms1_proto::comando::{EIXO_PITCH, EIXO_YAW, TAXA_MOVENDO, TAXA_PARADA, byte_do_no};
+use rms1_proto::comando::{
+    EIXO_PITCH, EIXO_YAW, TAREFA_PRIMEIRA, TAREFA_ULTIMA, TAXA_MOVENDO, TAXA_PARADA, byte_do_no,
+};
 use rms1_proto::{Comando, Nos, PermissaoForma, SeqPorComando};
 use rms1d_params::{Params, Permissao};
 
@@ -24,20 +26,31 @@ use crate::saude::Saude;
 pub const LIMITE_PRAZO: &str = "deadman";
 pub const LIMITE_VELOCIDADE: &str = "max_velocity";
 pub const LIMITE_RPM: &str = "max_rpm";
+pub const LIMITE_TORRE: &str = "gimbal_range";
 pub const LIMITE_NAO_FINITO: &str = "not_finite";
 pub const LIMITE_DESARMADO: &str = "disarmed";
 
 /// Quantas vezes o modo do chassi é enviado ao armar: a prova de 2026-10-29 enviou cinco.
 const VEZES_MODO_AO_ARMAR: usize = 5;
-/// Rodas zeradas ao desarmar, antes de cortar a permissão.
+/// Comandos de parar ao desarmar, antes de cortar a permissão.
 const VEZES_ZERO_AO_DESARMAR: usize = 10;
 /// `0x3f/0x19`, kit de programação: `rm_define.chassis_sdk_mode`.
 const MODO_CHASSI_PROGRAMA: u8 = 1;
+/// `_stop_rotate` da DJI (`rm_ctrl.py:1486`).
+const TAXA_ZERO: Comando = Comando::TorreTaxa {
+    yaw_ddeg_s: 0,
+    pitch_ddeg_s: 0,
+    controle: TAXA_PARADA,
+};
 
 /// O que foi aplicado neste ciclo.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Aplicado {
+    /// O que as rodas ou o seguir receberam, depois de todo limite.
     pub twist: [f64; 3],
+    /// O último alvo da torre, no contrato, depois do limite. A taxa do chassi seguindo a move sem mudar isto: sem
+    /// telemetria, não há como dizer onde ela está.
+    pub torre: Option<[f64; 2]>,
     pub limitado_por: Vec<&'static str>,
 }
 
@@ -61,7 +74,9 @@ pub struct Seguranca<C: Corpo> {
     armado: bool,
     modo: Modo,
     ultimo_alvo: Option<((i16, i16), Instant)>,
+    torre_aplicada: Option<[f64; 2]>,
     taxa_ligada: bool,
+    tarefa: u8,
 }
 
 impl<C: Corpo> Seguranca<C> {
@@ -94,7 +109,9 @@ impl<C: Corpo> Seguranca<C> {
             armado: false,
             modo: Modo::Livre,
             ultimo_alvo: None,
+            torre_aplicada: None,
             taxa_ligada: false,
+            tarefa: 0,
         }
     }
 
@@ -145,11 +162,23 @@ impl<C: Corpo> Seguranca<C> {
         if !self.armado {
             return;
         }
+        // Parar como a DJI, conforme o modo (`_set_chassis_stop_depend_mode`): rodas não valem seguindo a torre.
+        let parar = match self.modo {
+            Modo::ChassiSegueTorre => Comando::Seguir {
+                vx: 0.0,
+                vy: 0.0,
+                angulo: 0.0,
+            },
+            Modo::Livre | Modo::TorreSegueChassi => Comando::Rodas([0; 4]),
+        };
         for _ in 0..VEZES_ZERO_AO_DESARMAR {
-            self.enviar(Comando::Rodas([0; 4]), saude);
+            self.enviar(parar, saude);
+        }
+        if self.taxa_ligada {
+            self.enviar(TAXA_ZERO, saude);
+            self.taxa_ligada = false;
         }
         self.armado = false;
-        self.taxa_ligada = false;
         tracing::info!("desarmado");
     }
 
@@ -190,8 +219,9 @@ impl<C: Corpo> Seguranca<C> {
         saida
     }
 
-    /// Rodas dentro do limite, encolhendo as quatro juntas: cortar só a que passou mudaria o rumo.
-    fn rodas(&self, twist: [f64; 3], limites: &mut Vec<&'static str>) -> [i16; 4] {
+    /// Rodas dentro do limite, encolhendo as quatro juntas: cortar só a que passou mudaria o rumo. Devolve
+    /// também quanto encolheu, porque o movimento aplicado encolhe junto.
+    fn rodas(&self, twist: [f64; 3], limites: &mut Vec<&'static str>) -> ([i16; 4], f64) {
         let rpm = rpm_de_twist(twist, self.raio, self.meia_soma);
         let maior = rpm.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
         let escala = if maior > self.rpm_max {
@@ -200,18 +230,37 @@ impl<C: Corpo> Seguranca<C> {
         } else {
             1.0
         };
-        rpm.map(|v| (v * escala).round() as i16)
+        (rpm.map(|v| (v * escala).round() as i16), escala)
     }
 
     /// Alvo do contrato para graus da DJI: os dois sinais são invertidos (yaw positivo à esquerda e pitch
-    /// positivo para baixo no contrato; à direita e para cima na DJI).
-    fn alvo_torre(&self, yaw: f64, pitch: f64) -> Option<(i16, i16)> {
+    /// positivo para baixo no contrato; à direita e para cima na DJI). `true` se foi limitado. Com a torre
+    /// seguindo o chassi, o yaw não é nosso: nem vai ao corpo, nem conta como limitado.
+    fn alvo_torre(&self, yaw: f64, pitch: f64) -> Option<((i16, i16), bool)> {
         if !yaw.is_finite() || !pitch.is_finite() {
             return None;
         }
-        let y = (-yaw.to_degrees()).clamp(-self.yaw_max, self.yaw_max);
-        let p = (-pitch.to_degrees()).clamp(self.pitch_faixa.0, self.pitch_faixa.1);
-        Some(((y * 10.0).round() as i16, (p * 10.0).round() as i16))
+        let pedido_y = if self.modo == Modo::TorreSegueChassi {
+            0.0
+        } else {
+            -yaw.to_degrees()
+        };
+        let pedido_p = -pitch.to_degrees();
+        let y = pedido_y.clamp(-self.yaw_max, self.yaw_max);
+        let p = pedido_p.clamp(self.pitch_faixa.0, self.pitch_faixa.1);
+        Some((
+            ((y * 10.0).round() as i16, (p * 10.0).round() as i16),
+            y != pedido_y || p != pedido_p,
+        ))
+    }
+
+    fn proxima_tarefa(&mut self) -> u8 {
+        self.tarefa = if (TAREFA_PRIMEIRA..TAREFA_ULTIMA).contains(&self.tarefa) {
+            self.tarefa + 1
+        } else {
+            TAREFA_PRIMEIRA
+        };
+        self.tarefa
     }
 
     /// O ciclo: o único caminho até o corpo.
@@ -227,6 +276,7 @@ impl<C: Corpo> Seguranca<C> {
             };
             return Aplicado {
                 twist: [0.0; 3],
+                torre: self.torre_aplicada,
                 limitado_por,
             };
         }
@@ -235,18 +285,21 @@ impl<C: Corpo> Seguranca<C> {
         }
         let mut limites = Vec::new();
         self.enviar(Comando::Permissao(self.permissao), saude);
-        let twist = self.limitar_twist(leitura, &mut limites);
+        let mut twist = self.limitar_twist(leitura, &mut limites);
         let mut giro_para_torre = 0.0;
         match self.modo {
             Modo::Livre | Modo::TorreSegueChassi => {
-                let rodas = self.rodas(twist, &mut limites);
+                let (rodas, escala) = self.rodas(twist, &mut limites);
                 self.enviar(Comando::Rodas(rodas), saude);
+                twist = twist.map(|v| v * escala);
             }
             Modo::ChassiSegueTorre => {
+                // O contrato tem y à esquerda; a DJI, à direita (`_move_ctrl` em `rm_ctrl.py`). Subtração, porque
+                // `-0.0` sairia no fio com o bit de sinal, e parado tem de ser zero.
                 self.enviar(
                     Comando::Seguir {
                         vx: twist[0] as f32,
-                        vy: twist[1] as f32,
+                        vy: (0.0 - twist[1]) as f32,
                         angulo: 0.0,
                     },
                     saude,
@@ -257,6 +310,7 @@ impl<C: Corpo> Seguranca<C> {
         self.torre(leitura, giro_para_torre, agora, saude, &mut limites);
         Aplicado {
             twist,
+            torre: self.torre_aplicada,
             limitado_por: limites,
         }
     }
@@ -272,6 +326,21 @@ impl<C: Corpo> Seguranca<C> {
         saude: &Saude,
         limites: &mut Vec<&'static str>,
     ) {
+        let alvo = match leitura.torre {
+            None => None,
+            Some([yaw, pitch]) => match self.alvo_torre(yaw, pitch) {
+                None => {
+                    limites.push(LIMITE_NAO_FINITO);
+                    None
+                }
+                Some((a, limitado)) => {
+                    if limitado {
+                        limites.push(LIMITE_TORRE);
+                    }
+                    Some(a)
+                }
+            },
+        };
         if giro != 0.0 {
             let graus = (-giro.to_degrees()).clamp(-self.giro_torre_max, self.giro_torre_max);
             self.enviar(
@@ -286,23 +355,16 @@ impl<C: Corpo> Seguranca<C> {
             return;
         }
         if self.taxa_ligada {
-            self.enviar(
-                Comando::TorreTaxa {
-                    yaw_ddeg_s: 0,
-                    pitch_ddeg_s: 0,
-                    controle: TAXA_PARADA,
-                },
-                saude,
-            );
+            self.enviar(TAXA_ZERO, saude);
             self.taxa_ligada = false;
         }
-        let Some([yaw, pitch]) = leitura.torre else {
+        let Some(alvo) = alvo else {
             return;
         };
-        let Some(alvo) = self.alvo_torre(yaw, pitch) else {
-            limites.push(LIMITE_NAO_FINITO);
-            return;
-        };
+        self.torre_aplicada = Some([
+            -(f64::from(alvo.0) / 10.0).to_radians(),
+            -(f64::from(alvo.1) / 10.0).to_radians(),
+        ]);
         let reenviar = self.modo != Modo::ChassiSegueTorre;
         let devido = match self.ultimo_alvo {
             None => true,
@@ -315,8 +377,10 @@ impl<C: Corpo> Seguranca<C> {
             Modo::TorreSegueChassi => EIXO_PITCH,
             Modo::Livre | Modo::ChassiSegueTorre => EIXO_YAW | EIXO_PITCH,
         };
+        let tarefa = self.proxima_tarefa();
         self.enviar(
             Comando::TorreAngulos {
+                tarefa,
                 yaw_ddeg: alvo.0,
                 pitch_ddeg: alvo.1,
                 eixos,

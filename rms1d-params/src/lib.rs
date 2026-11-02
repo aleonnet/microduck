@@ -212,7 +212,8 @@ impl Default for Torre {
 impl Default for Dji {
     fn default() -> Self {
         Self {
-            parar: vec!["dji_hdvt_uav".to_owned(), "dji_monitor".to_owned()],
+            // O monitor primeiro: ele religa quem cair.
+            parar: vec!["dji_monitor".to_owned(), "dji_hdvt_uav".to_owned()],
         }
     }
 }

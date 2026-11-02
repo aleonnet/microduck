@@ -8,6 +8,7 @@ use std::path::Path;
 use std::time::Instant;
 
 use rms1_proto::Quadro;
+use rms1_proto::comando::id;
 
 use crate::corpo::Corpo;
 
@@ -84,7 +85,12 @@ pub fn resumo(caminho: &Path) -> io::Result<Resumo> {
             .map_err(io::Error::other)?;
         let q = Quadro::ler(&bytes).map_err(io::Error::other)?;
         let lista = saida.entry((q.cmd_set, q.cmd_id)).or_default();
-        let item = (q.origem, q.destino, q.dados);
+        let mut dados = q.dados;
+        // O identificador de tarefa muda a cada envio, como na DJI: conta quantos envios, e não o que foi pedido.
+        if (q.cmd_set, q.cmd_id) == id::TORRE_ANGULOS && !dados.is_empty() {
+            dados[0] = 0;
+        }
+        let item = (q.origem, q.destino, dados);
         if lista.last() != Some(&item) {
             lista.push(item);
         }
@@ -92,9 +98,18 @@ pub fn resumo(caminho: &Path) -> io::Result<Resumo> {
     Ok(saida)
 }
 
-/// As diferenças entre duas gravações. Vazio é igual.
+/// As diferenças entre duas gravações. Vazio é igual. Gravação sem nenhum quadro é erro: dois nadas iguais não
+/// provam nada.
 pub fn diferencas(a: &Path, b: &Path) -> io::Result<Vec<String>> {
     let (ra, rb) = (resumo(a)?, resumo(b)?);
+    for (r, caminho) in [(&ra, a), (&rb, b)] {
+        if r.is_empty() {
+            return Err(io::Error::other(format!(
+                "{} não tem nenhum quadro",
+                caminho.display()
+            )));
+        }
+    }
     let mut d = Vec::new();
     for cmd in ra
         .keys()

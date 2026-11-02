@@ -74,6 +74,13 @@ subir() {
             exit 1
         fi
     done
+    for porta in 8765 8766 9000 9100 "$PORTA_WEB" "$PORTA_SINAL"; do
+        if lsof -nP -iTCP:"$porta" -sTCP:LISTEN >/dev/null 2>&1; then
+            diz "a porta $porta já está em uso:"
+            lsof -nP -iTCP:"$porta" -sTCP:LISTEN
+            exit 1
+        fi
+    done
     (cd "$REPO" && cargo build --quiet -p rms1d -p robotctl)
     PYTHON="$PYTHON" nohup sh "$LAB/tools/simulador/ver_simulador.sh" > "$ESTADO/simulador.log" 2>&1 &
     echo $! > "$ESTADO/simulador.pid"

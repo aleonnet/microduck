@@ -2,7 +2,8 @@
 //! (`biblioteca/guia/chassi.md` e `torre.md`) e a linha da fonte da DJI.
 //!
 //! O reset de nó de telemetria não existe aqui, de propósito: ele deixou o barramento do robô morto até
-//! desligar na chave. `tests/comandos.rs` varre os comandos atrás dele.
+//! desligar na chave. `Comando` é a lista inteira do que pode sair: nenhuma variante é do conjunto dele, e
+//! `tests/comandos.rs` confere isso.
 
 use std::collections::HashMap;
 
@@ -92,6 +93,9 @@ pub enum Comando {
     ModoTorre(u8),
     /// `0x3f/0xb0`, em décimos de grau, com o sinal da DJI: yaw à direita, pitch para cima.
     TorreAngulos {
+        /// Identificador da tarefa: a DJI troca a cada envio, de `TAREFA_PRIMEIRA` a `TAREFA_ULTIMA`
+        /// (`rm_module.py:429`), e o controlador marca o progresso por ele.
+        tarefa: u8,
         yaw_ddeg: i16,
         pitch_ddeg: i16,
         /// Bit 0 yaw, bit 2 pitch (`rm_define.gimbal_axis_*_maskbit`).
@@ -116,6 +120,9 @@ pub const TAXA_PARADA: u8 = 0x00;
 /// Bits de eixo de `0x3f/0xb0`.
 pub const EIXO_YAW: u8 = 0x01;
 pub const EIXO_PITCH: u8 = 0x04;
+/// `duml_cmdset.TASK_ID_MIN`, e o maior antes de `TASK_ID_MAX`, que `rm_module.py:429` usa como módulo.
+pub const TAREFA_PRIMEIRA: u8 = 1;
+pub const TAREFA_ULTIMA: u8 = 254;
 /// `task_ctrl` da DJI: início, com progresso a 10 Hz (`TASK_FREQ_10Hz << 2`).
 const TAREFA_INICIO_10HZ: u8 = 0x08;
 
@@ -163,13 +170,18 @@ impl Comando {
             Self::Sobrepor(m) => (nos.remetente, nos.chassi, vec![m]),
             Self::ModoTorre(m) => (nos.remetente, nos.torre, vec![m, 0]),
             Self::TorreAngulos {
+                tarefa,
                 yaw_ddeg,
                 pitch_ddeg,
                 eixos,
                 coordenada,
                 velocidade,
             } => {
-                let mut d = vec![0, TAREFA_INICIO_10HZ, (coordenada << 3) | (eixos & 0x07)];
+                let mut d = vec![
+                    tarefa,
+                    TAREFA_INICIO_10HZ,
+                    (coordenada << 3) | (eixos & 0x07),
+                ];
                 for v in [yaw_ddeg, 0, pitch_ddeg] {
                     d.extend_from_slice(&v.to_le_bytes());
                 }
