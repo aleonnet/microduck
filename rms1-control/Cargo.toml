@@ -1,8 +1,17 @@
+# Tudo entre o pedido de um cliente e o quadro no corpo: corpo, cinemática, intenções, segurança e o laço.
+# Sem soquete e sem tokio, como `duck-control`: o compilador segura o processo do lado de fora.
 [package]
 name = "rms1-control"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+description = "Corpo, cinemática, segurança e laço do rms1d"
 
 [dependencies]
+arc-swap = "1"
+rms1-proto = { path = "../rms1-proto" }
+rms1d-params = { path = "../rms1d-params" }
+# Sem `libudev`: a porta é aberta pelo caminho, e libudev-sys não tem sysroot na compilação cruzada.
+serialport = { version = "4.8", default-features = false }
+tracing.workspace = true

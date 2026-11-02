@@ -1,0 +1,330 @@
+//! A única dona do corpo.
+//!
+//! Ninguém acima dela tem um [`Corpo`], então ninguém acima dela consegue mandar um quadro: quem garante é
+//! o compilador, e não uma regra que alguém precisa lembrar. Regras incondicionais:
+//!
+//! - **Valor não finito é recusado**, nunca limitado: limitar `NaN` daria um valor plausível na ponta.
+//! - **O resto é limitado à faixa, e reportado**, porque um cliente precisa saber por que o robô não obedeceu.
+//! - **Desarmada, não envia nada.** Ligar o processo não move o robô.
+//! - **Sem comando dentro do prazo, as rodas zeram.** A torre fica: uma torre parada é inofensiva, e uma
+//!   velocidade velha leva o robô à parede.
+
+use std::time::{Duration, Instant};
+
+use rms1_proto::comando::{EIXO_PITCH, EIXO_YAW, TAXA_MOVENDO, TAXA_PARADA, byte_do_no};
+use rms1_proto::{Comando, Nos, PermissaoForma, SeqPorComando};
+use rms1d_params::{Params, Permissao};
+
+use crate::cinematica::rpm_de_twist;
+use crate::corpo::Corpo;
+use crate::intencoes::{Leitura, Modo};
+use crate::saude::Saude;
+
+/// Nomes para o fio, escritos por extenso para renomear um tipo não quebrar um cliente.
+pub const LIMITE_PRAZO: &str = "deadman";
+pub const LIMITE_VELOCIDADE: &str = "max_velocity";
+pub const LIMITE_RPM: &str = "max_rpm";
+pub const LIMITE_NAO_FINITO: &str = "not_finite";
+pub const LIMITE_DESARMADO: &str = "disarmed";
+
+/// Quantas vezes o modo do chassi é enviado ao armar: a prova de 2026-10-29 enviou cinco.
+const VEZES_MODO_AO_ARMAR: usize = 5;
+/// Rodas zeradas ao desarmar, antes de cortar a permissão.
+const VEZES_ZERO_AO_DESARMAR: usize = 10;
+/// `0x3f/0x19`, kit de programação: `rm_define.chassis_sdk_mode`.
+const MODO_CHASSI_PROGRAMA: u8 = 1;
+
+/// O que foi aplicado neste ciclo.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Aplicado {
+    pub twist: [f64; 3],
+    pub limitado_por: Vec<&'static str>,
+}
+
+pub struct Seguranca<C: Corpo> {
+    corpo: C,
+    nos: Nos,
+    seq: SeqPorComando,
+    permissao: PermissaoForma,
+    prazo: Duration,
+    vel_max: f64,
+    giro_max: f64,
+    rpm_max: f64,
+    raio: f64,
+    meia_soma: f64,
+    yaw_max: f64,
+    pitch_faixa: (f64, f64),
+    giro_torre_max: f64,
+    coordenada: u8,
+    velocidade_torre: u16,
+    reenvio: Duration,
+    armado: bool,
+    modo: Modo,
+    ultimo_alvo: Option<((i16, i16), Instant)>,
+    taxa_ligada: bool,
+}
+
+impl<C: Corpo> Seguranca<C> {
+    pub fn new(corpo: C, p: &Params) -> Self {
+        Self {
+            corpo,
+            nos: Nos {
+                remetente: byte_do_no(p.nos.remetente),
+                remetente_alavanca: byte_do_no(p.nos.remetente_alavanca),
+                chassi: byte_do_no(p.nos.chassi),
+                torre: byte_do_no(p.nos.torre),
+            },
+            seq: SeqPorComando::default(),
+            permissao: match p.corpo.permissao {
+                Permissao::Dji => PermissaoForma::Dji,
+                Permissao::Proroklab => PermissaoForma::Proroklab,
+            },
+            prazo: Duration::from_millis(p.seguranca.prazo_ms),
+            vel_max: p.seguranca.velocidade_max_m_s,
+            giro_max: p.seguranca.giro_max_grau_s.to_radians(),
+            rpm_max: p.seguranca.rpm_max,
+            raio: p.geometria.raio_roda_m,
+            meia_soma: p.geometria.meia_soma_m,
+            yaw_max: p.seguranca.yaw_max_grau,
+            pitch_faixa: (p.seguranca.pitch_min_grau, p.seguranca.pitch_max_grau),
+            giro_torre_max: p.seguranca.giro_torre_max_grau_s,
+            coordenada: p.torre.coordenada,
+            velocidade_torre: p.torre.velocidade,
+            reenvio: Duration::from_millis(p.torre.reenvio_ms),
+            armado: false,
+            modo: Modo::Livre,
+            ultimo_alvo: None,
+            taxa_ligada: false,
+        }
+    }
+
+    pub fn armado(&self) -> bool {
+        self.armado
+    }
+
+    pub fn ler_corpo(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.corpo.ler(buf)
+    }
+
+    fn enviar(&mut self, c: Comando, saude: &Saude) {
+        let seq = self.seq.proxima(c.id());
+        let bytes = match c.quadro(&self.nos, seq).montar() {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::error!(erro = %e, "quadro não montado");
+                return;
+            }
+        };
+        use std::sync::atomic::Ordering::Relaxed;
+        match self.corpo.enviar(&bytes) {
+            Ok(()) => saude.erros_seguidos.store(0, Relaxed),
+            Err(e) => {
+                let n = saude.erros_seguidos.fetch_add(1, Relaxed) + 1;
+                if n == 1 || n.is_multiple_of(100) {
+                    tracing::warn!(erro = %e, seguidos = n, "envio ao corpo falhou");
+                }
+            }
+        }
+    }
+
+    /// Ligar ao corpo: o modo do chassi, e o de quem segue quem. A permissão começa no próximo ciclo.
+    pub fn armar(&mut self, saude: &Saude) {
+        if self.armado {
+            return;
+        }
+        for _ in 0..VEZES_MODO_AO_ARMAR {
+            self.enviar(Comando::ModoChassi(MODO_CHASSI_PROGRAMA), saude);
+        }
+        self.armado = true;
+        self.configurar_modo(saude);
+        self.ultimo_alvo = None;
+        tracing::info!(modo = self.modo.nome(), "armado");
+    }
+
+    pub fn desarmar(&mut self, saude: &Saude) {
+        if !self.armado {
+            return;
+        }
+        for _ in 0..VEZES_ZERO_AO_DESARMAR {
+            self.enviar(Comando::Rodas([0; 4]), saude);
+        }
+        self.armado = false;
+        self.taxa_ligada = false;
+        tracing::info!("desarmado");
+    }
+
+    /// Os comandos que a DJI usa em `RobotCtrl.set_mode_attr` (`rm_ctrl.py`): `0x3f/0x46` vai ao processo
+    /// `dji_hdvt_uav`, que paramos; o resto é chassi e torre.
+    fn configurar_modo(&mut self, saude: &Saude) {
+        let torre = match self.modo {
+            Modo::Livre | Modo::ChassiSegueTorre => 0,
+            Modo::TorreSegueChassi => 2,
+        };
+        self.enviar(Comando::ModoTorre(torre), saude);
+        self.enviar(Comando::Sobrepor(0), saude);
+        self.ultimo_alvo = None;
+    }
+
+    fn limitar_twist(&self, leitura: &Leitura, limites: &mut Vec<&'static str>) -> [f64; 3] {
+        let pedido = leitura.twist;
+        if pedido.iter().any(|v| !v.is_finite()) {
+            limites.push(LIMITE_NAO_FINITO);
+            return [0.0; 3];
+        }
+        let vencido = leitura.idade_twist.is_none_or(|i| i > self.prazo);
+        if vencido {
+            if pedido != [0.0; 3] {
+                limites.push(LIMITE_PRAZO);
+            }
+            return [0.0; 3];
+        }
+        let lim = |v: f64, m: f64| v.clamp(-m, m);
+        let saida = [
+            lim(pedido[0], self.vel_max),
+            lim(pedido[1], self.vel_max),
+            lim(pedido[2], self.giro_max),
+        ];
+        if saida != pedido {
+            limites.push(LIMITE_VELOCIDADE);
+        }
+        saida
+    }
+
+    /// Rodas dentro do limite, encolhendo as quatro juntas: cortar só a que passou mudaria o rumo.
+    fn rodas(&self, twist: [f64; 3], limites: &mut Vec<&'static str>) -> [i16; 4] {
+        let rpm = rpm_de_twist(twist, self.raio, self.meia_soma);
+        let maior = rpm.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
+        let escala = if maior > self.rpm_max {
+            limites.push(LIMITE_RPM);
+            self.rpm_max / maior
+        } else {
+            1.0
+        };
+        rpm.map(|v| (v * escala).round() as i16)
+    }
+
+    /// Alvo do contrato para graus da DJI: os dois sinais são invertidos (yaw positivo à esquerda e pitch
+    /// positivo para baixo no contrato; à direita e para cima na DJI).
+    fn alvo_torre(&self, yaw: f64, pitch: f64) -> Option<(i16, i16)> {
+        if !yaw.is_finite() || !pitch.is_finite() {
+            return None;
+        }
+        let y = (-yaw.to_degrees()).clamp(-self.yaw_max, self.yaw_max);
+        let p = (-pitch.to_degrees()).clamp(self.pitch_faixa.0, self.pitch_faixa.1);
+        Some(((y * 10.0).round() as i16, (p * 10.0).round() as i16))
+    }
+
+    /// O ciclo: o único caminho até o corpo.
+    pub fn aplicar(&mut self, leitura: &Leitura, agora: Instant, saude: &Saude) -> Aplicado {
+        let mudou_modo = leitura.modo != self.modo;
+        self.modo = leitura.modo;
+        if !self.armado {
+            let vivo = leitura.idade_twist.is_some_and(|i| i <= self.prazo);
+            let limitado_por = if vivo && leitura.twist != [0.0; 3] {
+                vec![LIMITE_DESARMADO]
+            } else {
+                Vec::new()
+            };
+            return Aplicado {
+                twist: [0.0; 3],
+                limitado_por,
+            };
+        }
+        if mudou_modo {
+            self.configurar_modo(saude);
+        }
+        let mut limites = Vec::new();
+        self.enviar(Comando::Permissao(self.permissao), saude);
+        let twist = self.limitar_twist(leitura, &mut limites);
+        let mut giro_para_torre = 0.0;
+        match self.modo {
+            Modo::Livre | Modo::TorreSegueChassi => {
+                let rodas = self.rodas(twist, &mut limites);
+                self.enviar(Comando::Rodas(rodas), saude);
+            }
+            Modo::ChassiSegueTorre => {
+                self.enviar(
+                    Comando::Seguir {
+                        vx: twist[0] as f32,
+                        vy: twist[1] as f32,
+                        angulo: 0.0,
+                    },
+                    saude,
+                );
+                giro_para_torre = twist[2];
+            }
+        }
+        self.torre(leitura, giro_para_torre, agora, saude, &mut limites);
+        Aplicado {
+            twist,
+            limitado_por: limites,
+        }
+    }
+
+    /// No chassi segue a torre, o giro pedido move a torre por taxa, como a alavanca da DJI, e o chassi vai
+    /// atrás. Fora disso, ângulo: reenviado enquanto não muda, salvo seguindo a torre, porque um alvo em
+    /// relação ao chassi reenviado faria o chassi nunca parar.
+    fn torre(
+        &mut self,
+        leitura: &Leitura,
+        giro: f64,
+        agora: Instant,
+        saude: &Saude,
+        limites: &mut Vec<&'static str>,
+    ) {
+        if giro != 0.0 {
+            let graus = (-giro.to_degrees()).clamp(-self.giro_torre_max, self.giro_torre_max);
+            self.enviar(
+                Comando::TorreTaxa {
+                    yaw_ddeg_s: (graus * 10.0).round() as i16,
+                    pitch_ddeg_s: 0,
+                    controle: TAXA_MOVENDO,
+                },
+                saude,
+            );
+            self.taxa_ligada = true;
+            return;
+        }
+        if self.taxa_ligada {
+            self.enviar(
+                Comando::TorreTaxa {
+                    yaw_ddeg_s: 0,
+                    pitch_ddeg_s: 0,
+                    controle: TAXA_PARADA,
+                },
+                saude,
+            );
+            self.taxa_ligada = false;
+        }
+        let Some([yaw, pitch]) = leitura.torre else {
+            return;
+        };
+        let Some(alvo) = self.alvo_torre(yaw, pitch) else {
+            limites.push(LIMITE_NAO_FINITO);
+            return;
+        };
+        let reenviar = self.modo != Modo::ChassiSegueTorre;
+        let devido = match self.ultimo_alvo {
+            None => true,
+            Some((a, em)) => a != alvo || (reenviar && agora.duration_since(em) >= self.reenvio),
+        };
+        if !devido {
+            return;
+        }
+        let eixos = match self.modo {
+            Modo::TorreSegueChassi => EIXO_PITCH,
+            Modo::Livre | Modo::ChassiSegueTorre => EIXO_YAW | EIXO_PITCH,
+        };
+        self.enviar(
+            Comando::TorreAngulos {
+                yaw_ddeg: alvo.0,
+                pitch_ddeg: alvo.1,
+                eixos,
+                coordenada: self.coordenada,
+                velocidade: self.velocidade_torre,
+            },
+            saude,
+        );
+        self.ultimo_alvo = Some((alvo, agora));
+    }
+}

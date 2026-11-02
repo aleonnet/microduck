@@ -1,0 +1,122 @@
+//! Um ciclo: ler intenções, pedido de energia, segurança, ler o corpo, publicar. O ritmo é de quem chama,
+//! com `MissedTickBehavior::Skip`, e fica no processo.
+
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
+use std::time::{Duration, Instant};
+
+use rms1_proto::Leitor;
+use rms1d_params::Params;
+
+use crate::corpo::Corpo;
+use crate::intencoes::{Intencoes, Modo, PedidoEnergia};
+use crate::saude::Saude;
+use crate::seguranca::Seguranca;
+
+/// O estado de um ciclo. Montado só se alguém está assinando.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Estado {
+    pub t: f64,
+    pub pedido: [f64; 3],
+    pub aplicado: [f64; 3],
+    pub limitado_por: Vec<&'static str>,
+    pub torre: Option<[f64; 2]>,
+    pub modo: Modo,
+    pub armado: bool,
+    pub hz: f64,
+    pub perdidos: u64,
+}
+
+pub struct Laco<C: Corpo> {
+    seguranca: Seguranca<C>,
+    intencoes: Arc<Intencoes>,
+    saude: Arc<Saude>,
+    leitor: Leitor,
+    caixa: Vec<u8>,
+    periodo: Duration,
+    janela_inicio: Option<Instant>,
+    janela_ciclos: u32,
+}
+
+const JANELA: Duration = Duration::from_secs(1);
+
+impl<C: Corpo> Laco<C> {
+    pub fn new(corpo: C, p: &Params, intencoes: Arc<Intencoes>, saude: Arc<Saude>) -> Self {
+        Self {
+            seguranca: Seguranca::new(corpo, p),
+            intencoes,
+            saude,
+            leitor: Leitor::new(),
+            caixa: vec![0; 4096],
+            periodo: Duration::from_secs_f64(1.0 / f64::from(p.laco.hz)),
+            janela_inicio: None,
+            janela_ciclos: 0,
+        }
+    }
+
+    /// Um ciclo. `quer_estado` é se há assinante: sem assinante nada é montado.
+    pub fn ciclo(&mut self, agora: Instant, quer_estado: bool) -> Option<Estado> {
+        match self.intencoes.tomar_energia() {
+            Some(PedidoEnergia::Armar) => self.seguranca.armar(&self.saude),
+            Some(PedidoEnergia::Desarmar) => self.seguranca.desarmar(&self.saude),
+            None => {}
+        }
+        let leitura = self.intencoes.ler(agora);
+        let aplicado = self.seguranca.aplicar(&leitura, agora, &self.saude);
+        self.ler_corpo();
+
+        self.saude
+            .armado
+            .store(self.seguranca.armado(), Ordering::Relaxed);
+        self.saude.carimbar_ciclo(agora);
+        self.medir(agora);
+
+        quer_estado.then(|| Estado {
+            t: self.saude.segundos(),
+            pedido: leitura.twist,
+            aplicado: aplicado.twist,
+            limitado_por: aplicado.limitado_por,
+            torre: leitura.torre,
+            modo: leitura.modo,
+            armado: self.seguranca.armado(),
+            hz: self.saude.hz().unwrap_or(0.0),
+            perdidos: self.saude.perdidos.load(Ordering::Relaxed),
+        })
+    }
+
+    /// Quem chama avisa quando o trabalho passou do período.
+    pub fn contar_trabalho(&self, duracao: Duration) {
+        if duracao > self.periodo {
+            self.saude.perdidos.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    fn ler_corpo(&mut self) {
+        match self.seguranca.ler_corpo(&mut self.caixa) {
+            Ok(0) => {}
+            Ok(n) => {
+                let quadros = self.leitor.empurrar(&self.caixa[..n]);
+                self.saude
+                    .quadros_recebidos
+                    .fetch_add(quadros.len() as u64, Ordering::Relaxed);
+                self.saude
+                    .bytes_descartados
+                    .store(self.leitor.descartados(), Ordering::Relaxed);
+            }
+            Err(e) => tracing::debug!(erro = %e, "leitura do corpo falhou"),
+        }
+    }
+
+    fn medir(&mut self, agora: Instant) {
+        let inicio = *self.janela_inicio.get_or_insert(agora);
+        self.janela_ciclos += 1;
+        let passou = agora.saturating_duration_since(inicio);
+        if passou >= JANELA {
+            let ciclos = self.janela_ciclos.saturating_sub(1);
+            self.saude
+                .publicar_hz(f64::from(ciclos) / passou.as_secs_f64());
+            self.janela_inicio = Some(agora);
+            self.janela_ciclos = 1;
+        }
+    }
+}

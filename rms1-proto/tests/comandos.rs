@@ -90,6 +90,19 @@ fn torre_tem_posicoes_da_biblioteca() {
 }
 
 #[test]
+fn taxa_da_torre_tem_posicoes_da_biblioteca() {
+    let q = Comando::TorreTaxa {
+        yaw_ddeg_s: -300,
+        pitch_ddeg_s: 50,
+        controle: rms1_proto::comando::TAXA_MOVENDO,
+    }
+    .quadro(&Nos::default(), 0);
+    assert_eq!((q.cmd_set, q.cmd_id, q.destino), (0x04, 0x0c, 0x04));
+    let i = |p: usize| i16::from_le_bytes([q.dados[p], q.dados[p + 1]]);
+    assert_eq!((i(0), i(2), i(4), q.dados[6]), (-300, 0, 50, 0xdc));
+}
+
+#[test]
 fn seguir_tem_tres_floats_em_ordem() {
     let q = Comando::Seguir {
         vx: 1.5,

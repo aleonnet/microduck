@@ -4025,6 +4025,13 @@ dependencies = [
 [[package]]
 name = "rms1-control"
 version = "0.18.3"
+dependencies = [
+ "arc-swap",
+ "rms1-proto",
+ "rms1d-params",
+ "serialport",
+ "tracing",
+]
 
 [[package]]
 name = "rms1-proto"
@@ -4040,6 +4047,12 @@ version = "0.18.3"
 [[package]]
 name = "rms1d-params"
 version = "0.18.3"
+dependencies = [
+ "serde",
+ "tempfile",
+ "thiserror 2.0.20",
+ "toml 0.9.12+spec-1.1.0",
+]
 
 [[package]]
 name = "robotctl"
@@ -4854,7 +4867,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",

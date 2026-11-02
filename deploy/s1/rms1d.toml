@@ -1,0 +1,20 @@
+# O arquivo real do robô. O que não está aqui segue os padrões de `rms1d-params`, cada um com a fonte.
+[robo]
+nome = "rms1"
+
+[corpo]
+tipo = "serial"
+porta = "/dev/ttyS3"
+baud = 921600
+# Grava cada quadro enviado, para comparar com o simulador. Tirar depois da prova.
+gravar = "/data/rms1d-quadros.ndjson"
+# "dji", o que a biblioteca lê; "proroklab" é o plano B, que moveu o robô em 2026-10-29.
+permissao = "dji"
+
+[torre]
+# 4 é yaw no chassi e pitch NED, o padrão da DJI; 3 é o plano B, que moveu a torre em 2026-10-29.
+coordenada = 4
+velocidade = 30
+
+[dji]
+parar = ["dji_hdvt_uav", "dji_monitor"]

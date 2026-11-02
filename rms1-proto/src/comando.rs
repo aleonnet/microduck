@@ -24,6 +24,8 @@ pub mod id {
     pub const TORRE_ANGULOS: (u8, u8) = (0x3f, 0xb0);
     /// `torre.GIMBAL_SET_MODE`.
     pub const MODO_TORRE: (u8, u8) = (0x04, 0x4c);
+    /// `torre.GIMBAL_EXT_CTRL_ACCEL`.
+    pub const TORRE_TAXA: (u8, u8) = (0x04, 0x0c);
 }
 
 /// Quem é quem no barramento: o número da DJI, centena o hospedeiro e resto o índice (`306` é o
@@ -98,7 +100,18 @@ pub enum Comando {
         coordenada: u8,
         velocidade: u16,
     },
+    /// `0x04/0x0c`, em décimos de grau por segundo, com o sinal da DJI (`Gimbal.set_accel_ctrl`).
+    TorreTaxa {
+        yaw_ddeg_s: i16,
+        pitch_ddeg_s: i16,
+        controle: u8,
+    },
 }
+
+/// `accel_contral_flag` da DJI, para a torre em movimento (`rm_module.py:376`).
+pub const TAXA_MOVENDO: u8 = 0xdc;
+/// `_stop_rotate` da DJI manda taxa zero com controle zero.
+pub const TAXA_PARADA: u8 = 0x00;
 
 /// Bits de eixo de `0x3f/0xb0`.
 pub const EIXO_YAW: u8 = 0x01;
@@ -116,6 +129,7 @@ impl Comando {
             Self::Sobrepor(_) => id::SOBREPOR,
             Self::ModoTorre(_) => id::MODO_TORRE,
             Self::TorreAngulos { .. } => id::TORRE_ANGULOS,
+            Self::TorreTaxa { .. } => id::TORRE_TAXA,
         }
     }
 
@@ -162,6 +176,18 @@ impl Comando {
                 for v in [0, velocidade, 0, velocidade] {
                     d.extend_from_slice(&u16::to_le_bytes(v));
                 }
+                (nos.remetente, nos.torre, d)
+            }
+            Self::TorreTaxa {
+                yaw_ddeg_s,
+                pitch_ddeg_s,
+                controle,
+            } => {
+                let mut d = Vec::with_capacity(7);
+                for v in [yaw_ddeg_s, 0, pitch_ddeg_s] {
+                    d.extend_from_slice(&v.to_le_bytes());
+                }
+                d.push(controle);
                 (nos.remetente, nos.torre, d)
             }
         };
