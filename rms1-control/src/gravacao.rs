@@ -65,10 +65,13 @@ impl<C: Corpo> Drop for Gravando<C> {
     }
 }
 
+/// `(cmd_set, cmd_id)` para a sequência de `(origem, destino, dados)`.
+pub type Resumo = BTreeMap<(u8, u8), Vec<(u8, u8, Vec<u8>)>>;
+
 /// Por comando, a sequência de conteúdos, sem repetições seguidas e sem número de sequência. Fica de
 /// fora quanto tempo cada um durou, que muda de uma execução para outra.
-pub fn resumo(caminho: &Path) -> io::Result<BTreeMap<(u8, u8), Vec<(u8, u8, Vec<u8>)>>> {
-    let mut saida: BTreeMap<(u8, u8), Vec<(u8, u8, Vec<u8>)>> = BTreeMap::new();
+pub fn resumo(caminho: &Path) -> io::Result<Resumo> {
+    let mut saida = Resumo::new();
     for linha in BufReader::new(File::open(caminho)?).lines() {
         let linha = linha?;
         let Some((_, h)) = linha.split_once(' ') else {

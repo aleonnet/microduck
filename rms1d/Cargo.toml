@@ -1,8 +1,31 @@
+# `rms1d`: o processo do S1 no caminho do pato. O socket do contrato, com clientes reais, por cima de
+# `rms1-control`. O contrato comum é uma das saídas, e não o limite do que este corpo tem.
 [package]
 name = "rms1d"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+description = "O serviço do corpo do RoboMaster S1, no desenho do robotd"
+
+[[bin]]
+name = "rms1d"
+path = "src/main.rs"
+
+[[bin]]
+name = "rms1d-roteiro"
+path = "src/bin/rms1d-roteiro.rs"
 
 [dependencies]
+clap = { workspace = true, features = ["derive"] }
+duck-ipc-proto = { path = "../duck-ipc-proto" }
+rms1-control = { path = "../rms1-control" }
+rms1d-params = { path = "../rms1d-params" }
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "time", "io-util", "signal", "sync"] }
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+
+[dev-dependencies]
+duck-ipc-proto = { path = "../duck-ipc-proto", features = ["test-support"] }

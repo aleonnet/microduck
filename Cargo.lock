@@ -4043,6 +4043,17 @@ dependencies = [
 [[package]]
 name = "rms1d"
 version = "0.18.3"
+dependencies = [
+ "clap",
+ "duck-ipc-proto",
+ "rms1-control",
+ "rms1d-params",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
 
 [[package]]
 name = "rms1d-params"

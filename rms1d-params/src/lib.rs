@@ -12,7 +12,7 @@ pub const CAMINHO_PADRAO: &str = "/etc/robot/rms1d.toml";
 /// (`microduck/scripts/s1/bench.sh`), e `dji_network` e `dji_sys` são Wi-Fi e energia.
 const NAO_PARAR: [&str; 3] = ["dji_scratch", "dji_sys", "dji_network"];
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct Params {
     pub robo: Robo,
@@ -213,21 +213,6 @@ impl Default for Dji {
     fn default() -> Self {
         Self {
             parar: vec!["dji_hdvt_uav".to_owned(), "dji_monitor".to_owned()],
-        }
-    }
-}
-
-impl Default for Params {
-    fn default() -> Self {
-        Self {
-            robo: Robo::default(),
-            corpo: Corpo::default(),
-            nos: Nos::default(),
-            laco: Laco::default(),
-            seguranca: Seguranca::default(),
-            geometria: Geometria::default(),
-            torre: Torre::default(),
-            dji: Dji::default(),
         }
     }
 }
