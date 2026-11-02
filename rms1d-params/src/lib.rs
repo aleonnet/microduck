@@ -1,5 +1,8 @@
-//! `rms1d.toml`. Cada valor físico nos padrões cita a fonte. Arquivo ausente usa os padrões; chave
-//! desconhecida é recusada pelo nome, porque um `prazo_ms` escrito errado deixaria o robô com o prazo
+//! `rms1d.toml` e a tabela física do S1.
+//!
+//! O S1 é um só: todo número físico mora em `robo_s1.json`, com origem e prova, e é o mesmo para o `rms1d`, o simulador
+//! e o treino. `rms1d.toml` fica com o que não é físico, e número físico nele é recusado pelo nome. Arquivo ausente usa
+//! os padrões; chave desconhecida é recusada pelo nome, porque um `prazo_ms` escrito errado deixaria o robô com o prazo
 //! padrão sem ninguém saber.
 
 use std::path::{Path, PathBuf};
@@ -7,6 +10,9 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 pub const CAMINHO_PADRAO: &str = "/etc/robot/rms1d.toml";
+
+/// A tabela física do S1, a origem única.
+pub const TABELA: &str = include_str!("../robo_s1.json");
 
 /// O único que pode ser parado no robô, os dois que seguram a serial. Lista de permitidos, e não de proibidos: parar
 /// `dji_scratch` derrubou `dji_sys` (`docs/s1/robot/rms1d-pontos-de-controle.md`), e o próximo nome ninguém conhece.
@@ -20,6 +26,8 @@ pub struct Params {
     pub nos: Nos,
     pub laco: Laco,
     pub seguranca: Seguranca,
+    /// Da tabela física: não vem de `rms1d.toml`.
+    #[serde(skip)]
     pub geometria: Geometria,
     pub torre: Torre,
     pub dji: Dji,
@@ -88,29 +96,27 @@ pub struct Laco {
 pub struct Seguranca {
     /// O mesmo do pato (`duck-control/src/safety.rs`): sem comando novo, as rodas zeram.
     pub prazo_ms: u64,
-    /// `rm_module.py`, `set_move_speed`: ±3,5 m/s.
+    /// Daqui para baixo, da tabela física.
+    #[serde(skip)]
     pub velocidade_max_m_s: f64,
-    /// Manual e `rm_define.py:118`: 600°/s.
+    #[serde(skip)]
     pub giro_max_grau_s: f64,
-    /// Manual e `rm_define.py:121`: 1000 rpm.
+    #[serde(skip)]
     pub rpm_max: f64,
-    /// Manual e `rm_define.py:177`: ±250°.
+    #[serde(skip)]
     pub yaw_max_grau: f64,
-    /// `rm_define.py:176`: −20°.
+    #[serde(skip)]
     pub pitch_min_grau: f64,
-    /// `rm_define.py:175`: 35°.
+    #[serde(skip)]
     pub pitch_max_grau: f64,
-    /// Manual e `rm_define.py:167`: 540°/s.
+    #[serde(skip)]
     pub giro_torre_max_grau_s: f64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields, default)]
+/// Da tabela física: `raio_roda` e `meia_soma`.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Geometria {
-    /// Loja da DJI, roda de 100 mm; a malha do app mede 98,8 mm.
     pub raio_roda_m: f64,
-    /// Soma de meia distância entre eixos e meia bitola, média das quatro rodas na malha do app
-    /// (`assets/robomaster-s1/dados/robo_fisica.json`).
     pub meia_soma_m: f64,
 }
 
@@ -120,7 +126,8 @@ pub struct Torre {
     /// 4 é yaw no chassi e pitch NED, padrão de `angle_ctrl` (`rm_ctrl.py:1662`). Plano B: 3, que
     /// moveu a torre em 2026-10-29.
     pub coordenada: u8,
-    /// Campo de velocidade de `0x3f/0xb0`. 30 moveu a torre em 2026-10-29; o limite é 540.
+    /// Campo de velocidade de `0x3f/0xb0`, da tabela física.
+    #[serde(skip)]
     pub velocidade: u16,
     /// Reenvio do alvo, em milissegundos, enquanto ele não muda.
     pub reenvio_ms: u64,
@@ -179,23 +186,14 @@ impl Default for Seguranca {
     fn default() -> Self {
         Self {
             prazo_ms: 500,
-            velocidade_max_m_s: 3.5,
-            giro_max_grau_s: 600.0,
-            rpm_max: 1000.0,
-            yaw_max_grau: 250.0,
-            pitch_min_grau: -20.0,
-            pitch_max_grau: 35.0,
-            giro_torre_max_grau_s: 540.0,
+            ..Fisica::da_tabela().seguranca
         }
     }
 }
 
 impl Default for Geometria {
     fn default() -> Self {
-        Self {
-            raio_roda_m: 0.05,
-            meia_soma_m: 0.195,
-        }
+        Fisica::da_tabela().geometria
     }
 }
 
@@ -203,7 +201,7 @@ impl Default for Torre {
     fn default() -> Self {
         Self {
             coordenada: 4,
-            velocidade: 30,
+            velocidade: Fisica::da_tabela().velocidade_torre,
             reenvio_ms: 100,
         }
     }
@@ -215,6 +213,64 @@ impl Default for Dji {
             // O monitor primeiro: ele religa quem cair.
             parar: vec!["dji_monitor".to_owned(), "dji_hdvt_uav".to_owned()],
         }
+    }
+}
+
+/// O que o `rms1d` lê da tabela física.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Fisica {
+    pub seguranca: Seguranca,
+    pub geometria: Geometria,
+    pub velocidade_torre: u16,
+}
+
+impl Fisica {
+    /// A tabela é embutida e testada: um erro aqui é erro de compilação do projeto, não de quem roda.
+    pub fn da_tabela() -> Self {
+        Self::de_json(TABELA).expect("robo_s1.json inválido")
+    }
+
+    /// Qualquer tabela, para os testes provarem que o número vem daqui.
+    pub fn de_json(texto: &str) -> Result<Self, String> {
+        let t: serde_json::Value = serde_json::from_str(texto).map_err(|e| e.to_string())?;
+        let n = |chave: &str, campo: Option<&str>| -> Result<f64, String> {
+            let v = &t[chave]["valor"];
+            campo
+                .map_or(v, |c| &v[c])
+                .as_f64()
+                .ok_or_else(|| format!("tabela física sem {chave}"))
+        };
+        Ok(Self {
+            seguranca: Seguranca {
+                prazo_ms: 0,
+                velocidade_max_m_s: n("velocidades_chassi", Some("frente"))?,
+                giro_max_grau_s: n("giro_chassi", None)?,
+                rpm_max: n("rpm_roda", None)?,
+                yaw_max_grau: n("limites_torre", Some("yaw"))?,
+                pitch_min_grau: n("limites_torre", Some("pitchMin"))?,
+                pitch_max_grau: n("limites_torre", Some("pitchMax"))?,
+                giro_torre_max_grau_s: n("giro_torre", None)?,
+            },
+            geometria: Geometria {
+                raio_roda_m: n("raio_roda", None)?,
+                meia_soma_m: n("meia_soma", None)?,
+            },
+            velocidade_torre: n("velocidade_torre", None)? as u16,
+        })
+    }
+}
+
+impl Params {
+    /// Estes parâmetros com outra tabela física.
+    pub fn com_tabela(mut self, texto: &str) -> Result<Self, String> {
+        let f = Fisica::de_json(texto)?;
+        self.seguranca = Seguranca {
+            prazo_ms: self.seguranca.prazo_ms,
+            ..f.seguranca
+        };
+        self.geometria = f.geometria;
+        self.torre.velocidade = f.velocidade_torre;
+        Ok(self)
     }
 }
 
@@ -348,12 +404,99 @@ mod testes {
         for t in [
             "[laco]\nhz = 0\n",
             "[seguranca]\nprazo_ms = 0\n",
-            "[geometria]\nraio_roda_m = 0.0\n",
-            "[seguranca]\npitch_min_grau = 40.0\n",
             "[torre]\ncoordenada = 9\n",
         ] {
             assert!(de(t).is_err(), "{t}");
         }
+    }
+
+    /// O S1 é um só: número físico no arquivo é recusado pelo nome.
+    #[test]
+    fn numero_fisico_em_rms1d_toml_e_recusado_pelo_nome() {
+        for (t, nome) in [
+            ("[geometria]\nraio_roda_m = 0.06\n", "geometria"),
+            ("[seguranca]\nrpm_max = 500.0\n", "rpm_max"),
+            (
+                "[seguranca]\nvelocidade_max_m_s = 1.0\n",
+                "velocidade_max_m_s",
+            ),
+            ("[torre]\nvelocidade = 30\n", "velocidade"),
+        ] {
+            let e = de(t).unwrap_err().to_string();
+            assert!(e.contains(nome), "{t}: {e}");
+        }
+    }
+
+    /// Cada entrada diz de onde veio: `parametros_s1.js` pedia isso, e continua valendo.
+    #[test]
+    fn toda_entrada_da_tabela_tem_valor_unidade_origem_e_prova() {
+        let t: serde_json::Value = serde_json::from_str(TABELA).unwrap();
+        let t = t.as_object().unwrap();
+        assert!(t.len() > 40, "{}", t.len());
+        for (chave, e) in t {
+            assert!(!e["valor"].is_null(), "{chave}: sem valor");
+            assert!(e["unidade"].is_string(), "{chave}: sem unidade");
+            let origem = e["origem"].as_str().unwrap_or_default();
+            assert!(
+                ["pesado", "dji", "calculado", "constante", "provisorio"].contains(&origem),
+                "{chave}: origem {origem}"
+            );
+            let prova = if origem == "provisorio" {
+                "como_verificar"
+            } else {
+                "prova"
+            };
+            assert!(e[prova].is_string(), "{chave}: sem {prova}");
+        }
+    }
+
+    #[test]
+    fn os_padroes_sao_os_da_tabela() {
+        let p = Params::default();
+        assert_eq!(p.seguranca.rpm_max, 1000.0);
+        assert_eq!(p.geometria.meia_soma_m, 0.1949);
+        assert_eq!(p.torre.velocidade, 120);
+        assert_eq!(p.seguranca.prazo_ms, 500, "o prazo não é físico");
+    }
+
+    /// Número físico do robô só na tabela. Por texto, de leve, no código que roda, sem os testes.
+    #[test]
+    fn nenhum_numero_fisico_fora_da_tabela() {
+        let raiz = concat!(env!("CARGO_MANIFEST_DIR"), "/..");
+        let mut arquivos = Vec::new();
+        for pasta in [
+            "rms1-control/src",
+            "rms1d/src",
+            "rms1d/src/bin",
+            "rms1d-params/src",
+        ] {
+            for a in std::fs::read_dir(format!("{raiz}/{pasta}"))
+                .unwrap()
+                .flatten()
+            {
+                if a.path().extension().is_some_and(|x| x == "rs") {
+                    arquivos.push(a.path());
+                }
+            }
+        }
+        assert!(arquivos.len() > 8, "{arquivos:?}");
+        let mut achados = Vec::new();
+        for a in arquivos {
+            let texto = std::fs::read_to_string(&a).unwrap();
+            let codigo = texto.split("#[cfg(test)]").next().unwrap();
+            // 1000.0, o limite de rpm, fica de fora: `saude.rs` usa o mesmo número para milésimos de hertz.
+            for n in [
+                "0.195", "0.1949", "0.05", "540.0", "600.0", "250.0", "35.0", "3.5",
+            ] {
+                if codigo
+                    .lines()
+                    .any(|l| !l.trim_start().starts_with("//") && l.contains(n))
+                {
+                    achados.push(format!("{}: {n}", a.display()));
+                }
+            }
+        }
+        assert!(achados.is_empty(), "{achados:?}");
     }
 
     /// Parar `dji_scratch` derrubou `dji_sys` no robô.

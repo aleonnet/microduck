@@ -538,6 +538,28 @@ fn seguindo_a_torre_o_giro_aplicado_e_o_da_taxa_e_o_limite_e_dito() {
     );
 }
 
+/// O S1 é um só: mudou a tabela física, mudou o quadro, sem tocar em código.
+#[test]
+fn um_valor_da_tabela_fisica_muda_o_quadro() {
+    let original = "\"raio_roda\": {\n    \"valor\": 0.05";
+    assert!(rms1d_params::TABELA.contains(original));
+    let t = rms1d_params::TABELA.replace(original, "\"raio_roda\": {\n    \"valor\": 0.1");
+    let p = Params::default().com_tabela(&t).unwrap();
+    let mut b = banca_com(&p);
+    b.armar();
+    b.pedir_e_ciclar([1.0, 0.0, 0.0]);
+    let com_roda_grande = b.ultimas_rodas()[0];
+    let mut c = banca();
+    c.armar();
+    c.pedir_e_ciclar([1.0, 0.0, 0.0]);
+    let normal = c.ultimas_rodas()[0];
+    assert_eq!(normal, 191, "1 m/s em roda de 50 mm");
+    assert_eq!(
+        com_roda_grande, 95,
+        "metade da rotação em roda com o dobro do raio"
+    );
+}
+
 /// O último pedido de energia vence, e é lido uma vez por ciclo.
 #[test]
 fn o_ultimo_pedido_de_energia_vence() {

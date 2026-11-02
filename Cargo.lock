@@ -4060,6 +4060,7 @@ name = "rms1d-params"
 version = "0.18.3"
 dependencies = [
  "serde",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.20",
  "toml 0.9.12+spec-1.1.0",

@@ -1,0 +1,304 @@
+{
+  "massa_total": {
+    "valor": 3.369,
+    "unidade": "kg",
+    "origem": "pesado",
+    "prova": "dono, 2026-11-01: 3200 g com a Coral e o cabo Y, sem bateria, mais a bateria de 169 g"
+  },
+  "massa_bateria": {
+    "valor": 0.169,
+    "unidade": "kg",
+    "origem": "pesado",
+    "prova": "dono, 2026-11-01; o manual diz o mesmo. Faz parte de massa_corpo"
+  },
+  "massa_roda": {
+    "valor": 0.157,
+    "unidade": "kg",
+    "origem": "dji",
+    "prova": "https://store.dji.com/product/robomaster-s1-mecanum-wheel"
+  },
+  "massa_roletes_por_roda": {
+    "valor": 0.05,
+    "unidade": "kg",
+    "origem": "provisorio",
+    "como_verificar": "pesar um rolete e multiplicar por 12. Muda o resultado: com 0,02 kg, 3 testes do simulador reprovam"
+  },
+  "massa_torre": {
+    "valor": 0.35,
+    "unidade": "kg",
+    "origem": "provisorio",
+    "como_verificar": "pesar torre com canhão, se der para soltar sem risco"
+  },
+  "massa_canhao": {
+    "valor": 0.3,
+    "unidade": "kg",
+    "origem": "provisorio",
+    "como_verificar": "pesar torre com canhão, se der para soltar sem risco"
+  },
+  "massa_placa": {
+    "valor": 0.01,
+    "unidade": "kg",
+    "origem": "provisorio",
+    "como_verificar": "pesar uma placa de armadura solta"
+  },
+  "massa_corpo": {
+    "valor": 2.031,
+    "unidade": "kg",
+    "origem": "calculado",
+    "prova": "massa_total menos rodas, torre, canhão e placas. Herda os provisórios deles. Inclui bateria, Coral e cabo"
+  },
+  "torque_roda": {
+    "valor": 0.25,
+    "unidade": "N·m",
+    "origem": "dji",
+    "prova": "fontes/manual/s1-manual.txt, especificações, motor M3508I"
+  },
+  "rpm_roda": {
+    "valor": 1000,
+    "unidade": "rpm",
+    "origem": "dji",
+    "prova": "fontes/manual/s1-manual.txt, especificações, motor M3508I"
+  },
+  "ganho_roda": {
+    "valor": 0.08,
+    "unidade": "N·m·s",
+    "origem": "provisorio",
+    "como_verificar": "prova no chão: resposta da roda a um degrau de rotação"
+  },
+  "amortecimento_roda": {
+    "valor": 0.002,
+    "unidade": "N·m·s",
+    "origem": "provisorio",
+    "como_verificar": "prova no chão: tempo de parada da roda no ar"
+  },
+  "armadura_roda": {
+    "valor": 0.0001,
+    "unidade": "kg·m²",
+    "origem": "provisorio",
+    "como_verificar": "prova no chão: resposta da roda a um degrau de rotação"
+  },
+  "amortecimento_rolete": {
+    "valor": 0.00002,
+    "unidade": "N·m·s",
+    "origem": "provisorio",
+    "como_verificar": "prova no chão: andar de lado e comparar com o simulador"
+  },
+  "armadura_rolete": {
+    "valor": 0.000002,
+    "unidade": "kg·m²",
+    "origem": "provisorio",
+    "como_verificar": "prova no chão: andar de lado e comparar com o simulador"
+  },
+  "atrito_chao": {
+    "valor": 1,
+    "unidade": "",
+    "origem": "provisorio",
+    "como_verificar": "tábua inclinada com o robô em cima: a tangente do ângulo em que ele desliza"
+  },
+  "atrito_roletes": {
+    "valor": 1,
+    "unidade": "",
+    "origem": "provisorio",
+    "como_verificar": "tábua inclinada com o robô em cima: a tangente do ângulo em que ele desliza"
+  },
+  "atrito_torcao": {
+    "valor": 0.005,
+    "unidade": "m",
+    "origem": "provisorio",
+    "como_verificar": "prova no chão: giro no lugar comparado com o simulador"
+  },
+  "atrito_rolamento": {
+    "valor": 0.0001,
+    "unidade": "m",
+    "origem": "provisorio",
+    "como_verificar": "prova no chão: giro no lugar comparado com o simulador"
+  },
+  "contato_solref": {
+    "valor": [
+      0.005,
+      1
+    ],
+    "unidade": "s, adimensional",
+    "origem": "provisorio",
+    "como_verificar": "parâmetro do solucionador; conferir o assentamento contra o robô parado"
+  },
+  "giro_torre": {
+    "valor": 540,
+    "unidade": "°/s",
+    "origem": "dji",
+    "prova": "fontes/manual/s1-manual.txt, especificações, gimbal"
+  },
+  "limites_torre": {
+    "valor": {
+      "yaw": 250,
+      "pitchMin": -20,
+      "pitchMax": 35
+    },
+    "unidade": "°",
+    "origem": "dji",
+    "prova": "fontes/manual/s1-manual.txt, especificações, faixa controlável"
+  },
+  "limites_mecanicos_torre": {
+    "valor": {
+      "yaw": 270,
+      "pitchMin": -24,
+      "pitchMax": 41
+    },
+    "unidade": "°",
+    "origem": "dji",
+    "prova": "fontes/manual/s1-manual.txt, especificações, faixa mecânica"
+  },
+  "ganho_posicao_torre": {
+    "valor": 6,
+    "unidade": "N·m/rad",
+    "origem": "provisorio",
+    "como_verificar": "prova no chão: resposta da torre a um degrau de ângulo"
+  },
+  "ganho_velocidade_torre": {
+    "valor": 0.35,
+    "unidade": "N·m·s/rad",
+    "origem": "provisorio",
+    "como_verificar": "prova no chão: resposta da torre a um degrau de ângulo"
+  },
+  "forca_torre": {
+    "valor": 4,
+    "unidade": "N·m",
+    "origem": "provisorio",
+    "como_verificar": "firmware da torre ou prova no chão: o manual não dá o torque deste motor"
+  },
+  "amortecimento_torre": {
+    "valor": 0.02,
+    "unidade": "N·m·s",
+    "origem": "provisorio",
+    "como_verificar": "prova no chão: resposta da torre a um degrau de ângulo"
+  },
+  "armadura_torre": {
+    "valor": 0.002,
+    "unidade": "kg·m²",
+    "origem": "provisorio",
+    "como_verificar": "prova no chão: resposta da torre a um degrau de ângulo"
+  },
+  "malha_chassi": {
+    "valor": {
+      "giro": 0.6,
+      "rumo": 5,
+      "rumoMax": 3,
+      "velocidade": 0.5,
+      "integral": 2,
+      "integralMax": 0.6,
+      "faixaIntegral": 0.25
+    },
+    "unidade": "adimensional",
+    "origem": "provisorio",
+    "como_verificar": "prova no chão: comparar rumo e velocidade com o simulador, ou ler o controlador no firmware"
+  },
+  "giro_chassi": {
+    "valor": 600,
+    "unidade": "°/s",
+    "origem": "dji",
+    "prova": "fontes/manual/s1-manual.txt, especificações, chassi"
+  },
+  "ganho_seguir_chassi": {
+    "valor": 4,
+    "unidade": "1/s",
+    "origem": "provisorio",
+    "como_verificar": "prova no chão em gimbal_lead: tempo do chassi para alinhar com a torre, ou ler o controlador no firmware"
+  },
+  "limiar_golpe": {
+    "valor": 15,
+    "unidade": "N",
+    "origem": "provisorio",
+    "como_verificar": "bater em cada placa com força conhecida e ler o evento do robô"
+  },
+  "velocidade_tiro": {
+    "valor": 26,
+    "unidade": "m/s",
+    "origem": "dji",
+    "prova": "fontes/manual/s1-manual.txt, especificações, lançador"
+  },
+  "massa_bolinha": {
+    "valor": 0.15,
+    "unidade": "g",
+    "origem": "dji",
+    "prova": "fontes/manual/s1-manual.txt, especificações: 0,12 a 0,17 g; este é um valor dentro da faixa"
+  },
+  "gravidade": {
+    "valor": 9.81,
+    "unidade": "m/s²",
+    "origem": "constante",
+    "prova": "gravidade padrão, arredondada"
+  },
+  "dimensoes": {
+    "valor": {
+      "comprimento": 0.32,
+      "largura": 0.24,
+      "altura": 0.27
+    },
+    "unidade": "m",
+    "origem": "dji",
+    "prova": "fontes/manual/s1-manual.txt, especificações. A malha do app mede 330 mm de altura: diferença ainda não explicada",
+    "informativo": true
+  },
+  "diametro_roda": {
+    "valor": 0.1,
+    "unidade": "m",
+    "origem": "dji",
+    "prova": "https://store.dji.com/product/robomaster-s1-mecanum-wheel. A malha do app mede 98,8 mm",
+    "informativo": true
+  },
+  "velocidades_chassi": {
+    "valor": {
+      "frente": 3.5,
+      "tras": 2.5,
+      "lado": 2.8
+    },
+    "unidade": "m/s",
+    "origem": "dji",
+    "prova": "fontes/manual/s1-manual.txt, especificações. O simulador não limita por estes valores: a prova no chão diz se o firmware limita",
+    "informativo": true
+  },
+  "campo_de_visao": {
+    "valor": 120,
+    "unidade": "°",
+    "origem": "dji",
+    "prova": "fontes/manual/s1-manual.txt, especificações, câmera",
+    "informativo": true
+  },
+  "raio_roda": {
+    "valor": 0.05,
+    "unidade": "m",
+    "origem": "dji",
+    "prova": "https://store.dji.com/product/robomaster-s1-mecanum-wheel: roda de 100 mm. A malha do app mede 98,8 mm; a medição no robô é da etapa 2 do pipeline"
+  },
+  "meia_soma": {
+    "valor": 0.1949,
+    "unidade": "m",
+    "origem": "calculado",
+    "prova": "meia distância entre eixos mais meia bitola, das rodas simetrizadas da malha do app (assets/robomaster-s1/dados/robo_fisica.json, no laboratório); test_fisica.mjs confere"
+  },
+  "velocidades_piloto": {
+    "valor": {
+      "normal": {
+        "frente": 1.2,
+        "tras": 1.2,
+        "lado": 1,
+        "giro": 2.4
+      },
+      "rapido": {
+        "frente": 3.5,
+        "tras": 2.5,
+        "lado": 2.8,
+        "giro": 6
+      }
+    },
+    "unidade": "m/s e rad/s",
+    "origem": "provisorio",
+    "como_verificar": "escolha de pilotagem, as de hoje na página; o rápido vem de velocidades_chassi. Conferir no robô, no chão"
+  },
+  "velocidade_torre": {
+    "valor": 120,
+    "unidade": "°/s",
+    "origem": "provisorio",
+    "como_verificar": "30°/s é o padrão da DJI (rm_ctrl.py:1369) e não acompanha um arrasto; o limite é giro_torre. Conferir no robô"
+  }
+}
