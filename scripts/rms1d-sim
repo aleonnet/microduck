@@ -1,0 +1,131 @@
+#!/bin/sh
+# O S1 no simulador, pelo caminho do robô, em um comando: `rms1d` com corpo por rede, a ponte e a página do laboratório,
+# e o console do pato. Só o corpo muda em relação ao robô, em `rms1d.toml`.
+#
+#   scripts/rms1d-sim             sobe tudo e abre o console e a página
+#   scripts/rms1d-sim console     só o console, para o socket em S1_SOCKET (é como `rms1d-bench.sh` usa)
+#   scripts/rms1d-sim down        encerra
+#   scripts/rms1d-sim status      o que está no ar
+set -eu
+
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+LAB="${S1_LAB:-$HOME/Development/RoboMaster-S1}"
+ESTADO="${RMS1D_SIM_ESTADO:-/tmp/rms1d-sim}"
+PORTA_WEB="${RMS1D_WEB:-8081}"
+PORTA_SINAL="${RMS1D_SINAL:-8444}"
+PAGINA=http://127.0.0.1:8765/viewer/
+CONSOLE="http://127.0.0.1:$PORTA_WEB"
+SOCKET="${S1_SOCKET:-$ESTADO/robot.sock}"
+PYTHON="${PYTHON:-python3}"
+
+diz() { echo "[rms1d-sim] $*"; }
+
+# Por arquivo de pid, nunca por nome: `pkill -f` pegaria quem chama. Encerrado, o arquivo fica vazio.
+parar() {
+    [ -s "$ESTADO/$1.pid" ] || return 0
+    kill "$(cat "$ESTADO/$1.pid")" 2>/dev/null || true
+    : > "$ESTADO/$1.pid"
+}
+
+no_ar() {
+    [ -s "$ESTADO/$1.pid" ] && kill -0 "$(cat "$ESTADO/$1.pid")" 2>/dev/null
+}
+
+abrir() {
+    if [ -z "${RMS1D_SEM_ABRIR:-}" ] && command -v open >/dev/null 2>&1; then open "$1"; fi
+}
+
+esperar_http() {
+    n=0
+    until curl -fs -o /dev/null "$1"; do
+        n=$((n + 1))
+        if [ "$n" -gt 300 ]; then
+            diz "$1 não respondeu; veja $ESTADO/$2.log"
+            exit 1
+        fi
+        sleep 0.2
+    done
+}
+
+subir_console() {
+    if [ "$(uname)" = Darwin ]; then RECURSOS="--features gstreamer"; else RECURSOS=""; fi
+    # shellcheck disable=SC2086
+    (cd "$REPO" && cargo build --quiet -p mediad $RECURSOS)
+    # O console do pato, sem mudar: padrão de teste no vídeo (o vídeo do simulador é da etapa 5), e sem acesso remoto.
+    # `hello` e `telemetry.status` vão ao socket do atualizador, e `system.info` ao de configuração: quem responde é o rms1d.
+    printf '[media]\nsource = "test"\n' > "$ESTADO/mediad.toml"
+    DUCK_RUNTIME_DIR="$ESTADO" RUST_LOG="${RUST_LOG:-info}" nohup "$REPO/target/debug/mediad" \
+        --config "$ESTADO/mediad.toml" \
+        --robot-socket "$SOCKET" --updater-socket "$SOCKET" --config-socket "$SOCKET" \
+        --no-remote --rotate 0 \
+        --token "$ESTADO/sem-token" \
+        --frame-socket "$ESTADO/media-frame.sock" \
+        --port "$PORTA_SINAL" --web-port "$PORTA_WEB" > "$ESTADO/mediad.log" 2>&1 &
+    echo $! > "$ESTADO/mediad.pid"
+    esperar_http "$CONSOLE" mediad
+    diz "console em $CONSOLE"
+}
+
+subir() {
+    mkdir -p "$ESTADO"
+    for p in rms1d mediad simulador; do
+        if no_ar "$p"; then
+            diz "$p já está no ar; rode down primeiro"
+            exit 1
+        fi
+    done
+    (cd "$REPO" && cargo build --quiet -p rms1d -p robotctl)
+    PYTHON="$PYTHON" nohup sh "$LAB/tools/simulador/ver_simulador.sh" > "$ESTADO/simulador.log" 2>&1 &
+    echo $! > "$ESTADO/simulador.pid"
+    esperar_http "$PAGINA" simulador
+    cat > "$ESTADO/rms1d.toml" <<TOML
+[robo]
+nome = "rms1-sim"
+
+[corpo]
+tipo = "rede"
+endereco = "127.0.0.1:9100"
+gravar = "$ESTADO/sim.quadros"
+TOML
+    RUST_LOG="${RUST_LOG:-info}" nohup "$REPO/target/debug/rms1d" --config "$ESTADO/rms1d.toml" --socket "$SOCKET" > "$ESTADO/rms1d.log" 2>&1 &
+    echo $! > "$ESTADO/rms1d.pid"
+    n=0
+    until "$REPO/target/debug/robotctl" --robot-socket "$SOCKET" --config-socket "$SOCKET" --socket "$SOCKET" health > "$ESTADO/saude.txt" 2>&1; do
+        n=$((n + 1))
+        if [ "$n" -gt 50 ]; then
+            diz "rms1d doente:"
+            cat "$ESTADO/saude.txt"
+            exit 1
+        fi
+        sleep 0.2
+    done
+    diz "rms1d saudável, no socket $SOCKET"
+    subir_console
+    abrir "$PAGINA"
+    abrir "$CONSOLE"
+    diz "na página, a caixa mostra os quadros. No console: connect, enable, e W A S D Q E. Modos em do."
+}
+
+case "${1:-up}" in
+    up) subir ;;
+    console)
+        mkdir -p "$ESTADO"
+        subir_console
+        abrir "$CONSOLE"
+        ;;
+    down)
+        parar mediad
+        parar rms1d
+        parar simulador
+        diz "encerrado"
+        ;;
+    status)
+        for p in rms1d mediad simulador; do
+            if no_ar "$p"; then diz "$p no ar"; else diz "$p parado"; fi
+        done
+        ;;
+    *)
+        sed -n 2,9p "$0"
+        exit 2
+        ;;
+esac

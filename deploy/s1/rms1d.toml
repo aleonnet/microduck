@@ -7,7 +7,7 @@ tipo = "serial"
 porta = "/dev/ttyS3"
 baud = 921600
 # Grava cada quadro enviado, para comparar com o simulador. Tirar depois da prova.
-gravar = "/data/rms1d-quadros.ndjson"
+gravar = "/var/lib/robot/rms1d-quadros.ndjson"
 # "dji", o que a biblioteca lê; "proroklab" é o plano B, que moveu o robô em 2026-10-29.
 permissao = "dji"
 
