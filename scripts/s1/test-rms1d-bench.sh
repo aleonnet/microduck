@@ -18,21 +18,27 @@ cat > "$T/bin/adb" <<'SHIM'
 echo "$*" >> "$ADB_LOG"
 echo "$*" >> "$ADB_TUDO"
 tem() { grep -qx "$1" "$DEFEITO"; }
+# Conexão caída: o `adb` de verdade sai com 1 quando o aparelho não está conectado (medido), até `abrir` reconectar.
+if tem adb_caiu && [ ! -f "$DEFEITO.conectado" ]; then exit 1; fi
 case "$*" in
   *"test -d"*) tem sem_chroot || echo chroot_ok ;;
   *"pkill -TERM rms1d"*sem_rms1d*) if tem rms1d_antigo; then echo RMS1D_ANTIGO_VIVO; else echo sem_rms1d; fi ;;
   *parada_conferida*) tem dji_vivo && echo AINDA_NO_AR_dji_hdvt_uav; tem serial_presa && echo SERIAL_PRESA /proc/9/fd/3; echo parada_conferida ;;
   *"pidof rms1d"*) if tem rms1d_morto; then echo RMS1D_MORTO; else echo rms1d_no_ar; fi ;;
   *"pidof dji_hdvt_uav"*) echo dji_voltou ;;
-  *"/proc/uptime"*) if [ -f "$DEFEITO.reiniciou" ] && ! tem nao_reinicia; then echo "12.50 3.00"; else echo "900.50 300.00"; fi ;;
-  *"shell reboot"*) touch "$DEFEITO.reiniciou" ;;
+  *"/proc/uptime"*) if [ -f "$DEFEITO.uma_falha" ] && [ -f "$DEFEITO.reiniciou" ]; then rm -f "$DEFEITO.uma_falha"; exit 1; fi; if [ -f "$DEFEITO.reiniciou" ] && ! tem nao_reinicia; then echo "12.50 3.00"; else echo "900.50 300.00"; fi ;;
+  *"shell reboot"*) touch "$DEFEITO.reiniciou"; rm -f "$DEFEITO.conectado" ;;
 esac
 exit 0
 SHIM
 chmod +x "$T/bin/adb"
 cat > "$T/acesso.py" <<'SHIM'
-import sys
+import os, sys
 print("acesso", sys.argv[1:])
+defeito = os.environ["DEFEITO"]
+if "sem_robo" in open(defeito).read().split():
+    sys.exit(1)
+open(defeito + ".conectado", "w").close()
 SHIM
 cat > "$T/bin/robotctl" <<'SHIM'
 #!/bin/sh
@@ -110,6 +116,23 @@ echo nao_reinicia > "$DEFEITO"
 rm -f "$DEFEITO.reiniciou"
 if scripts/s1/rms1d-bench.sh volta > "$T/volta.txt" 2>&1; then echo "DISSE QUE VOLTOU SEM REINICIAR"; falhou=1; fi
 grep -qF "a DJI não voltou" "$T/volta.txt" && echo "sem reiniciar: diz que não voltou" || { echo "SEM REINICIAR, CALADO:"; tail -3 "$T/volta.txt"; falhou=1; }
+: > "$DEFEITO"
+
+echo "--- a volta com o adb caído"
+echo adb_caiu > "$DEFEITO"
+rm -f "$DEFEITO.reiniciou" "$DEFEITO.conectado"
+: > "$ADB_LOG"
+scripts/s1/rms1d-bench.sh volta > "$T/volta.txt" 2>&1 || { echo "VOLTA COM O ADB CAÍDO FALHOU:"; tail -5 "$T/volta.txt"; falhou=1; }
+pediu "shell reboot"
+: > "$DEFEITO"
+rm -f "$DEFEITO.reiniciou"
+touch "$DEFEITO.uma_falha"
+scripts/s1/rms1d-bench.sh volta > "$T/volta.txt" 2>&1 && echo "uma falha do adb na espera: tenta de novo" || { echo "UMA FALHA DO ADB NA ESPERA DERRUBOU A VOLTA:"; tail -5 "$T/volta.txt"; falhou=1; }
+rm -f "$DEFEITO.uma_falha" "$DEFEITO.reiniciou" "$DEFEITO.conectado"
+printf 'adb_caiu\nsem_robo\n' > "$DEFEITO"
+: > "$ADB_LOG"
+if scripts/s1/rms1d-bench.sh volta > "$T/volta.txt" 2>&1; then echo "DISSE QUE VOLTOU SEM ROBÔ"; falhou=1; fi
+grep -qF "não alcancei o robô" "$T/volta.txt" && echo "sem robô: diz que não alcançou" || { echo "SEM ROBÔ, SEM DIZER:"; tail -3 "$T/volta.txt"; falhou=1; }
 : > "$DEFEITO"
 nunca "dji_scratch"
 nunca "dji_sys"

@@ -134,6 +134,7 @@ impl Intencoes {
 
     pub fn parar(&self) {
         self.pedir_twist([0.0; 3]);
+        self.pedir_taxa_torre(0.0, 0.0);
     }
 
     pub fn pedir_modo(&self, modo: Modo) {

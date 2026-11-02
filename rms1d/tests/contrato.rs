@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use duck_ipc_proto as proto;
 use rms1_control::{Intencoes, Saude};
-use rms1d::respostas::{Contexto, olhar, responder, saude_do_contrato};
+use rms1d::respostas::{Contexto, aplicar_taxa_da_torre, olhar, responder, saude_do_contrato};
 use rms1d_params::Params;
 
 fn contexto() -> Contexto {
@@ -135,4 +135,17 @@ fn olhar_alem_do_alcance_e_limitado_e_diz_isso() {
 fn a_origem_nao_tem_direcao_e_olha_em_frente() {
     let r = look(0.0, 0.0, 0.0);
     assert_eq!((r.head.head_yaw, r.head.head_pitch), (0.0, 0.0));
+}
+
+/// `s1.gimbal`: só número vale, e a ação tem de ser conhecida.
+#[test]
+fn velocidade_da_torre_so_aceita_o_previsto() {
+    let c = contexto();
+    let pede = |v: serde_json::Value| aplicar_taxa_da_torre(&c.intencoes, Some(&v));
+    assert!(pede(serde_json::json!({"action": "speed", "yaw": 30.0, "pitch": -10.0})).is_ok());
+    assert!(pede(serde_json::json!({"action": "stop"})).is_ok());
+    assert!(pede(serde_json::json!({"action": "speed", "yaw": "muito", "pitch": 0.0})).is_err());
+    assert!(pede(serde_json::json!({"action": "speed", "yaw": 30.0})).is_err());
+    assert!(pede(serde_json::json!({"action": "girar"})).is_err());
+    assert!(aplicar_taxa_da_torre(&c.intencoes, None).is_err());
 }

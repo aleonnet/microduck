@@ -53,7 +53,7 @@ guardar_gravacao() { # guardar_gravacao <nome em $OUT>
 
 # Segundos desde que o robô ligou, de `/proc/uptime`. Vazio se ele não respondeu.
 ligado_ha() {
-    "${A[@]}" shell cat /proc/uptime 2>/dev/null | sed -n 's/^\([0-9][0-9]*\)\..*/\1/p' | sed -n 1p
+    { "${A[@]}" shell cat /proc/uptime 2>/dev/null || true; } | sed -n 's/^\([0-9][0-9]*\)\..*/\1/p' | sed -n 1p
 }
 
 up() {
@@ -119,6 +119,10 @@ solta() {
 
 volta() {
     mkdir -p "$OUT"
+    # Quem chama a volta pode estar com o `adb` caído, depois de o Wi-Fi cair ou de o robô ser religado na chave. Sem reconectar,
+    # nada abaixo chega ao robô, e o reinício não acontece.
+    diz "conectando ao robô"
+    python3 -I "$ACESSO" abrir --host "$IP" >/dev/null 2>&1 || falha "não alcancei o robô em $IP. Confira se ele está ligado e na rede, e tente de novo"
     diz "parando o rms1d no robô"
     # SIGTERM: o `rms1d` para o robô e descarrega a gravação antes de sair.
     "${A[@]}" shell "$BB pkill -TERM rms1d; $BB sleep 1" || true
@@ -127,6 +131,8 @@ volta() {
     "${A[@]}" forward --remove "tcp:$TCP" >/dev/null 2>&1 || true
     local antes
     antes="$(ligado_ha)"
+    # Sem o tempo de antes, a espera abaixo não teria como provar o reinício.
+    [ -n "$antes" ] || falha "não alcancei o robô em $IP. Confira se ele está ligado e na rede, e tente de novo"
     diz "reiniciando o robô"
     "${A[@]}" shell reboot || true
     diz "esperando o robô voltar"

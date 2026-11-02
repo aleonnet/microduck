@@ -693,6 +693,40 @@ fn velocidade_da_torre_vence_no_prazo_e_para() {
     assert_eq!(t[0].dados, vec![0; 7], "taxa zero, controle zero");
 }
 
+/// `robot.stop` para tudo: com um cliente renovando a velocidade, esperar o prazo não basta.
+#[test]
+fn parar_tambem_para_a_torre() {
+    let mut b = banca();
+    b.armar();
+    b.intencoes.pedir_taxa_torre(120.0, 0.0);
+    b.agora = Instant::now();
+    b.laco.ciclo(b.agora, false);
+    b.corpo.limpar();
+    b.intencoes.parar();
+    b.agora += Duration::from_millis(10);
+    b.laco.ciclo(b.agora, false);
+    let t = b.de(id::TORRE_TAXA);
+    assert_eq!(t.len(), 1);
+    assert_eq!(t[0].dados, vec![0; 7], "taxa zero, controle zero");
+}
+
+/// Velocidade não finita é recusada, e a torre para em vez de seguir com a anterior.
+#[test]
+fn velocidade_da_torre_nao_finita_e_recusada_e_a_torre_para() {
+    let mut b = banca();
+    b.armar();
+    b.intencoes.pedir_taxa_torre(120.0, 0.0);
+    b.agora = Instant::now();
+    b.laco.ciclo(b.agora, false);
+    b.corpo.limpar();
+    b.intencoes.pedir_taxa_torre(f64::NAN, 0.0);
+    b.agora += Duration::from_millis(10);
+    b.laco.ciclo(b.agora, false);
+    let t = b.de(id::TORRE_TAXA);
+    assert_eq!(t.len(), 1);
+    assert_eq!(t[0].dados, vec![0; 7], "taxa zero, controle zero");
+}
+
 /// Mover por velocidade esquece o alvo de ângulo: ao parar, a torre não volta para ele.
 #[test]
 fn velocidade_da_torre_esquece_o_alvo_de_angulo() {
