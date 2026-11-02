@@ -4,7 +4,7 @@
 # docs/design/architecture.md §1. `robotd`, `btd` and `mediad` are all siblings now.
 [workspace]
 resolver = "3"
-members = ["btd", "configd", "duck-ble", "duck-control", "duck-detect", "duck-ether", "duck-ipc-proto", "duckctl", "kinematics", "mediad", "netpadd", "nfc", "odometry", "pad-imu", "pad-map", "padd", "pet-detect", "sounds", "tof", "updater", "robotctl", "robotd", "robotd-params", "s1-duml", "s1d", "test-support", "uyvy", "xtask"]
+members = ["btd", "configd", "duck-ble", "duck-control", "duck-detect", "duck-ether", "duck-ipc-proto", "duckctl", "kinematics", "mediad", "netpadd", "nfc", "odometry", "pad-imu", "pad-map", "padd", "pet-detect", "sounds", "tof", "updater", "robotctl", "robotd", "robotd-params", "rms1-control", "rms1-proto", "rms1d", "rms1d-params", "s1-duml", "s1d", "test-support", "uyvy", "xtask"]
 
 # Everything except `duckctl` (the reason this key exists), and the S1's `s1d` and `s1-duml`.
 #

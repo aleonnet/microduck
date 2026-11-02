@@ -1,0 +1,12 @@
+# O protocolo do corpo do S1, escrito a partir de `~/Development/RoboMaster-S1/biblioteca` e das fontes
+# da DJI: quadro, verificadores e os comandos que `rms1d` usa. Sem E/S, sem socket, sem porta serial.
+[package]
+name = "rms1-proto"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Quadros e comandos do corpo do RoboMaster S1, a partir da biblioteca"
+
+[dependencies]
+thiserror.workspace = true

@@ -4023,6 +4023,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "rms1-control"
+version = "0.18.3"
+
+[[package]]
+name = "rms1-proto"
+version = "0.18.3"
+dependencies = [
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "rms1d"
+version = "0.18.3"
+
+[[package]]
+name = "rms1d-params"
+version = "0.18.3"
+
+[[package]]
 name = "robotctl"
 version = "0.18.3"
 dependencies = [
