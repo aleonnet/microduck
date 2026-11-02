@@ -31,10 +31,10 @@ Robô ligado com a DJI e conectado ao mesmo roteador deste Mac: o anúncio na re
 | 1 | espere | "Ativar robô" aparece, e a faixa diz o endereço do robô | não aparece: o anúncio real nunca foi ouvido por este Mac, e isto é o que se mede aqui |
 | 2 | clique em "Ativar robô" e confirme as rodas | os passos aparecem um a um; a faixa acende em `Robô real`, e o 3D perde a cor. Nada se move. `AVISO` de serial muda não para a subida, mas anote | para com erro, ou moveu |
 | 3 | `Armar`, e `W`, `S`, `A`, `D`, `Q`, `E` | cada roda gira no sentido do simulador; ao soltar, para | sentido errado, ou segue girando |
-| 4 | setas e arrasto | a torre obedece nos dois eixos, no sentido certo e até o limite | eixo ou sentido errado |
+| 4 | setas e arrasto | a torre obedece na hora, sem tremer, nos dois eixos, no sentido certo e até o limite; a faixa mostra "resposta em X ms" | eixo ou sentido errado, tremor ou atraso |
 | 5 | `F` até `Chassi segue a torre`, `Q` e soltar | as rodas seguem girando, como a faixa avisa: fora do chão o chassi nunca alinha | |
 | 6 | no chão, em espaço que o dono liberar: `Q` e soltar, depois os três modos | o chassi alinha e para; obedece nos três | segue girando no chão |
-| 7 | "Voltar ao modo DJI" | os passos aparecem; volta a `Simulador`; a DJI voltou; a gravação fica em `out/` do laboratório | não volta, ou segue andando |
+| 7 | "Voltar ao modo DJI" | o simulador volta na hora; o robô termina ao fundo, com os passos na faixa; a DJI voltou; a gravação fica em `out/` do laboratório | não volta, ou segue andando |
 | 8 | desligue na chave | só isso fecha a porta root, e a faixa lembra | |
 
 **Se as rodas não obedecerem:** em `deploy/s1/rms1d.toml`, `permissao = "proroklab"`, e "Ativar robô" de novo. Se a torre errar, `coordenada = 3`. Registre qual valeu.
