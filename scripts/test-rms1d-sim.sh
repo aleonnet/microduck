@@ -31,14 +31,16 @@ RMS1D=target/debug/rms1d
 ROTEIRO=target/debug/rms1d-roteiro
 ROBOTCTL=target/debug/robotctl
 
-"$PYTHON" "$LAB/tools/simulador/s1_ponte.py" --ws $WS --tcp $TCP --quadros $QUADROS > "$T/ponte.log" 2>&1 &
+# A ponte precisa de `websockets`: por `uv`, na versão fixada, e nunca pelo Python do terminal. `$PYTHON` só roda biblioteca padrão.
+VERSAO="$(sed -n 's/^websockets==//p' "$LAB/tools/requirements.txt")"
+uv run --no-project --python 3.11 --with "websockets==$VERSAO" python "$LAB/tools/simulador/s1_ponte.py" --ws $WS --tcp $TCP --quadros $QUADROS > "$T/ponte.log" 2>&1 &
 PIDS="$PIDS $!"
 n=0
 until grep -q "quadros em" "$T/ponte.log"; do
-    n=$((n + 1)); [ "$n" -lt 50 ] || falha "a ponte não subiu"
+    n=$((n + 1)); [ "$n" -lt 600 ] || falha "a ponte não subiu"
     sleep 0.1
 done
-node "$LAB/tools/simulador/corpo_sem_navegador.mjs" "ws://127.0.0.1:$WS" > "$T/corpo.log" 2>&1 &
+S1_MICRODUCK="$REPO" node "$LAB/tools/simulador/corpo_sem_navegador.mjs" "ws://127.0.0.1:$WS" > "$T/corpo.log" 2>&1 &
 PIDS="$PIDS $!"
 n=0
 until grep -q "ponte ligada" "$T/corpo.log"; do
@@ -161,8 +163,8 @@ mede "torre segue, à direita" torre_segue_chassi 0 -0.3 0 "lado < -0.2 and abs(
 mede "chassi segue, à esquerda" chassi_segue_torre 0 0.3 0 "lado > 0.2 and abs(frente) < 0.1"
 mede "chassi segue, à direita" chassi_segue_torre 0 -0.3 0 "lado < -0.2 and abs(frente) < 0.1"
 mede "chassi segue, giro à esquerda" chassi_segue_torre 0 0 1 "giro > 20"
-# Um alvo da torre, uma vez: o chassi gira até ela e para, sem correr atrás de um alvo que anda junto. 0,3 rad são 17°, e a 30°/s
-# a torre chega em 0,6 s.
+# Um alvo da torre, uma vez: o chassi gira até ela e para, sem correr atrás de um alvo que anda junto. 0,3 rad são 17°, e na
+# velocidade de torre da tabela ela chega bem antes do fim.
 HEAD_YAW=0.3 mede "chassi segue, alvo da torre" chassi_segue_torre 0 0 0 "10 < giro < 20"
 
 echo "--- sair armado para o robô"

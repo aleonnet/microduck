@@ -6,6 +6,7 @@
 #   scripts/s1/rms1d-bench.sh up       acesso, envia, para só o que segura a serial, sobe o `rms1d`. Nada se move. De novo:
 #                                      o anterior sai primeiro, e a gravação dele fica em `out/`.
 #   scripts/s1/rms1d-bench.sh volta    guarda a gravação, reinicia o robô e confere que a DJI voltou.
+#   scripts/s1/rms1d-bench.sh solta    só neste Mac: encerra a ponte e a porta até o robô. O `rms1d` dele segue no ar.
 #
 # Ambiente: S1_HOST (padrão 192.168.1.236), S1_LAB (padrão ~/Development/RoboMaster-S1), S1_SEM_COMPILAR=1.
 set -euo pipefail
@@ -46,7 +47,7 @@ guardar_gravacao() { # guardar_gravacao <nome em $OUT>
     local g
     g="$(python3 -I -c 'import sys,tomllib; print(tomllib.load(open(sys.argv[1],"rb"))["corpo"].get("gravar",""))' "$TOML")"
     if [ -n "$g" ]; then
-        if "${A[@]}" pull "$CHROOT$g" "$OUT/$1" >/dev/null 2>&1; then diz "gravação guardada: $OUT/$1"; else diz "sem gravação para guardar"; fi
+        if "${A[@]}" pull "$CHROOT$g" "$OUT/$1" >/dev/null 2>&1; then diz "gravação anterior guardada em out/"; else diz "sem gravação anterior para guardar"; fi
     fi
 }
 
@@ -94,7 +95,7 @@ up() {
     nohup python3 -I scripts/s1/rms1d-ponte.py "$SOCKET" "127.0.0.1:$TCP" >"$ESTADO/ponte.log" 2>&1 &
     echo $! > "$ESTADO/ponte.pid"
     sleep 1
-    diz "saúde, pelo socket:"
+    diz "conferindo a saúde do rms1d"
     local rc=0
     "$ROBOTCTL" --robot-socket "$SOCKET" --config-socket "$SOCKET" --socket "$SOCKET" health > "$OUT/saude.txt" 2>&1 || rc=$?
     cat "$OUT/saude.txt"
@@ -103,8 +104,12 @@ up() {
         grep -q "mudo" "$OUT/saude.txt" || falha "o rms1d está doente"
         diz "AVISO: nada chegou do corpo pela serial. Se as rodas também não obedecerem, comece por aqui."
     fi
-    diz "no ar, desarmado. Nada se moveu. Socket deste Mac: $SOCKET"
-    diz "roteiro: target/debug/rms1d-roteiro --socket $SOCKET"
+    diz "no ar, desarmado. Nada se moveu."
+}
+
+solta() {
+    if [ -f "$ESTADO/ponte.pid" ]; then kill "$(cat "$ESTADO/ponte.pid")" 2>/dev/null || true; fi
+    "${A[@]}" forward --remove "tcp:$TCP" >/dev/null 2>&1 || true
 }
 
 volta() {
@@ -128,5 +133,6 @@ volta() {
 case "${1:-}" in
     up) up ;;
     volta) volta ;;
-    *) sed -n 2,9p "$0"; exit 2 ;;
+    solta) solta ;;
+    *) sed -n 2,10p "$0"; exit 2 ;;
 esac

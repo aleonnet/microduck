@@ -1,138 +1,100 @@
 #!/bin/sh
-# O S1 no simulador, pelo caminho do robô, em um comando: `rms1d` com corpo por rede, a ponte e a página do laboratório,
-# e o console do pato. Só o corpo muda em relação ao robô, em `rms1d.toml`.
+# O S1 em um comando: sobe a página e fica aguardando o robô. Tudo o mais acontece na página, inclusive ativar o robô real.
 #
-#   scripts/rms1d-sim             sobe tudo e abre o console e a página
-#   scripts/rms1d-sim console     só o console, para o socket em S1_SOCKET (é como `rms1d-bench.sh` usa)
-#   scripts/rms1d-sim down        encerra
-#   scripts/rms1d-sim status      o que está no ar
+#   scripts/rms1          sobe, abre o navegador e fica em primeiro plano; Ctrl-C encerra tudo
+#   scripts/rms1 down     encerra o que outro terminal subiu
+#
+# Nunca usa o Python do terminal: o serviço roda por `uv`, com a versão de `websockets` fixada no laboratório.
 set -eu
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 LAB="${S1_LAB:-$HOME/Development/RoboMaster-S1}"
-ESTADO="${RMS1D_SIM_ESTADO:-/tmp/rms1d-sim}"
-PORTA_WEB="${RMS1D_WEB:-8081}"
-PORTA_SINAL="${RMS1D_SINAL:-8444}"
-PAGINA=http://127.0.0.1:8765/viewer/
-CONSOLE="http://127.0.0.1:$PORTA_WEB"
-SOCKET="${S1_SOCKET:-$ESTADO/robot.sock}"
-PYTHON="${PYTHON:-python3}"
+ESTADO="${RMS1_ESTADO:-/tmp/rms1}"
+PORTA_PAGINA="${RMS1_PORTA_PAGINA:-8765}"
+PORTA_WS="${RMS1_PORTA_WS:-8766}"
+PORTA_TCP="${RMS1_PORTA_TCP:-9000}"
+PORTA_QUADROS="${RMS1_PORTA_QUADROS:-9100}"
+PAGINA="http://127.0.0.1:$PORTA_PAGINA/viewer/"
 
-diz() { echo "[rms1d-sim] $*"; }
+diz() { echo "[rms1] $*"; }
+falha() {
+    echo "[rms1] PAROU: $*" >&2
+    exit 1
+}
 
-# Por arquivo de pid, nunca por nome: `pkill -f` pegaria quem chama. Encerrado, o arquivo fica vazio.
 parar() {
-    [ -s "$ESTADO/$1.pid" ] || return 0
-    kill "$(cat "$ESTADO/$1.pid")" 2>/dev/null || true
-    : > "$ESTADO/$1.pid"
+    [ -s "$ESTADO/servico.pid" ] || return 0
+    kill "$(cat "$ESTADO/servico.pid")" 2>/dev/null || true
+    : > "$ESTADO/servico.pid"
 }
 
-no_ar() {
-    [ -s "$ESTADO/$1.pid" ] && kill -0 "$(cat "$ESTADO/$1.pid")" 2>/dev/null
-}
-
-abrir() {
-    if [ -z "${RMS1D_SEM_ABRIR:-}" ] && command -v open >/dev/null 2>&1; then open "$1"; fi
-}
-
-esperar_http() {
-    n=0
-    until curl -fs -o /dev/null "$1"; do
-        n=$((n + 1))
-        if [ "$n" -gt 300 ]; then
-            diz "$1 não respondeu; veja $ESTADO/$2.log"
-            exit 1
+conferir() {
+    command -v uv >/dev/null 2>&1 || falha "falta o uv. Instale com: brew install uv"
+    command -v cargo >/dev/null 2>&1 || falha "falta o cargo. Instale o Rust em https://rustup.rs"
+    [ -f "$LAB/tools/simulador/s1_servico.py" ] || falha "não achei o laboratório em $LAB. Aponte com S1_LAB=<pasta>"
+    for porta in "$PORTA_PAGINA" "$PORTA_WS" "$PORTA_TCP" "$PORTA_QUADROS"; do
+        if lsof -nP -iTCP:"$porta" -sTCP:LISTEN >/dev/null 2>&1; then
+            quem="$(lsof -nP -iTCP:"$porta" -sTCP:LISTEN | awk 'NR==2 {print $1 ", processo " $2}')"
+            falha "a porta $porta está ocupada por $quem. Encerre esse processo ou rode scripts/rms1 down"
         fi
-        sleep 0.2
     done
 }
 
-subir_console() {
-    if [ "$(uname)" = Darwin ]; then RECURSOS="--features gstreamer"; else RECURSOS=""; fi
-    # shellcheck disable=SC2086
-    (cd "$REPO" && cargo build --quiet -p mediad $RECURSOS)
-    # O console do pato, sem mudar: padrão de teste no vídeo (o vídeo do simulador é da etapa 5), e sem acesso remoto.
-    # `hello` e `telemetry.status` vão ao socket do atualizador, e `system.info` ao de configuração: quem responde é o rms1d.
-    printf '[media]\nsource = "test"\n' > "$ESTADO/mediad.toml"
-    DUCK_RUNTIME_DIR="$ESTADO" RUST_LOG="${RUST_LOG:-info}" nohup "$REPO/target/debug/mediad" \
-        --config "$ESTADO/mediad.toml" \
-        --robot-socket "$SOCKET" --updater-socket "$SOCKET" --config-socket "$SOCKET" \
-        --no-remote --rotate 0 \
-        --token "$ESTADO/sem-token" \
-        --frame-socket "$ESTADO/media-frame.sock" \
-        --port "$PORTA_SINAL" --web-port "$PORTA_WEB" > "$ESTADO/mediad.log" 2>&1 &
-    echo $! > "$ESTADO/mediad.pid"
-    esperar_http "$CONSOLE" mediad
-    diz "console em $CONSOLE"
+# O serviço morto de repente não encerra o filho: o `rms1d` ficaria com a trava do socket, e a próxima subida morreria nela.
+limpar_rms1d() {
+    [ -s "$ESTADO/rms1d.pid" ] || return 0
+    orfao="$(cat "$ESTADO/rms1d.pid")"
+    if ps -o command= -p "$orfao" 2>/dev/null | grep -q rms1d; then kill "$orfao" 2>/dev/null || true; fi
+    : > "$ESTADO/rms1d.pid"
+}
+
+morreu() {
+    limpar_rms1d
+    echo "[rms1] o serviço parou. O que ele disse:" >&2
+    tail -15 "$ESTADO/servico.log" >&2
+    falha "o serviço terminou com erro $1"
 }
 
 subir() {
+    conferir
     mkdir -p "$ESTADO"
-    for p in rms1d mediad simulador; do
-        if no_ar "$p"; then
-            diz "$p já está no ar; rode down primeiro"
-            exit 1
+    limpar_rms1d
+    diz "compilando o rms1d, a primeira vez leva alguns minutos"
+    (cd "$REPO" && cargo build --quiet -p rms1d)
+    VERSAO="$(sed -n 's/^websockets==//p' "$LAB/tools/requirements.txt")"
+    diz "subindo o serviço local"
+    uv run --no-project --python 3.11 --with "websockets==$VERSAO" python "$LAB/tools/simulador/s1_servico.py" \
+        --microduck "$REPO" --estado "$ESTADO" \
+        --porta-pagina "$PORTA_PAGINA" --ws "$PORTA_WS" --tcp "$PORTA_TCP" --quadros "$PORTA_QUADROS" \
+        > "$ESTADO/servico.log" 2>&1 &
+    pid=$!
+    echo "$pid" > "$ESTADO/servico.pid"
+    trap 'kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; : > "$ESTADO/servico.pid"; diz "encerrado"; exit 0' INT TERM
+    until curl -fs -o /dev/null "$PAGINA"; do
+        if ! kill -0 "$pid" 2>/dev/null; then
+            rc=0
+            wait "$pid" || rc=$?
+            morreu "$rc"
         fi
+        sleep 0.1
     done
-    for porta in 8765 8766 9000 9100 "$PORTA_WEB" "$PORTA_SINAL"; do
-        if lsof -nP -iTCP:"$porta" -sTCP:LISTEN >/dev/null 2>&1; then
-            diz "a porta $porta já está em uso:"
-            lsof -nP -iTCP:"$porta" -sTCP:LISTEN
-            exit 1
-        fi
-    done
-    (cd "$REPO" && cargo build --quiet -p rms1d -p robotctl)
-    PYTHON="$PYTHON" nohup sh "$LAB/tools/simulador/ver_simulador.sh" > "$ESTADO/simulador.log" 2>&1 &
-    echo $! > "$ESTADO/simulador.pid"
-    esperar_http "$PAGINA" simulador
-    cat > "$ESTADO/rms1d.toml" <<TOML
-[robo]
-nome = "rms1-sim"
-
-[corpo]
-tipo = "rede"
-endereco = "127.0.0.1:9100"
-gravar = "$ESTADO/sim.quadros"
-TOML
-    RUST_LOG="${RUST_LOG:-info}" nohup "$REPO/target/debug/rms1d" --config "$ESTADO/rms1d.toml" --socket "$SOCKET" > "$ESTADO/rms1d.log" 2>&1 &
-    echo $! > "$ESTADO/rms1d.pid"
-    n=0
-    until "$REPO/target/debug/robotctl" --robot-socket "$SOCKET" --config-socket "$SOCKET" --socket "$SOCKET" health > "$ESTADO/saude.txt" 2>&1; do
-        n=$((n + 1))
-        if [ "$n" -gt 50 ]; then
-            diz "rms1d doente:"
-            cat "$ESTADO/saude.txt"
-            exit 1
-        fi
-        sleep 0.2
-    done
-    diz "rms1d saudável, no socket $SOCKET"
-    subir_console
-    abrir "$PAGINA"
-    abrir "$CONSOLE"
-    diz "na página, a caixa mostra os quadros. No console: connect, enable, e W A S D Q E. Modos em do."
+    diz "no ar: $PAGINA"
+    if [ -z "${RMS1_SEM_ABRIR:-}" ] && command -v open >/dev/null 2>&1; then open "$PAGINA"; fi
+    diz "aguardando o robô na rede. Ctrl-C encerra tudo."
+    rc=0
+    wait "$pid" || rc=$?
+    : > "$ESTADO/servico.pid"
+    [ "$rc" = 0 ] || morreu "$rc"
 }
 
 case "${1:-up}" in
     up) subir ;;
-    console)
-        mkdir -p "$ESTADO"
-        subir_console
-        abrir "$CONSOLE"
-        ;;
     down)
-        parar mediad
-        parar rms1d
-        parar simulador
+        parar
         diz "encerrado"
         ;;
-    status)
-        for p in rms1d mediad simulador; do
-            if no_ar "$p"; then diz "$p no ar"; else diz "$p parado"; fi
-        done
-        ;;
     *)
-        sed -n 2,9p "$0"
+        sed -n 2,6p "$0"
         exit 2
         ;;
 esac

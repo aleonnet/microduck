@@ -201,7 +201,7 @@ fn o_codigo_novo_nao_cita_reset_de_no_nem_para_dji_scratch() {
         varrer(&raiz.join(pasta), &mut arquivos);
     }
     for script in [
-        "scripts/rms1d-sim",
+        "scripts/rms1",
         "scripts/test-rms1d-sim.sh",
         "scripts/s1/rms1d-bench.sh",
         "scripts/s1/rms1d-ponte.py",

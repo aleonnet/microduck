@@ -116,6 +116,10 @@ The old history is kept in the local branch `backup/s1-fase1-antes-dos-trailers`
 
 The work plan of 2026-10-30 was closed as abandoned on 2026-11-01 with its reason on record: phase 1 was not proven through the duck's path, the floor proof was discarded by the owner, and its eighth gate was red. The code stayed. Cold readers read parts of this branch on 2026-10-30: two rounds up to `88187a9`, both rejected; the first cut of `s1-e2e`, before `b325606`; a hand-off, before `26fe0f5`. The 48 commits after `26fe0f5` have had no such reading, and the rounds before it were not of the whole. That is the code front's to do.
 
+### Um robô só, um comando só (2026-11-02, branch `rms1d`)
+
+`rms1d-params/robo_s1.json` é a tabela física única do S1, lida pelo `rms1d`, pelo simulador e, depois, pelo treino: `rms1d.toml` recusa número físico pelo nome, e um teste reprova número físico no código. `scripts/rms1` substitui `scripts/rms1d-sim`: sobe por `uv`, sem o Python do terminal, confere o que falta antes de subir e mostra o erro real. O robô se ativa e se devolve pela página: `rms1d-bench.sh up` e `volta` escrevem cada passo em `[rms1d-bench]`, `solta` encerra só o lado deste Mac, e sai `console`. A porta do robô neste Mac passa a ser a 9010, porque a 9000 é da ponte do simulador. Roteiro: `docs/s1/robot/rms1d-roteiro-chassi-torre.md`. A prova no robô é do dono, e a frente só fecha com o aprovado dele.
+
 ### `rms1d`, etapas 1 e 2 (2026-11-02, branch `rms1d`)
 
 Serviço novo, com `s1d` sem mudança: `rms1-proto`, `rms1d-params`, `rms1-control` e `rms1d`, no desenho do pato e com bytes da biblioteca. Um comando, `scripts/rms1d-sim`, sobe tudo no simulador. Testado pelo caminho do robô, sem janela em `scripts/test-rms1d-sim.sh` e pilotando o console no navegador. A prova no robô está em [`../robot/rms1d-roteiro-chassi-torre.md`](../robot/rms1d-roteiro-chassi-torre.md).
