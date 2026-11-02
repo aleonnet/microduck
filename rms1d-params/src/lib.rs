@@ -175,8 +175,9 @@ impl Default for Nos {
 impl Default for Laco {
     fn default() -> Self {
         Self {
-            hz: 50,
-            hz_minimo: 40.0,
+            // O ritmo da DJI: `RmStickLoopTimer`, 10000 µs, em `dji_hdvt_uav`; 10,1 ms de intervalo mediano na gravação `seguir`.
+            hz: 100,
+            hz_minimo: 80.0,
             idade_maxima_ms: 500,
         }
     }
@@ -387,7 +388,7 @@ mod testes {
         let p = de("[seguranca]\nprazo_ms = 250\n[corpo]\ntipo = \"rede\"\n").unwrap();
         assert_eq!(p.seguranca.prazo_ms, 250);
         assert_eq!(p.corpo.tipo, TipoCorpo::Rede);
-        assert_eq!(p.laco.hz, 50, "o resto segue o padrão");
+        assert_eq!(p.laco.hz, 100, "o resto segue o padrão");
     }
 
     /// Um prazo escrito errado deixaria o robô no padrão sem ninguém saber.

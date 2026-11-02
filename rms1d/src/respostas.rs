@@ -76,6 +76,25 @@ pub fn aplicar_intencao(i: &Intencoes, call: &proto::Call) -> bool {
     }
 }
 
+/// `s1.gimbal`, `{"action": "speed", "yaw": graus/s, "pitch": graus/s}`, yaw à direita e pitch para cima, ou `{"action": "stop"}`.
+pub fn aplicar_taxa_da_torre(i: &Intencoes, params: Option<&serde_json::Value>) -> Result<(), String> {
+    let p = params.ok_or("faltam os parâmetros")?;
+    match p["action"].as_str() {
+        Some("stop") => i.pedir_taxa_torre(0.0, 0.0),
+        Some("speed") => {
+            let campo = |nome: &str| {
+                p[nome]
+                    .as_f64()
+                    .filter(|v| v.is_finite())
+                    .ok_or_else(|| format!("{nome} tem de ser um número"))
+            };
+            i.pedir_taxa_torre(campo("yaw")?, campo("pitch")?);
+        }
+        outra => return Err(format!("ação desconhecida: {outra:?}")),
+    }
+    Ok(())
+}
+
 pub fn saude_do_contrato(c: &Contexto) -> proto::HealthResult {
     let mut v = c.saude.veredito(
         Instant::now(),

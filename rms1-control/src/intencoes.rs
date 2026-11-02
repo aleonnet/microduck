@@ -74,6 +74,8 @@ pub struct Intencoes {
     twist: ArcSwapOption<Carimbado<[f64; 3]>>,
     /// Yaw e pitch do contrato, em radianos. `None` até alguém pedir: armar não leva a torre a lugar nenhum.
     torre: ArcSwap<Option<[f64; 2]>>,
+    /// Velocidade da torre, em graus por segundo, com o sinal da DJI: yaw à direita, pitch para cima.
+    taxa_torre: ArcSwapOption<Carimbado<[f64; 2]>>,
     energia: AtomicU8,
     modo: AtomicU8,
     armado_pedido: AtomicBool,
@@ -87,6 +89,9 @@ pub struct Leitura {
     /// `None` se ninguém nunca pediu movimento.
     pub idade_twist: Option<Duration>,
     pub torre: Option<[f64; 2]>,
+    pub taxa_torre: [f64; 2],
+    /// `None` se ninguém nunca pediu velocidade da torre.
+    pub idade_taxa: Option<Duration>,
     pub modo: Modo,
 }
 
@@ -95,6 +100,7 @@ impl Default for Intencoes {
         Self {
             twist: ArcSwapOption::empty(),
             torre: ArcSwap::from_pointee(None),
+            taxa_torre: ArcSwapOption::empty(),
             energia: AtomicU8::new(ENERGIA_NADA),
             modo: AtomicU8::new(Modo::Livre.codigo()),
             armado_pedido: AtomicBool::new(false),
@@ -113,6 +119,17 @@ impl Intencoes {
 
     pub fn pedir_torre(&self, yaw: f64, pitch: f64) {
         self.torre.store(Arc::new(Some([yaw, pitch])));
+    }
+
+    /// Mover a torre por velocidade esquece o alvo de ângulo: um alvo velho a puxaria de volta ao parar.
+    pub fn pedir_taxa_torre(&self, yaw: f64, pitch: f64) {
+        if yaw != 0.0 || pitch != 0.0 {
+            self.torre.store(Arc::new(None));
+        }
+        self.taxa_torre.store(Some(Arc::new(Carimbado {
+            valor: [yaw, pitch],
+            em: Instant::now(),
+        })));
     }
 
     pub fn parar(&self) {
@@ -134,6 +151,7 @@ impl Intencoes {
         if sim && !antes {
             self.parar();
             self.torre.store(Arc::new(None));
+            self.taxa_torre.store(None);
         }
         self.energia.store(
             if sim { ENERGIA_ARMAR } else { ENERGIA_DESARMAR },
@@ -165,10 +183,13 @@ impl Intencoes {
 
     pub fn ler(&self, agora: Instant) -> Leitura {
         let t = self.twist.load_full();
+        let taxa = self.taxa_torre.load_full();
         Leitura {
             twist: t.as_ref().map_or([0.0; 3], |c| c.valor),
             idade_twist: t.as_ref().map(|c| agora.saturating_duration_since(c.em)),
             torre: **self.torre.load(),
+            taxa_torre: taxa.as_ref().map_or([0.0; 2], |c| c.valor),
+            idade_taxa: taxa.as_ref().map(|c| agora.saturating_duration_since(c.em)),
             modo: self.modo(),
         }
     }

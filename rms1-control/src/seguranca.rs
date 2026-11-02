@@ -332,6 +332,18 @@ impl<C: Corpo> Seguranca<C> {
         saude: &Saude,
         limites: &mut Vec<&'static str>,
     ) {
+        // A velocidade pedida vale até o prazo, como o giro das rodas: sem cliente, a torre para.
+        let taxa = if leitura.idade_taxa.is_some_and(|i| i <= self.prazo) {
+            leitura.taxa_torre
+        } else {
+            [0.0; 2]
+        };
+        let taxa = if taxa.iter().all(|v| v.is_finite()) {
+            taxa
+        } else {
+            limites.push(LIMITE_NAO_FINITO);
+            [0.0; 2]
+        };
         let alvo = match leitura.torre {
             None => None,
             Some([yaw, pitch]) => match self.alvo_torre(yaw, pitch) {
@@ -347,12 +359,23 @@ impl<C: Corpo> Seguranca<C> {
                 }
             },
         };
-        if giro != 0.0 {
-            let graus = (-giro.to_degrees()).clamp(-self.giro_torre_max, self.giro_torre_max);
+        // Com a torre seguindo o chassi, o yaw não é nosso.
+        let pedido_yaw = if self.modo == Modo::TorreSegueChassi {
+            0.0
+        } else {
+            taxa[0]
+        };
+        let yaw = pedido_yaw - giro.to_degrees();
+        if yaw != 0.0 || taxa[1] != 0.0 {
+            let lim = self.giro_torre_max;
+            if yaw.abs() > lim || taxa[1].abs() > lim {
+                limites.push(LIMITE_VELOCIDADE);
+            }
+            // A cada ciclo, como `rotate_with_speed` manda `0x04/0x0c`, e sem tarefa nova: o controlador não recomeça a rampa.
             self.enviar(
                 Comando::TorreTaxa {
-                    yaw_ddeg_s: (graus * 10.0).round() as i16,
-                    pitch_ddeg_s: 0,
+                    yaw_ddeg_s: (yaw.clamp(-lim, lim) * 10.0).round() as i16,
+                    pitch_ddeg_s: (taxa[1].clamp(-lim, lim) * 10.0).round() as i16,
                     controle: TAXA_MOVENDO,
                 },
                 saude,

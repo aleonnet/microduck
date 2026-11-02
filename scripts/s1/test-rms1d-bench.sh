@@ -24,6 +24,8 @@ case "$*" in
   *parada_conferida*) tem dji_vivo && echo AINDA_NO_AR_dji_hdvt_uav; tem serial_presa && echo SERIAL_PRESA /proc/9/fd/3; echo parada_conferida ;;
   *"pidof rms1d"*) if tem rms1d_morto; then echo RMS1D_MORTO; else echo rms1d_no_ar; fi ;;
   *"pidof dji_hdvt_uav"*) echo dji_voltou ;;
+  *"/proc/uptime"*) if [ -f "$DEFEITO.reiniciou" ] && ! tem nao_reinicia; then echo "12.50 3.00"; else echo "900.50 300.00"; fi ;;
+  *"shell reboot"*) touch "$DEFEITO.reiniciou" ;;
 esac
 exit 0
 SHIM
@@ -39,7 +41,7 @@ if grep -qx doente "$DEFEITO"; then echo "robot     unhealthy: o laço parou"; e
 echo "robot     healthy"
 SHIM
 chmod +x "$T/bin/robotctl"
-export PATH="$T/bin:$PATH" S1_ACESSO="$T/acesso.py" S1_SEM_COMPILAR=1 S1_ESTADO="$T/e" S1_OUT="$T/out" S1_ESPERA_REBOOT=0 S1_ROBOTCTL="$T/bin/robotctl"
+export PATH="$T/bin:$PATH" S1_ACESSO="$T/acesso.py" S1_SEM_COMPILAR=1 S1_ESTADO="$T/e" S1_OUT="$T/out" S1_ESPERA_REBOOT=2 S1_PASSO_REBOOT=0.1 S1_ROBOTCTL="$T/bin/robotctl"
 falhou=0
 pediu() { if grep -qF -- "$1" "$ADB_LOG"; then echo "pediu: $1"; else echo "NÃO PEDIU: $1"; falhou=1; fi; }
 nunca() { if grep -qF -- "$1" "$ADB_TUDO"; then echo "PEDIU O PROIBIDO: $1"; falhou=1; else echo "nunca: $1"; fi; }
@@ -103,6 +105,12 @@ pediu "pkill -TERM rms1d"
 pediu "shell reboot"
 pediu "forward --remove tcp:9010"
 pediu "pidof dji_hdvt_uav"
+antes "/proc/uptime" "shell reboot"
+echo nao_reinicia > "$DEFEITO"
+rm -f "$DEFEITO.reiniciou"
+if scripts/s1/rms1d-bench.sh volta > "$T/volta.txt" 2>&1; then echo "DISSE QUE VOLTOU SEM REINICIAR"; falhou=1; fi
+grep -qF "a DJI não voltou" "$T/volta.txt" && echo "sem reiniciar: diz que não voltou" || { echo "SEM REINICIAR, CALADO:"; tail -3 "$T/volta.txt"; falhou=1; }
+: > "$DEFEITO"
 nunca "dji_scratch"
 nunca "dji_sys"
 nunca "dji_network"

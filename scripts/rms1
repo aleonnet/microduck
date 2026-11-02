@@ -15,6 +15,7 @@ PORTA_WS="${RMS1_PORTA_WS:-8766}"
 PORTA_TCP="${RMS1_PORTA_TCP:-9000}"
 PORTA_QUADROS="${RMS1_PORTA_QUADROS:-9100}"
 PAGINA="http://127.0.0.1:$PORTA_PAGINA/viewer/"
+ESPERA_PAGINA_S=120
 
 diz() { echo "[rms1] $*"; }
 falha() {
@@ -22,10 +23,53 @@ falha() {
     exit 1
 }
 
-parar() {
-    [ -s "$ESTADO/servico.pid" ] || return 0
-    kill "$(cat "$ESTADO/servico.pid")" 2>/dev/null || true
+# O pid guardado pode ser de outro processo, depois de um reinício do Mac: só encerra se ainda for o nosso.
+e_nosso() { # e_nosso <pid> <o que o comando tem de conter>
+    ps -o command= -p "$1" 2>/dev/null | grep -q "$2"
+}
+
+# O serviço morto de repente não encerra o filho: o `rms1d` ficaria com a trava do socket, e a próxima subida morreria nela.
+limpar_rms1d() {
+    [ -s "$ESTADO/rms1d.pid" ] || return 0
+    orfao="$(cat "$ESTADO/rms1d.pid")"
+    if e_nosso "$orfao" rms1d; then kill "$orfao" 2>/dev/null || true; fi
+    : > "$ESTADO/rms1d.pid"
+}
+
+# Nem a ponte até o robô, nem a porta do `adb`. Só neste Mac: o robô, quem devolve é "Voltar ao modo DJI".
+limpar_ponte() {
+    [ -s "$ESTADO/bancada/ponte.pid" ] || return 0
+    orfao="$(cat "$ESTADO/bancada/ponte.pid")"
+    e_nosso "$orfao" rms1d-ponte || return 0
+    kill "$orfao" 2>/dev/null || true
+    if [ -s "$ESTADO/bancada/robo_tocado" ]; then
+        S1_HOST="$(cat "$ESTADO/bancada/robo_tocado")" S1_ESTADO="$ESTADO/bancada" bash "$REPO/scripts/s1/rms1d-bench.sh" solta 2>/dev/null || true
+    fi
+}
+
+limpar_arquivos() {
     : > "$ESTADO/servico.pid"
+    : > "$ESTADO/rms1.pid"
+}
+
+parar() {
+    [ -d "$ESTADO" ] || return 0
+    alvos=""
+    if [ -s "$ESTADO/rms1.pid" ] && e_nosso "$(cat "$ESTADO/rms1.pid")" rms1; then alvos="$(cat "$ESTADO/rms1.pid")"; fi
+    # O comando já morreu, e o serviço ficou: encerra direto.
+    if [ -z "$alvos" ] && [ -s "$ESTADO/servico.pid" ] && e_nosso "$(cat "$ESTADO/servico.pid")" s1_servico; then alvos="$(cat "$ESTADO/servico.pid")"; fi
+    for p in $alvos; do kill "$p" 2>/dev/null || true; done
+    n=0
+    for p in $alvos; do
+        while kill -0 "$p" 2>/dev/null; do
+            n=$((n + 1))
+            [ "$n" -lt 150 ] || falha "o processo $p não saiu em 15 s"
+            sleep 0.1
+        done
+    done
+    limpar_rms1d
+    limpar_ponte
+    limpar_arquivos
 }
 
 conferir() {
@@ -40,27 +84,39 @@ conferir() {
     done
 }
 
-# O serviço morto de repente não encerra o filho: o `rms1d` ficaria com a trava do socket, e a próxima subida morreria nela.
-limpar_rms1d() {
-    [ -s "$ESTADO/rms1d.pid" ] || return 0
-    orfao="$(cat "$ESTADO/rms1d.pid")"
-    if ps -o command= -p "$orfao" 2>/dev/null | grep -q rms1d; then kill "$orfao" 2>/dev/null || true; fi
-    : > "$ESTADO/rms1d.pid"
-}
-
 morreu() {
     limpar_rms1d
+    limpar_ponte
+    limpar_arquivos
     echo "[rms1] o serviço parou. O que ele disse:" >&2
     tail -15 "$ESTADO/servico.log" >&2
     falha "o serviço terminou com erro $1"
+}
+
+encerrar() {
+    if [ -n "${compilando:-}" ]; then kill "$compilando" 2>/dev/null || true; fi
+    if [ -n "${pid:-}" ]; then
+        kill "$pid" 2>/dev/null || true
+        wait "$pid" 2>/dev/null || true
+    fi
+    limpar_rms1d
+    limpar_ponte
+    limpar_arquivos
+    diz "encerrado"
+    exit 0
 }
 
 subir() {
     conferir
     mkdir -p "$ESTADO"
     limpar_rms1d
+    echo "$$" > "$ESTADO/rms1.pid"
+    trap encerrar INT TERM HUP
     diz "compilando o rms1d, a primeira vez leva alguns minutos"
-    (cd "$REPO" && cargo build --quiet -p rms1d)
+    (cd "$REPO" && exec cargo build --quiet -p rms1d) &
+    compilando=$!
+    wait "$compilando" || falha "a compilação falhou; o erro está acima"
+    compilando=""
     VERSAO="$(sed -n 's/^websockets==//p' "$LAB/tools/requirements.txt")"
     diz "subindo o serviço local"
     uv run --no-project --python 3.11 --with "websockets==$VERSAO" python "$LAB/tools/simulador/s1_servico.py" \
@@ -69,22 +125,30 @@ subir() {
         > "$ESTADO/servico.log" 2>&1 &
     pid=$!
     echo "$pid" > "$ESTADO/servico.pid"
-    trap 'kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; : > "$ESTADO/servico.pid"; diz "encerrado"; exit 0' INT TERM
-    until curl -fs -o /dev/null "$PAGINA"; do
+    n=0
+    until curl -fs --max-time 2 --noproxy '*' -o /dev/null "$PAGINA"; do
         if ! kill -0 "$pid" 2>/dev/null; then
             rc=0
             wait "$pid" || rc=$?
             morreu "$rc"
         fi
+        n=$((n + 1))
+        if [ "$n" -gt $((ESPERA_PAGINA_S * 10)) ]; then
+            kill "$pid" 2>/dev/null || true
+            wait "$pid" 2>/dev/null || true
+            morreu "a página não respondeu em $ESPERA_PAGINA_S s"
+        fi
         sleep 0.1
     done
     diz "no ar: $PAGINA"
-    if [ -z "${RMS1_SEM_ABRIR:-}" ] && command -v open >/dev/null 2>&1; then open "$PAGINA"; fi
+    if [ -z "${RMS1_SEM_ABRIR:-}" ] && command -v open >/dev/null 2>&1; then
+        open "$PAGINA" || diz "não consegui abrir o navegador; abra $PAGINA"
+    fi
     diz "aguardando o robô na rede. Ctrl-C encerra tudo."
     rc=0
     wait "$pid" || rc=$?
-    : > "$ESTADO/servico.pid"
     [ "$rc" = 0 ] || morreu "$rc"
+    limpar_arquivos
 }
 
 case "${1:-up}" in

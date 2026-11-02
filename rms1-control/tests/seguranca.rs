@@ -655,3 +655,59 @@ fn pedidos_em_rajada_nao_atrasam_o_laco() {
         "ciclo levou {pior:?}, mais que o período"
     );
 }
+
+/// A torre por velocidade: `0x04/0x0c` a cada ciclo, sem tarefa de ângulo, que faz o controlador recomeçar a rampa e a torre tremer.
+#[test]
+fn velocidade_da_torre_vai_a_cada_ciclo_sem_tarefa_de_angulo() {
+    let mut b = banca();
+    b.armar();
+    for _ in 0..10 {
+        b.intencoes.pedir_taxa_torre(120.0, -30.0);
+        b.agora = Instant::now();
+        b.laco.ciclo(b.agora, false);
+    }
+    let t = b.de(id::TORRE_TAXA);
+    assert_eq!(t.len(), 10, "um por ciclo");
+    let i = |q: &Quadro, p: usize| i16::from_le_bytes([q.dados[p], q.dados[p + 1]]);
+    assert_eq!(i(&t[0], 0), 1200, "yaw em décimos de grau por segundo, à direita");
+    assert_eq!(i(&t[0], 4), -300, "pitch em décimos de grau por segundo, para cima");
+    assert!(b.de(id::TORRE_ANGULOS).is_empty(), "nenhuma tarefa de ângulo");
+}
+
+/// Sem pedido novo dentro do prazo, a torre para, com uma taxa zero e uma vez só.
+#[test]
+fn velocidade_da_torre_vence_no_prazo_e_para() {
+    let mut b = banca();
+    b.armar();
+    b.intencoes.pedir_taxa_torre(120.0, 0.0);
+    b.agora = Instant::now();
+    b.laco.ciclo(b.agora, false);
+    b.corpo.limpar();
+    let prazo = Params::default().seguranca.prazo_ms;
+    b.agora += Duration::from_millis(prazo + 50);
+    b.laco.ciclo(b.agora, false);
+    b.agora += Duration::from_millis(10);
+    b.laco.ciclo(b.agora, false);
+    let t = b.de(id::TORRE_TAXA);
+    assert_eq!(t.len(), 1, "uma vez só");
+    assert_eq!(t[0].dados, vec![0; 7], "taxa zero, controle zero");
+}
+
+/// Mover por velocidade esquece o alvo de ângulo: ao parar, a torre não volta para ele.
+#[test]
+fn velocidade_da_torre_esquece_o_alvo_de_angulo() {
+    let mut b = banca();
+    b.armar();
+    b.intencoes.pedir_torre(0.5, 0.1);
+    b.ciclo();
+    b.intencoes.pedir_taxa_torre(60.0, 0.0);
+    b.agora = Instant::now();
+    b.laco.ciclo(b.agora, false);
+    b.intencoes.pedir_taxa_torre(0.0, 0.0);
+    b.corpo.limpar();
+    b.agora = Instant::now();
+    b.laco.ciclo(b.agora, false);
+    b.agora += Duration::from_millis(200);
+    b.laco.ciclo(b.agora, false);
+    assert!(b.de(id::TORRE_ANGULOS).is_empty(), "sem reenviar o alvo velho");
+}

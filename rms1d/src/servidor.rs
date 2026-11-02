@@ -165,6 +165,21 @@ async fn atender(
                 continue;
             }
         };
+        // `s1.gimbal` é do S1, e não do contrato comum: velocidade da torre, com o sinal da DJI.
+        if pedido.method == "s1.gimbal" {
+            let r = respostas::aplicar_taxa_da_torre(&c.intencoes, pedido.params.as_ref());
+            if let Some(id) = pedido.id.clone() {
+                let resposta = match r {
+                    Ok(()) => proto::Response::ok(Some(id), &proto::IntentResult::accepted()),
+                    Err(e) => proto::Response::err(
+                        Some(id),
+                        proto::Error::new(proto::code::INVALID_PARAMS, e),
+                    ),
+                };
+                escrever(&mut saida, &resposta).await?;
+            }
+            continue;
+        }
         let call = pedido.as_call();
         // Notificação não tem resposta: é assim que os pedidos contínuos chegam.
         let Some(id) = pedido.id.clone() else {

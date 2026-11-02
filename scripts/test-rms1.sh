@@ -22,11 +22,12 @@ ln -s "$CARGO" "$T/limpo/cargo"
 LIMPO="$T/limpo:/usr/bin:/bin:/usr/sbin:/sbin"
 comando() { # comando <arquivo de saída> <PATH> [VAR=valor...]
     saida="$1"; caminho="$2"; shift 2
-    # Pelo Python do sistema, só para o Ctrl-C chegar como num terminal: em segundo plano, o `sh` ignora SIGINT.
+    # Pelo Python do sistema, para o Ctrl-C chegar como num terminal: grupo de processos próprio, com SIGINT no padrão.
     env -i HOME="$HOME" PATH="$caminho" RMS1_SEM_ABRIR=1 RMS1_ESTADO="$T/estado" RMS1_PORTA_PAGINA=$P_PAGINA RMS1_PORTA_WS=$P_WS \
         RMS1_PORTA_TCP=$P_TCP RMS1_PORTA_QUADROS=$P_QUADROS S1_LAB="$LAB" "$@" /usr/bin/python3 -I -c '
 import os, signal, sys
 signal.signal(signal.SIGINT, signal.SIG_DFL)
+os.setsid()
 os.execv("/bin/sh", ["sh", sys.argv[1]])' "$REPO/scripts/rms1" > "$saida" 2>&1 &
     PID=$!
 }
@@ -106,7 +107,8 @@ grep -q "compilando" "$T/sobe.txt" && passou "diz que está compilando" || falha
 [ "$(sed -n 1p "$T/sobe.txt" | grep -c compilando)" = 1 ] && passou "diz antes de começar" || falha "a primeira linha não é o aviso: $(sed -n 1p "$T/sobe.txt")"
 curl -fs "http://127.0.0.1:$P_PAGINA/robo_s1.json" | grep -q raio_roda && passou "a página serve a tabela do robô" || falha "sem a tabela"
 curl -fs -o /dev/null "http://127.0.0.1:$P_PAGINA/viewer/" && passou "a página responde" || falha "a página não responde"
-kill -INT "$PID"
+# O Ctrl-C de verdade vai ao grupo inteiro: comando, uv, serviço e rms1d.
+kill -INT "-$PID"
 espera_fim 10; rc=$?
 [ "$rc" = 0 ] && passou "Ctrl-C sai sem erro" || falha "Ctrl-C saiu com $rc: $(tail -3 "$T/sobe.txt")"
 grep -q "encerrado" "$T/sobe.txt" && passou "Ctrl-C diz que encerrou" || falha "Ctrl-C calado"
@@ -119,9 +121,43 @@ env -i HOME="$HOME" PATH="$LIMPO" RMS1_ESTADO="$T/estado" sh "$REPO/scripts/rms1
 espera_fim 10 || true
 sem_nada "down"
 
+echo "--- scripts/rms1 down enquanto compila"
+mkdir -p "$T/cargo-lento"
+printf '#!/bin/sh\nexec sleep 30\n' > "$T/cargo-lento/cargo"
+chmod +x "$T/cargo-lento/cargo"
+comando "$T/sobe.txt" "$T/cargo-lento:$T/so-uv:/usr/bin:/bin:/usr/sbin:/sbin"
+n=0
+until grep -q compilando "$T/sobe.txt"; do n=$((n + 1)); [ "$n" -lt 50 ] || break; sleep 0.1; done
+sleep 0.3
+env -i HOME="$HOME" PATH="$LIMPO" RMS1_ESTADO="$T/estado" sh "$REPO/scripts/rms1" down > "$T/down.txt" 2>&1
+if espera_fim 5; then passou "down durante a compilação encerra"; else falha "down durante a compilação não encerrou: $(cat "$T/sobe.txt")"; fi
+if pgrep -f "sleep 30" >/dev/null 2>&1 && [ -n "$(pgrep -f "$T/cargo-lento" || true)" ]; then falha "a compilação ficou"; fi
+sem_nada "down durante a compilação"
+
+echo "--- o navegador não abre, e há proxy no terminal"
+mkdir -p "$T/sem-open"
+printf '#!/bin/sh\nexit 1\n' > "$T/sem-open/open"
+chmod +x "$T/sem-open/open"
+comando "$T/sobe.txt" "$T/sem-open:$LIMPO" RMS1_SEM_ABRIR= http_proxy=http://127.0.0.1:9 all_proxy=http://127.0.0.1:9
+if ate_no_ar "$T/sobe.txt"; then passou "sobe com proxy no terminal"; else falha "não subiu com proxy: $(cat "$T/sobe.txt")"; fi
+n=0
+until grep -q "não consegui abrir o navegador" "$T/sobe.txt" || [ "$n" -gt 30 ]; do n=$((n + 1)); sleep 0.1; done
+grep -q "não consegui abrir o navegador" "$T/sobe.txt" && passou "diz que não abriu o navegador" || falha "open falhou calado"
+sleep 0.5
+if kill -0 "$PID" 2>/dev/null; then passou "open falhando não derruba o comando"; else falha "open falhando derrubou o comando, e o serviço ficou sem dono"; fi
+kill -INT "-$PID" 2>/dev/null
+espera_fim 10 || true
+sem_nada "open falhando"
+
 echo "--- o serviço morre depois de subir"
 comando "$T/sobe.txt" "$LIMPO"
 ate_no_ar "$T/sobe.txt" || falha "não subiu para morrer"
+# Uma ponte até o robô no ar, como depois de uma ativação: morrer não pode deixá-la sem dono.
+mkdir -p "$T/estado/bancada"
+ln -sf /bin/sleep "$T/rms1d-ponte"
+"$T/rms1d-ponte" 300 &
+PONTE_FALSA=$!
+echo "$PONTE_FALSA" > "$T/estado/bancada/ponte.pid"
 SERVICO="$(pgrep -f "s1_servico.py.*$T/estado" | tail -1)"
 t0="$(/usr/bin/python3 -c 'import time; print(time.time())')"
 kill -9 "$SERVICO"
@@ -132,6 +168,8 @@ if [ "$rc" != 0 ] && grep -q "PAROU" "$T/sobe.txt" && /usr/bin/python3 -c "impor
 else
     falha "morreu depois: saída $rc, $dt s: $(tail -3 "$T/sobe.txt")"
 fi
+if kill -0 "$PONTE_FALSA" 2>/dev/null; then falha "a ponte até o robô ficou órfã: $PONTE_FALSA"; kill "$PONTE_FALSA" 2>/dev/null; else passou "a ponte até o robô não ficou órfã"; fi
+: > "$T/estado/bancada/robo_tocado"
 RMS1D_FILHO="$(pgrep -f "$T/estado/rms1d.toml" || true)"
 if [ -n "$RMS1D_FILHO" ]; then falha "o rms1d ficou órfão: $RMS1D_FILHO"; kill "$RMS1D_FILHO" 2>/dev/null; fi
 sem_nada "morreu depois"

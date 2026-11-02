@@ -51,6 +51,11 @@ guardar_gravacao() { # guardar_gravacao <nome em $OUT>
     fi
 }
 
+# Segundos desde que o robô ligou, de `/proc/uptime`. Vazio se ele não respondeu.
+ligado_ha() {
+    "${A[@]}" shell cat /proc/uptime 2>/dev/null | sed -n 's/^\([0-9][0-9]*\)\..*/\1/p' | sed -n 1p
+}
+
 up() {
     mkdir -p "$ESTADO" "$OUT"
     if [ -z "${S1_SEM_COMPILAR:-}" ]; then
@@ -120,13 +125,24 @@ volta() {
     guardar_gravacao "robo-$(date +%H%M%S).quadros"
     if [ -f "$ESTADO/ponte.pid" ]; then kill "$(cat "$ESTADO/ponte.pid")" 2>/dev/null || true; fi
     "${A[@]}" forward --remove "tcp:$TCP" >/dev/null 2>&1 || true
+    local antes
+    antes="$(ligado_ha)"
     diz "reiniciando o robô"
     "${A[@]}" shell reboot || true
-    sleep "${S1_ESPERA_REBOOT:-60}"
-    diz "conferindo se a DJI voltou"
-    python3 -I "$ACESSO" abrir --host "$IP"
-    "${A[@]}" shell "$BB pidof dji_hdvt_uav && echo dji_voltou || echo DJI_NAO_VOLTOU" | tee "$OUT/volta.txt"
-    grep -q dji_voltou "$OUT/volta.txt" || falha "a DJI não voltou; desligue na chave e ligue de novo"
+    diz "esperando o robô voltar"
+    # Sem espera fixa: só vale o robô que reiniciou de fato, com o tempo ligado menor que antes, e com a DJI no ar.
+    local limite=$((SECONDS + ${S1_ESPERA_REBOOT:-180})) agora
+    while :; do
+        sleep "${S1_PASSO_REBOOT:-5}"
+        if python3 -I "$ACESSO" abrir --host "$IP" >/dev/null 2>&1; then
+            agora="$(ligado_ha)"
+            if [ -n "$antes" ] && [ -n "$agora" ] && [ "$agora" -lt "$antes" ]; then
+                "${A[@]}" shell "$BB pidof dji_hdvt_uav && echo dji_voltou || echo DJI_NAO_VOLTOU" > "$OUT/volta.txt" || true
+                if grep -q dji_voltou "$OUT/volta.txt"; then break; fi
+            fi
+        fi
+        [ "$SECONDS" -lt "$limite" ] || falha "a DJI não voltou em ${S1_ESPERA_REBOOT:-180} s; desligue na chave e ligue de novo"
+    done
     diz "a DJI voltou. Lembre: só desligar na chave fecha a porta root."
 }
 
