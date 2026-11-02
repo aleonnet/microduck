@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Prepara e encerra a prova no robô real. Não comanda nada que um cliente real não comande: quem manda é o
-# console, `robotctl` e `rms1d-roteiro`, pelo socket, como no simulador. Só muda o corpo, em `deploy/s1/rms1d.toml`.
+# Ativa e devolve o robô real. É o que os botões "Ativar robô" e "Voltar ao modo DJI" da página rodam: cada passo sai numa
+# linha `[rms1d-bench]`, que a página mostra, e a falha, em `[rms1d-bench] PAROU: <motivo>`. Não comanda nada que um cliente
+# real não comande: quem manda é a página, `robotctl` e `rms1d-roteiro`, pelo socket. Só muda o corpo, em `deploy/s1/rms1d.toml`.
 #
 #   scripts/s1/rms1d-bench.sh up       acesso, envia, para só o que segura a serial, sobe o `rms1d`. Nada se move. De novo:
 #                                      o anterior sai primeiro, e a gravação dele fica em `out/`.
-#   scripts/s1/rms1d-bench.sh console  `mediad` neste Mac, com padrão de teste, e abre o console.
 #   scripts/s1/rms1d-bench.sh volta    guarda a gravação, reinicia o robô e confere que a DJI voltou.
 #
 # Ambiente: S1_HOST (padrão 192.168.1.236), S1_LAB (padrão ~/Development/RoboMaster-S1), S1_SEM_COMPILAR=1.
@@ -60,6 +60,7 @@ up() {
     # Antes de qualquer coisa no robô: o arquivo recusado, com dji_scratch por exemplo, não chega a parar nada.
     local parar
     parar="$(target/debug/rms1d --config "$TOML" --processos-a-parar)" || falha "$TOML recusado; nada foi tocado no robô"
+    diz "abrindo o acesso ao robô em $IP"
     python3 -I "$ACESSO" abrir --host "$IP"
     confere chroot_ok "sem chroot em $CHROOT; rode scripts/s1/bench.sh exec uma vez" "test -d $CHROOT/bin && echo chroot_ok"
     "${A[@]}" shell "$BB grep -q ' $CHROOT/dev ' /proc/mounts || mount -o bind /dev $CHROOT/dev; $BB grep -q ' $CHROOT/proc ' /proc/mounts || mount -t proc proc $CHROOT/proc; $BB grep -q ' $CHROOT/sys ' /proc/mounts || mount -t sysfs sys $CHROOT/sys"
@@ -68,6 +69,7 @@ up() {
     # faria o novo morrer em silêncio, com o velho respondendo no lugar dele.
     confere sem_rms1d "o rms1d anterior não saiu; desligue o robô na chave" "$BB pkill -TERM rms1d; $BB sleep 1; $BB pidof rms1d >/dev/null && echo RMS1D_ANTIGO_VIVO || echo sem_rms1d"
     guardar_gravacao "robo-$(date +%H%M%S).quadros"
+    diz "enviando o rms1d ao robô"
     "${A[@]}" push "$BIN" "$CHROOT/opt/robot/bin/rms1d" >/dev/null
     "${A[@]}" push "$TOML" "$CHROOT/etc/robot/rms1d.toml" >/dev/null
     "${A[@]}" shell "chmod 755 $CHROOT/opt/robot/bin/rms1d"
@@ -82,6 +84,7 @@ up() {
     echo "$saida"
     case "$saida" in *parada_conferida*) ;; *) falha "a parada dos processos não respondeu" ;; esac
     case "$saida" in *AINDA_NO_AR*|*SERIAL_PRESA*) falha "a serial não ficou livre: dois escritores nela é o que este passo evita. Reinicie o robô" ;; esac
+    diz "subindo o rms1d no robô"
     "${A[@]}" shell "($BB setsid $BB nohup $ENTRA /opt/robot/bin/rms1d --config /etc/robot/rms1d.toml --socket /run/robotd.sock </dev/null >/data/rms1d.log 2>&1 &); $BB sleep 1"
     sleep 2
     "${A[@]}" shell "$BB pidof rms1d >/dev/null && echo rms1d_no_ar || { echo RMS1D_MORTO; $BB tail -5 /data/rms1d.log; }" | tee "$OUT/up.txt"
@@ -104,13 +107,9 @@ up() {
     diz "roteiro: target/debug/rms1d-roteiro --socket $SOCKET"
 }
 
-console() {
-    [ -S "$SOCKET" ] || falha "sem socket; rode up primeiro"
-    S1_SOCKET="$SOCKET" scripts/rms1d-sim console
-}
-
 volta() {
     mkdir -p "$OUT"
+    diz "parando o rms1d no robô"
     # SIGTERM: o `rms1d` para o robô e descarrega a gravação antes de sair.
     "${A[@]}" shell "$BB pkill -TERM rms1d; $BB sleep 1" || true
     guardar_gravacao "robo-$(date +%H%M%S).quadros"
@@ -119,6 +118,7 @@ volta() {
     diz "reiniciando o robô"
     "${A[@]}" shell reboot || true
     sleep "${S1_ESPERA_REBOOT:-60}"
+    diz "conferindo se a DJI voltou"
     python3 -I "$ACESSO" abrir --host "$IP"
     "${A[@]}" shell "$BB pidof dji_hdvt_uav && echo dji_voltou || echo DJI_NAO_VOLTOU" | tee "$OUT/volta.txt"
     grep -q dji_voltou "$OUT/volta.txt" || falha "a DJI não voltou; desligue na chave e ligue de novo"
@@ -127,7 +127,6 @@ volta() {
 
 case "${1:-}" in
     up) up ;;
-    console) console ;;
     volta) volta ;;
     *) sed -n 2,9p "$0"; exit 2 ;;
 esac
