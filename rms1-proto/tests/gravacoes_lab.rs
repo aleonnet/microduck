@@ -1,96 +1,25 @@
 //! O decodificador contra as gravações do laboratório. Não rodam no `cargo test` comum: as gravações são do repositório
 //! privado, e este é público. `scripts/test-rms1-telemetria.sh` roda estes testes, e reprova se o laboratório não estiver lá.
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use rms1_proto::Quadro;
 use rms1_proto::barramento::{
     ATITUDE, BATERIA, ESTADO, IMU, Layout, POSICAO, Pacote, RODAS, SERVO, TORRE_BASICO, VELOCIDADE,
     id,
 };
-use rms1_proto::{Leitor, Quadro};
 
 fn lab() -> PathBuf {
     PathBuf::from(std::env::var("S1_LAB").expect("S1_LAB tem de apontar para o laboratório"))
 }
 
-/// Desfaz o escape do `strace`.
-fn desfazer(s: &[u8]) -> Vec<u8> {
-    let mut o = Vec::with_capacity(s.len());
-    let mut i = 0;
-    while i < s.len() {
-        if s[i] != b'\\' {
-            o.push(s[i]);
-            i += 1;
-            continue;
-        }
-        let n = s[i + 1];
-        let simples = match n {
-            b'n' => Some(10),
-            b't' => Some(9),
-            b'r' => Some(13),
-            b'f' => Some(12),
-            b'v' => Some(11),
-            b'a' => Some(7),
-            b'b' => Some(8),
-            b'e' => Some(27),
-            b'\\' => Some(92),
-            b'"' => Some(34),
-            _ => None,
-        };
-        if let Some(v) = simples {
-            o.push(v);
-            i += 2;
-        } else if n == b'x' {
-            o.push(u8::from_str_radix(std::str::from_utf8(&s[i + 2..i + 4]).unwrap(), 16).unwrap());
-            i += 4;
-        } else {
-            let mut j = i + 1;
-            let mut v = 0u32;
-            while j < s.len() && j < i + 4 && (b'0'..=b'7').contains(&s[j]) {
-                v = v * 8 + u32::from(s[j] - b'0');
-                j += 1;
-            }
-            o.push(v as u8);
-            i = j;
-        }
-    }
-    o
-}
-
 /// Os quadros lidos de um `strace`, por descritor, com o verificador conferido.
 fn quadros(caminho: &Path) -> Vec<Quadro> {
     let texto = std::fs::read(caminho).unwrap_or_else(|e| panic!("{}: {e}", caminho.display()));
-    let mut por_fd: HashMap<Vec<u8>, Leitor> = HashMap::new();
-    let mut saida = Vec::new();
-    for linha in texto.split(|b| *b == b'\n') {
-        let Some(p) = linha.windows(5).position(|w| w == b"read(") else {
-            continue;
-        };
-        let resto = &linha[p + 5..];
-        let Some(v) = resto.iter().position(|b| *b == b',') else {
-            continue;
-        };
-        let fd = resto[..v].to_vec();
-        let Some(a) = resto.iter().position(|b| *b == b'"') else {
-            continue;
-        };
-        let corpo = &resto[a + 1..];
-        let mut f = 0;
-        while f < corpo.len() && corpo[f] != b'"' {
-            f += if corpo[f] == b'\\' { 2 } else { 1 };
-        }
-        if f > corpo.len() {
-            continue;
-        }
-        saida.extend(
-            por_fd
-                .entry(fd)
-                .or_default()
-                .empurrar(&desfazer(&corpo[..f])),
-        );
-    }
-    saida
+    rms1_proto::strace::quadros(&texto)
+        .into_iter()
+        .map(|(_, q)| q)
+        .collect()
 }
 
 fn pacotes(caminho: &str, l: &Layout) -> Vec<Pacote> {
@@ -172,10 +101,12 @@ fn as_duas_ordens_gravadas_decodificam_nas_faixas() {
             antiga += 1;
         }
     }
+    // 2501 e 4867 eram os do leitor que perdia as leituras retomadas; com elas, 2517 e 6396, os mesmos de uma contagem
+    // independente, em Python, em 2026-11-03 (`out/2026-11-03-firmware-controlador/conta_retomadas.py`, no laboratório).
     assert_eq!(
         (hoje, antiga),
-        (2501, 4867),
-        "os pacotes medidos no levantamento"
+        (2517, 6396),
+        "os pacotes das gravações, com as leituras retomadas"
     );
 }
 
@@ -200,7 +131,8 @@ fn giro_rumo_e_rodas_batem_na_gravacao_que_gira() {
         "out/2026-10-30-poc2/telemetry-gimbal/hdvt_gimbal_reads.strace",
         &ordem_de_hoje(),
     );
-    assert_eq!(p.len(), 1341);
+    // 1341 sem as leituras retomadas; 1367 com elas, igual à contagem independente de 2026-11-03.
+    assert_eq!(p.len(), 1367);
     let (mut d_rumo, mut giro) = (Vec::new(), Vec::new());
     for par in p.windows(2) {
         let dt = f64::from(par[1].tempo_ms.wrapping_sub(par[0].tempo_ms)) / 1000.0;

@@ -7,6 +7,7 @@ pub mod barramento;
 pub mod comando;
 pub mod crc;
 pub mod quadro;
+pub mod strace;
 
 pub use comando::{Comando, Nos, PermissaoForma, SeqPorComando, id};
 pub use quadro::{Leitor, PedeAck, Quadro, QuadroErro};
