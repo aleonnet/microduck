@@ -34,6 +34,18 @@ Fontes: `~/Development/RoboMaster-S1/biblioteca/guia/telemetria.md` e `docs/2026
 | Estado do chassi | `0x3f/0x29` e o pacote | 11 bits, contados por subida | parado, rampa, levantado, escorregou, impactos, capotou | levantar e inclinar | evento errado |
 | Toque | `0x3f/0x02`, do remetente `placa*32+24` | conta na placa, com tipo, som e batida | placas 1 a 6 | cada uma das 6 | placa errada |
 
+### Calculado por nós, em modo sombra
+
+Medido no robô em 2026-11-03, nos dois modos (`out/2026-11-03-firmware-controlador/`, no laboratório). O `robot.state` segue com o controlador; o nosso sai em `s1.state.estimate`.
+
+| Ponto | Controlador, medido | `rms1d`, em sombra | Nas gravações de 2026-11-03 | Falta provar no robô | Reprova se |
+|---|---|---|---|---|---|
+| Velocidade | integra a aceleração: até 13,1 m/s parado na mão | rodas pela inversa da cinemática, média de `janela_ms`, zero com o bit parado | até 0,05 m/s na mão; até 0,044 m/s de diferença andando | os mesmos manuseios, com o robô em sombra | acima de 0,1 m/s parado na mão |
+| Posição | antes de andar, se afasta até 0,60 m (modo DJI) e 0,62 m (nosso) | a nossa velocidade, girada pelo rumo e integrada | antes de andar, até 0,04 e 0,05 m | andar e voltar ao ponto | deriva parado |
+| Levantado | o bit nunca acendeu, em 12636 pacotes | discordância entre a velocidade dele e a das rodas, por tempo | marca nos 5 manuseios; nenhum andando | carregado com as rodas girando; levantado devagar | manuseio sem marca |
+| Gravidade | a atitude segue a gravidade, com até 3,0° de diferença parado | a atitude dele, conferida contra a aceleração com o robô parado | divergência máxima de 3,0°, sem aviso | os -24° presos, se voltarem | aviso nas gravações, ou sem aviso aos 24° |
+| Rumo | o giro integrado por ele | o dele; o nosso, pelo giro, só para comparar | 16° de diferença no fim do modo DJI, com leituras perdidas; 4° no nosso | qual dos dois, com plano próprio | |
+
 ## O que a leitura não fecha, e só o robô responde
 
 - `0x3f/0x19` sai de 906, como `rm_module.py`; a gravação que moveu o robô em 2026-10-29 saiu de 900. Se as rodas não obedecerem depois de tentar `permissao = "proroklab"`, é o próximo suspeito.

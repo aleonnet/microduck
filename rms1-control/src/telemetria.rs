@@ -22,6 +22,8 @@ use rms1_proto::barramento::{
 };
 use rms1d_params::Params;
 
+use crate::estimativa::{Calculo, Estimativa};
+
 /// Os bits do estado do chassi, na ordem do firmware (`biblioteca/guia/telemetria.md`).
 pub const BITS_CHASSI: [&str; 11] = [
     "static",
@@ -36,6 +38,7 @@ pub const BITS_CHASSI: [&str; 11] = [
     "roll_over",
     "hill_static",
 ];
+pub const BIT_PARADO: u32 = 1;
 pub const BIT_LEVANTADO: u32 = 1 << 4;
 pub const BIT_CAPOTOU: u32 = 1 << 9;
 pub const PLACAS: usize = 6;
@@ -208,11 +211,14 @@ pub struct Amostra {
     pub placas: [Placa; PLACAS],
     /// Topo esquerda, topo direita.
     pub infravermelho: [u64; 2],
+    /// O que nós calculamos com o último pacote, ao lado do que o controlador mandou ([`crate::estimativa`]).
+    pub estimativa: Option<Calculo>,
 }
 
 /// A sequência e o estado. Sem E/S: quem chama entrega o que chegou, e envia os pedidos.
 pub struct Assinante {
     amostra: Amostra,
+    estimativa: Estimativa,
     layout: Layout,
     ligado: bool,
     janela: Duration,
@@ -253,7 +259,9 @@ impl Assinante {
                 contagem_chassi: [0; BITS_CHASSI.len()],
                 placas: [Placa::default(); PLACAS],
                 infravermelho: [0; 2],
+                estimativa: None,
             },
+            estimativa: Estimativa::new(&p.estimativa, &p.geometria),
             layout: Layout::da_assinatura(),
             ligado,
             janela: Duration::from_millis(t.janela_ms),
@@ -528,7 +536,9 @@ impl Assinante {
         }
         match Pacote::ler(&q.dados, &self.layout) {
             Ok(p) => {
-                self.amostra.medidas = Some(Medidas::de(&p));
+                let m = Medidas::de(&p);
+                self.amostra.estimativa = Some(self.estimativa.passo(&m, p.estado));
+                self.amostra.medidas = Some(m);
                 self.amostra.pacotes += 1;
                 self.ultimo_pacote = Some(agora);
                 self.estado(p.estado);

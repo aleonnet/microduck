@@ -1,0 +1,151 @@
+//! O cálculo próprio contra as gravações do robô de 2026-11-03, nos dois modos: o controlador da DJI medido por fora
+//! (`strace` de `dji_hdvt_uav`) e o `rms1d` ativo (`strace` do `rms1d`). As gravações são do laboratório, que é privado:
+//! não rodam no `cargo test` comum. `scripts/test-rms1-telemetria.sh` roda estes testes, e reprova sem o laboratório.
+//!
+//! Os trechos são os do roteiro do dono, anotados por ele e achados nos dados (`docs/2026-11-02-1620-levantamentos-s1.md`,
+//! no laboratório), em segundos desde o primeiro pacote: no ar e inclinado, de lado na mão, levantado nivelado, e andando
+//! pelo app.
+
+use std::path::PathBuf;
+
+use rms1_control::estimativa::{Linha, de_strace};
+use rms1_control::telemetria::{BIT_LEVANTADO, BIT_PARADO};
+use rms1d_params::Params;
+
+fn gravacao(nome: &str) -> Vec<Linha> {
+    let lab =
+        PathBuf::from(std::env::var("S1_LAB").expect("S1_LAB tem de apontar para o laboratório"));
+    let c = lab.join("out/2026-11-03-firmware-controlador").join(nome);
+    let texto = std::fs::read(&c).unwrap_or_else(|e| panic!("{}: {e}", c.display()));
+    de_strace(&texto, &Params::default()).linhas
+}
+
+fn modo_dji() -> Vec<Linha> {
+    gravacao("ctrl_fora.strace")
+}
+
+fn modo_nosso() -> Vec<Linha> {
+    gravacao("rms1d_fora.strace")
+}
+
+/// Os manuseios: (início, fim) em segundos.
+const MANUSEIOS_DJI: [(f64, f64); 3] = [(35.0, 41.0), (52.0, 61.0), (75.0, 82.0)];
+const MANUSEIOS_NOSSO: [(f64, f64); 2] = [(46.0, 55.0), (69.0, 79.0)];
+const ANDANDO_DJI: (f64, f64) = (114.0, 154.0);
+
+fn plano(v: [f64; 3]) -> f64 {
+    v[0].hypot(v[1])
+}
+
+#[test]
+#[ignore = "precisa do laboratório; rode scripts/test-rms1-telemetria.sh"]
+fn as_gravacoes_tem_os_pacotes_medidos() {
+    assert_eq!(modo_dji().len(), 5226);
+    assert_eq!(modo_nosso().len(), 7410);
+}
+
+/// Critério 16: com o controlador acima de 2 m/s, o robô estava na mão, e a nossa velocidade fica abaixo de 0,1 m/s.
+#[test]
+#[ignore = "precisa do laboratório; rode scripts/test-rms1-telemetria.sh"]
+fn na_mao_a_velocidade_falsa_do_controlador_nao_entra_na_nossa() {
+    for (nome, l) in [("modo DJI", modo_dji()), ("modo nosso", modo_nosso())] {
+        let falsos: Vec<&Linha> = l
+            .iter()
+            .filter(|x| plano(x.medidas.velocidade_corpo) > 2.0)
+            .collect();
+        assert!(
+            falsos.len() > 100,
+            "{nome}: {} pacotes acima de 2 m/s",
+            falsos.len()
+        );
+        for x in falsos {
+            let v = x.calculo.velocidade_corpo[0].hypot(x.calculo.velocidade_corpo[1]);
+            assert!(v < 0.1, "{nome}, {:.2} s: nossa {v:.3} m/s", x.t);
+        }
+    }
+}
+
+/// Critério 17, no robô: parado pelo controlador, a nossa velocidade é zero.
+#[test]
+#[ignore = "precisa do laboratório; rode scripts/test-rms1-telemetria.sh"]
+fn parado_pelo_controlador_e_zero() {
+    for l in [modo_dji(), modo_nosso()] {
+        let parados: Vec<&Linha> = l.iter().filter(|x| x.estado & BIT_PARADO != 0).collect();
+        assert!(parados.len() > 1000);
+        assert!(
+            parados
+                .iter()
+                .all(|x| x.calculo.velocidade_corpo == [0.0, 0.0])
+        );
+    }
+}
+
+/// Critério 18: andando no chão pelo app, a nossa velocidade fica a até 0,1 m/s da do controlador, em média por segundo.
+#[test]
+#[ignore = "precisa do laboratório; rode scripts/test-rms1-telemetria.sh"]
+fn andando_a_nossa_velocidade_bate_com_a_do_controlador() {
+    let l = modo_dji();
+    for s in 118..126 {
+        let seg: Vec<&Linha> = l
+            .iter()
+            .filter(|x| x.t >= f64::from(s) && x.t < f64::from(s + 1))
+            .collect();
+        assert!(!seg.is_empty(), "{s} s sem pacote");
+        let n = seg.len() as f64;
+        let dji = seg
+            .iter()
+            .map(|x| plano(x.medidas.velocidade_corpo))
+            .sum::<f64>()
+            / n;
+        let nossa = seg
+            .iter()
+            .map(|x| x.calculo.velocidade_corpo[0].hypot(x.calculo.velocidade_corpo[1]))
+            .sum::<f64>()
+            / n;
+        assert!(
+            (dji - nossa).abs() <= 0.1,
+            "{s} s: controlador {dji:.3}, nossa {nossa:.3}"
+        );
+    }
+}
+
+/// Critério 19: cada manuseio tem levantado; andando, nenhum.
+#[test]
+#[ignore = "precisa do laboratório; rode scripts/test-rms1-telemetria.sh"]
+fn levantado_em_todo_manuseio_e_nunca_andando() {
+    let marcado = |l: &[Linha], (a, b): (f64, f64)| {
+        l.iter()
+            .filter(|x| x.t >= a && x.t <= b)
+            .any(|x| x.calculo.levantado)
+    };
+    let dji = modo_dji();
+    for m in MANUSEIOS_DJI {
+        assert!(marcado(&dji, m), "modo DJI, manuseio {m:?} sem levantado");
+    }
+    let nosso = modo_nosso();
+    for m in MANUSEIOS_NOSSO {
+        assert!(
+            marcado(&nosso, m),
+            "modo nosso, manuseio {m:?} sem levantado"
+        );
+    }
+    assert!(!marcado(&dji, ANDANDO_DJI), "levantado andando");
+    // O controlador não marca nenhum: é o motivo do cálculo próprio.
+    assert!(
+        dji.iter()
+            .chain(&nosso)
+            .all(|x| x.estado & BIT_LEVANTADO == 0)
+    );
+}
+
+/// Critério 20: nas gravações, a atitude do controlador e a aceleração concordam com o robô quieto: nenhum aviso.
+#[test]
+#[ignore = "precisa do laboratório; rode scripts/test-rms1-telemetria.sh"]
+fn nas_gravacoes_a_gravidade_confere_sem_aviso() {
+    for (nome, l) in [("modo DJI", modo_dji()), ("modo nosso", modo_nosso())] {
+        let quietos = l.iter().filter(|x| x.calculo.divergencia.is_some()).count();
+        assert!(quietos > 1000, "{nome}: {quietos} pacotes quietos");
+        let aviso = l.iter().find(|x| x.calculo.divergente);
+        assert!(aviso.is_none(), "{nome}: {aviso:?}");
+    }
+}

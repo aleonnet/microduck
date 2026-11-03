@@ -41,9 +41,13 @@ fn montar_corpo(p: &Params) -> std::io::Result<Box<dyn Corpo>> {
         TipoCorpo::Rede => Box::new(CorpoRede::new(p.corpo.endereco.clone())),
         TipoCorpo::Falso => Box::new(CorpoFalso::default()),
     };
-    Ok(match &p.corpo.gravar {
-        Some(caminho) => Box::new(Gravando::new(corpo, caminho)?),
-        None => corpo,
+    // `gravar_recebido` sem `gravar` é recusado em `Params::validar`.
+    Ok(match (&p.corpo.gravar, &p.corpo.gravar_recebido) {
+        (Some(enviado), Some(recebido)) => {
+            Box::new(Gravando::new(corpo, enviado)?.com_recebido(recebido)?)
+        }
+        (Some(enviado), None) => Box::new(Gravando::new(corpo, enviado)?),
+        (None, _) => corpo,
     })
 }
 

@@ -241,6 +241,17 @@ pub fn estado_s1(a: Option<&Amostra>, idade_ms: Option<u64>, recente: bool) -> s
             "battery": {"volts": m.volts, "percent": m.percentual, "current_a": m.corrente_a, "temperature_c": m.temperatura_c},
             "robot_clock_ms": m.relogio_ms,
         })),
+        // O nosso cálculo, em modo sombra, ao lado do `body` do controlador. O `robot.state` segue com o do controlador.
+        "estimate": a.estimativa.map(|e| json!({
+            "velocity_body": [e.velocidade_corpo[0], e.velocidade_corpo[1], 0.0],
+            "position_m": [e.posicao[0], e.posicao[1], 0.0],
+            "yaw_deg": e.rumo,
+            "picked_up": e.levantado,
+            "disagreement_m_s": e.discordancia,
+            "gravity": e.gravidade,
+            "tilt_divergence_deg": e.divergencia,
+            "tilt_divergent": e.divergente,
+        })),
         "gimbal": a.torre.map(|t| json!({
             "yaw_deg": t.rumo,
             "pitch_deg": t.inclinacao,

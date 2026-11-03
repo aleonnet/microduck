@@ -94,6 +94,7 @@ fn com_amostra(c: &Contexto, enlace: rms1_control::Enlace) {
             contagem_chassi: [0; BITS_CHASSI.len()],
             placas: [Placa::default(); PLACAS],
             infravermelho: [0; 2],
+            estimativa: None,
         }));
 }
 
@@ -166,6 +167,95 @@ fn sem_pacote_nao_ha_bateria_nem_corpo() {
     let v = rms1d::respostas::estado_s1(None, None, false);
     assert_eq!(v["link"]["state"], "off");
     assert!(v["body"].is_null());
+}
+
+/// Critério 21: o nosso cálculo sai em `s1.state.estimate`, ao lado do `body`, e o `robot.state` segue com o controlador.
+#[test]
+fn o_calculo_proprio_sai_em_estimate_e_nao_muda_o_robot_state() {
+    use rms1_control::estimativa::Estimativa;
+    use rms1_control::telemetria::{BITS_CHASSI, Medidas, PLACAS, Placa};
+    let p = Params::default();
+    let m = Medidas {
+        velocidade_solo: [0.0; 3],
+        velocidade_corpo: [2.5, 0.0, 0.0],
+        rodas_rpm: [0.0; 4],
+        rodas_angulo_grau: [0.0; 4],
+        rodas_estado: [0; 4],
+        posicao: [0.3, 0.4, 0.0],
+        aceleracao: [0.0, 0.0, 1.0],
+        giro: [0.0; 3],
+        rumo: 10.0,
+        inclinacao: 0.0,
+        rolagem: 0.0,
+        volts: 12.0,
+        percentual: 90.0,
+        corrente_a: 0.0,
+        temperatura_c: 30.0,
+        relogio_ms: 0,
+    };
+    let mut e = Estimativa::new(&p.estimativa, &p.geometria);
+    let mut calc = e.passo(&m, 0);
+    for i in 1..30 {
+        calc = e.passo(
+            &Medidas {
+                relogio_ms: 20 * i,
+                ..m
+            },
+            0,
+        );
+    }
+    assert!(
+        calc.levantado,
+        "o controlador acusa 2,5 m/s e as rodas não andam"
+    );
+    let amostra = rms1_control::Amostra {
+        enlace: rms1_control::Enlace::Recebendo,
+        pacotes: 30,
+        ignorados: 0,
+        medidas: Some(m),
+        torre: None,
+        estado_chassi: 0,
+        contagem_chassi: [0; BITS_CHASSI.len()],
+        placas: [Placa::default(); PLACAS],
+        infravermelho: [0; 2],
+        estimativa: Some(calc),
+    };
+    let s = rms1d::respostas::estado_s1(Some(&amostra), Some(10), true);
+    assert_eq!(s["estimate"]["picked_up"], true);
+    assert_eq!(
+        s["estimate"]["velocity_body"],
+        serde_json::json!([0.0, 0.0, 0.0])
+    );
+    assert_eq!(
+        s["body"]["velocity_body"],
+        serde_json::json!([2.5, 0.0, 0.0]),
+        "o do controlador fica"
+    );
+    assert_eq!(s["body"]["position_m"], serde_json::json!([0.3, 0.4, 0.0]));
+    let estado = rms1_control::Estado {
+        t: 1.0,
+        pedido: [0.0; 3],
+        aplicado: [0.0; 3],
+        limitado_por: Vec::new(),
+        torre: None,
+        modo: rms1_control::Modo::Livre,
+        armado: false,
+        hz: 100.0,
+        perdidos: 0,
+        corpo: Some(Arc::new(amostra)),
+        corpo_recente: true,
+        idade_pacote_ms: Some(10),
+    };
+    let r = rms1d::respostas::estado_do_contrato(&estado);
+    assert!(
+        !r.safety.picked_up,
+        "o robot.state segue o bit do controlador neste plano"
+    );
+    assert_eq!(
+        r.odom.position,
+        [0.3, 0.4, 0.0],
+        "e a posição do controlador"
+    );
 }
 
 /// Os modos passam por `robot.do`, porque o console recusa `s1.*` (`mediad/src/session.rs`).

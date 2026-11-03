@@ -16,6 +16,10 @@ path = "src/main.rs"
 name = "rms1d-roteiro"
 path = "src/bin/rms1d-roteiro.rs"
 
+[[bin]]
+name = "rms1d-reprocessar"
+path = "src/bin/rms1d-reprocessar.rs"
+
 [dependencies]
 clap = { workspace = true, features = ["derive"] }
 duck-ipc-proto = { path = "../duck-ipc-proto" }

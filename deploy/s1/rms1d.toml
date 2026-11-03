@@ -8,6 +8,10 @@ porta = "/dev/ttyS3"
 baud = 921600
 # Grava cada quadro enviado, para comparar com o simulador. Tirar depois da prova.
 gravar = "/var/lib/robot/rms1d-quadros.ndjson"
+# Grava cada leitura do corpo, para reprocessar sem o robô (`rms1d-reprocessar`). Pela conta, só os 50 pacotes de 176 bytes
+# por segundo, em hexadecimal, dão cerca de 63 MB por hora; os outros quadros somam a isso. Tirar depois da prova em modo
+# sombra.
+gravar_recebido = "/var/lib/robot/rms1d-recebido.txt"
 # "dji", o que a biblioteca lê; "proroklab" é o plano B, que moveu o robô em 2026-10-29.
 permissao = "dji"
 

@@ -31,6 +31,7 @@ pub struct Params {
     pub geometria: Geometria,
     pub torre: Torre,
     pub telemetria: Telemetria,
+    pub estimativa: Estimativa,
     pub dji: Dji,
 }
 
@@ -68,6 +69,8 @@ pub struct Corpo {
     pub endereco: String,
     /// Grava cada quadro enviado, para comparar simulador e robô. Vazio não grava.
     pub gravar: Option<PathBuf>,
+    /// Grava cada leitura do corpo, `ms hex`, para reprocessar sem o robô. Exige `gravar`. Vazio não grava.
+    pub gravar_recebido: Option<PathBuf>,
     pub permissao: Permissao,
 }
 
@@ -157,6 +160,31 @@ pub struct Telemetria {
     pub recomecar_sem_resposta_ms: u64,
 }
 
+/// O que o `rms1d` calcula por conta própria, ao lado do controlador, em modo sombra. São limiares do cálculo, e não números
+/// do robô: o físico (raio da roda, meia soma) vem da tabela. A origem de cada padrão está em `Default`.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct Estimativa {
+    /// A média da velocidade pelas rodas, em tempo do relógio do robô, e não em pacotes: num buraco da gravação, uma
+    /// janela de 10 pacotes arrastava zeros de 600 ms antes e errava 0,21 m/s (medido em 2026-11-03, a 118 s do modo DJI).
+    pub janela_ms: u64,
+    /// Levantado: o controlador acusa mais velocidade que as rodas, por mais do que isto.
+    pub levantado_limiar_m_s: f64,
+    /// Por este tempo, seguido, para marcar levantado.
+    pub levantado_tempo_ms: u64,
+    /// Abaixo disto, por `soltar_tempo_ms`, deixa de marcar.
+    pub soltar_limiar_m_s: f64,
+    pub soltar_tempo_ms: u64,
+    /// Quieto, para conferir a gravidade: giro abaixo disto, em cada eixo.
+    pub quieto_giro_rad_s: f64,
+    /// Quieto: o módulo da aceleração a menos disto de 1 g.
+    pub quieto_aceleracao_g: f64,
+    /// Acima disto, entre a inclinação pela atitude do controlador e a pela aceleração, o aviso.
+    pub divergencia_grau: f64,
+    /// Entre dois pacotes, acima disto não se integra: o relógio do robô recomeçou, ou a gravação perdeu dados.
+    pub lacuna_ms: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct Dji {
@@ -180,6 +208,7 @@ impl Default for Corpo {
             baud: 921_600,
             endereco: "127.0.0.1:9100".to_owned(),
             gravar: None,
+            gravar_recebido: None,
             permissao: Permissao::Dji,
         }
     }
@@ -244,6 +273,31 @@ impl Default for Telemetria {
             idade_maxima_ms: 500,
             recomecar_parado_ms: 3000,
             recomecar_sem_resposta_ms: 10_000,
+        }
+    }
+}
+
+impl Default for Estimativa {
+    fn default() -> Self {
+        Self {
+            // As gravações de 2026-11-03 (`out/2026-11-03-firmware-controlador/`, no laboratório), reprocessadas com
+            // `rms1d-reprocessar`: os números abaixo são os que passam nelas, e o teste `estimativa_lab` os prova.
+            // 10 pacotes a 50 por segundo.
+            janela_ms: 200,
+            // O mecanismo e os números de partida são os do `s1d` (`s1d/src/tick.rs`, `LIFT_TRIP_M_S`), que os diz sem
+            // origem; conferidos nas gravações de 2026-11-03: disparam nos manuseios e não andando.
+            levantado_limiar_m_s: 0.4,
+            levantado_tempo_ms: 300,
+            soltar_limiar_m_s: 0.15,
+            soltar_tempo_ms: 500,
+            // Com estes limites e o bit de parado, 3831 e 6569 pacotes passam como quietos nas duas gravações de 2026-11-03
+            // (`rms1d-reprocessar`, linha "gravidade, quieto").
+            quieto_giro_rad_s: 0.1,
+            quieto_aceleracao_g: 0.03,
+            // Quietos, a atitude e a aceleração diferem até 3,0° nessas gravações; a atitude presa da imagem 60 diferia de 24°.
+            divergencia_grau: 10.0,
+            // O ritmo é de 20 ms (`gravacoes_lab.rs`, `o_relogio_anda_20_ms_por_pacote`): 1 s são 50 pacotes perdidos.
+            lacuna_ms: 1000,
         }
     }
 }
@@ -377,6 +431,48 @@ impl Params {
                 "telemetria: espera e tentativas maiores que zero, e janela de ao menos 1100 ms, para ver a mensagem de 1 Hz: {t:?}"
             ));
         }
+        if self.corpo.gravar_recebido.is_some() && self.corpo.gravar.is_none() {
+            return ruim(
+                "corpo.gravar_recebido precisa de corpo.gravar: as duas gravações andam juntas"
+                    .to_owned(),
+            );
+        }
+        let e = &self.estimativa;
+        if !(1..=5000).contains(&e.janela_ms) {
+            return ruim(format!(
+                "estimativa.janela_ms fora de 1 a 5000: {}",
+                e.janela_ms
+            ));
+        }
+        for (nome, v, max) in [
+            (
+                "estimativa.levantado_limiar_m_s",
+                e.levantado_limiar_m_s,
+                10.0,
+            ),
+            ("estimativa.soltar_limiar_m_s", e.soltar_limiar_m_s, 10.0),
+            ("estimativa.quieto_giro_rad_s", e.quieto_giro_rad_s, 10.0),
+            ("estimativa.quieto_aceleracao_g", e.quieto_aceleracao_g, 1.0),
+            ("estimativa.divergencia_grau", e.divergencia_grau, 90.0),
+        ] {
+            if !(v.is_finite() && v > 0.0 && v <= max) {
+                return ruim(format!("{nome} tem de estar entre 0 e {max}: {v}"));
+            }
+        }
+        if e.soltar_limiar_m_s > e.levantado_limiar_m_s {
+            return ruim(format!(
+                "estimativa.soltar_limiar_m_s ({}) acima de levantado_limiar_m_s ({}): marcaria e soltaria no mesmo valor",
+                e.soltar_limiar_m_s, e.levantado_limiar_m_s
+            ));
+        }
+        if e.levantado_tempo_ms == 0 || e.soltar_tempo_ms == 0 {
+            return ruim(
+                "estimativa: os tempos do levantado têm de ser maiores que zero".to_owned(),
+            );
+        }
+        if e.lacuna_ms == 0 {
+            return ruim("estimativa.lacuna_ms tem de ser maior que zero".to_owned());
+        }
         for (nome, v) in [
             ("geometria.raio_roda_m", self.geometria.raio_roda_m),
             ("geometria.meia_soma_m", self.geometria.meia_soma_m),
@@ -467,6 +563,56 @@ mod testes {
         ] {
             assert!(de(t).is_err(), "{t}");
         }
+    }
+
+    /// Cada limiar absurdo é recusado pelo nome dele.
+    #[test]
+    fn limiar_absurdo_da_estimativa_e_recusado_pelo_nome() {
+        for (t, nome) in [
+            ("[estimativa]\njanela_ms = 0\n", "janela_ms"),
+            ("[estimativa]\njanela_ms = 60000\n", "janela_ms"),
+            ("[estimativa]\njanela_pacotes = 10\n", "janela_pacotes"),
+            (
+                "[estimativa]\nlevantado_limiar_m_s = 0.0\n",
+                "levantado_limiar_m_s",
+            ),
+            (
+                "[estimativa]\nlevantado_limiar_m_s = -1.0\n",
+                "levantado_limiar_m_s",
+            ),
+            (
+                "[estimativa]\nsoltar_limiar_m_s = 0.9\n",
+                "soltar_limiar_m_s",
+            ),
+            (
+                "[estimativa]\nquieto_aceleracao_g = 2.0\n",
+                "quieto_aceleracao_g",
+            ),
+            (
+                "[estimativa]\ndivergencia_grau = 180.0\n",
+                "divergencia_grau",
+            ),
+            (
+                "[estimativa]\nquieto_giro_rad_s = nan\n",
+                "quieto_giro_rad_s",
+            ),
+            (
+                "[estimativa]\nlevantado_tempo_ms = 0\n",
+                "tempos do levantado",
+            ),
+            ("[estimativa]\nlacuna_ms = 0\n", "lacuna_ms"),
+            ("[estimativa]\nlimiar = 0.4\n", "limiar"),
+            ("[corpo]\ngravar_recebido = \"/tmp/r\"\n", "gravar_recebido"),
+        ] {
+            let e = de(t).unwrap_err().to_string();
+            assert!(e.contains(nome), "{t}: {e}");
+        }
+        let p = de("[estimativa]\njanela_ms = 100\n[corpo]\ngravar = \"/tmp/a\"\ngravar_recebido = \"/tmp/b\"\n").unwrap();
+        assert_eq!(p.estimativa.janela_ms, 100);
+        assert_eq!(
+            p.estimativa.levantado_limiar_m_s, 0.4,
+            "o resto segue o padrão"
+        );
     }
 
     /// O S1 é um só: número físico no arquivo é recusado pelo nome.
@@ -586,5 +732,9 @@ mod testes {
         let p = Params::carregar(Path::new(c), true).unwrap();
         assert_eq!(p.corpo.tipo, TipoCorpo::Serial);
         assert_eq!(p.corpo.porta, "/dev/ttyS3");
+        assert!(
+            p.corpo.gravar_recebido.is_some(),
+            "a prova em modo sombra grava o recebido"
+        );
     }
 }

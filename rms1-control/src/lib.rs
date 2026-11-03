@@ -10,6 +10,7 @@
 
 pub mod cinematica;
 pub mod corpo;
+pub mod estimativa;
 pub mod gravacao;
 pub mod intencoes;
 pub mod laco;

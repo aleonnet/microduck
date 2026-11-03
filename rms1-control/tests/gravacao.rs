@@ -99,6 +99,58 @@ fn a_telemetria_fica_fora_da_comparacao_e_os_comandos_nao() {
     assert_eq!(diferencas(&a, &c).unwrap().len(), 1);
 }
 
+/// Um corpo que devolve bytes em pedaços que cortam quadros ao meio, como a serial.
+struct CorpoQueDevolve {
+    pedacos: std::collections::VecDeque<Vec<u8>>,
+}
+
+impl Corpo for CorpoQueDevolve {
+    fn enviar(&mut self, _: &[u8]) -> std::io::Result<()> {
+        Ok(())
+    }
+    fn ler(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let Some(p) = self.pedacos.pop_front() else {
+            return Ok(0);
+        };
+        buf[..p.len()].copy_from_slice(&p);
+        Ok(p.len())
+    }
+}
+
+/// Critério 22: cada leitura do corpo é gravada, e a gravação dá os mesmos quadros que a leitura viu, inteiros.
+#[test]
+fn o_recebido_gravado_da_os_mesmos_quadros_que_a_leitura() {
+    use rms1_control::gravacao::ler_recebido;
+    use rms1_proto::Leitor;
+    use rms1_proto::barramento::Pedido;
+    let mut fluxo = Vec::new();
+    for seq in 0..40u16 {
+        fluxo.extend(Pedido::Responder { seq }.quadro(0).montar().unwrap());
+        fluxo.push(0x00); // um byte solto entre quadros, como na serial
+    }
+    let pedacos = fluxo.chunks(7).map(<[u8]>::to_vec).collect();
+    let d = tempfile_dir();
+    let (enviado, recebido) = (d.join("re-enviado"), d.join("re-recebido"));
+    let mut g = Gravando::new(CorpoQueDevolve { pedacos }, &enviado)
+        .unwrap()
+        .com_recebido(&recebido)
+        .unwrap();
+    let (mut leitor, mut vistos) = (Leitor::new(), Vec::new());
+    let mut buf = [0u8; 64];
+    loop {
+        let n = g.ler(&mut buf).unwrap();
+        if n == 0 {
+            break;
+        }
+        vistos.extend(leitor.empurrar(&buf[..n]));
+    }
+    drop(g);
+    assert_eq!(vistos.len(), 40);
+    let bytes = ler_recebido(&recebido).unwrap();
+    assert_eq!(bytes, fluxo, "os bytes, na ordem");
+    assert_eq!(Leitor::new().empurrar(&bytes), vistos);
+}
+
 /// Dois nadas iguais não provam nada.
 #[test]
 fn gravacao_vazia_nao_e_igual_a_nada() {

@@ -1,6 +1,6 @@
 # `rms1d`: o serviço do corpo do S1
 
-Status: em uso no simulador; prova no robô pendente. Data: 2026-11-02.
+Status: em uso no simulador; prova no robô pendente. Data: 2026-11-03.
 
 O que conta como pronto, pelo dono: atuar, ler e receber telemetria para controlar o S1 no mesmo nível do pato, com lista finita de pontos de controle. O teste só vale no caminho da entrega: controlar, interagir, treinar e colocar inteligência no S1.
 
@@ -84,6 +84,32 @@ observar 2,5 s ─► cancelar o que viu ─► registrar o nó 09 ─► assina
 - **Eixos:** o fio usa x à frente, y à direita e z para baixo; o contrato, y à esquerda e z para cima. A conversão é uma só, em `Medidas::de`.
 - **Parâmetros:** `[telemetria]` em `rms1d.toml`. O corpo falso não assina.
 - **Nunca sai `0x48/0x02`,** o reset de nó: um teste confere em todos os caminhos.
+
+## O que o controlador calcula e o que calculamos, em modo sombra
+
+Medido no robô em 2026-11-03, nos dois modos, gravando por fora o que o controlador manda (`out/2026-11-03-firmware-controlador/`, no laboratório):
+- **Acompanham o movimento real:** aceleração, giro, rotação das rodas e atitude. A atitude segue a gravidade, com até 3,0° de diferença parado.
+- **O controlador erra:** velocidade e posição, que ele integra da aceleração. Inclinado na mão, parado, chegou a 13,1 m/s, e antes de o robô andar a posição dele se afastou até 0,60 m no modo DJI e 0,62 m no nosso. O bit de levantado nunca acendeu: 0 em 12636 pacotes, com cinco manuseios.
+
+O pato faz o mesmo que este desenho: odometria e levantado próprios (`odometry/`, `duck-control/src/pickup.rs`), e a política não observa velocidade (`duck-control/src/obs.rs`).
+
+`rms1-control/src/estimativa.rs` calcula, por pacote e pelo relógio do pacote, ao lado do que o controlador manda:
+- **Velocidade:** das quatro rodas, pela inversa da cinemática (`twist_de_rpm`), na média de `janela_ms`. É zero quando o controlador marca parado, porque parado as rodas só dão ruído.
+- **Posição:** essa velocidade, girada pelo rumo do controlador e integrada. Acima de `lacuna_ms` entre dois pacotes, não integra.
+- **Levantado:** o controlador acusa mais velocidade do que as rodas, acima de `levantado_limiar_m_s`, por `levantado_tempo_ms`.
+- **Gravidade:** pela atitude do controlador, conferida contra a aceleração com o robô quieto. Quieto é parado pelo controlador, com o giro e a aceleração dentro dos limites. Acima de `divergencia_grau` há aviso: é o caso dos -24° presos de 2026-11-03.
+
+Tudo sai em `s1.state.estimate`, ao lado do `body`. **O `robot.state` não muda:** `picked_up`, `odom` e `gravity` seguem com o controlador até a prova no robô em modo sombra, e a troca é decisão do dono. Os limiares ficam em `[estimativa]`, no `rms1d.toml`, e não são números do robô.
+
+**Para validar sem o robô:** com `corpo.gravar_recebido`, o `rms1d` grava cada leitura do corpo. `rms1d-reprocessar <gravação>` reprocessa esse arquivo, ou o `strace` das leituras, e mostra, por pacote ou por segundo, o controlador ao lado do nosso cálculo. `scripts/test-rms1-telemetria.sh` confere o cálculo contra as duas gravações de 2026-11-03.
+
+Nas gravações de 2026-11-03:
+- **Na mão:** com o controlador acima de 2 m/s, a nossa velocidade fica em até 0,05 m/s.
+- **Andando:** a diferença para o controlador é de até 0,044 m/s por segundo.
+- **Levantado:** cada manuseio marca, e andando nenhum.
+- **Gravidade:** nenhum aviso; a divergência máxima é de 3,0° no modo DJI e 1,2° no nosso.
+
+**Sem prova:** o levantado com o robô carregado e as rodas girando, ou levantado devagar demais para o controlador acusar velocidade; o escorregamento real das rodas.
 
 ## Limitação conhecida
 
