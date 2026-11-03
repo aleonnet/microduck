@@ -16,7 +16,7 @@
 //! - **Levantado, as rodas param**, em qualquer modo, por `0x3f/0x20` a zero, e ficam paradas até desarmar. Nada mede o "voltou
 //!   ao chão": com as rodas paradas na mão, a velocidade do controlador cai e o cálculo solta (gravação de 2026-11-03, 214 s), e
 //!   telemetria parada não diz nada. O pato, sem um "no chão" confiante, também esperava alguém apertar Start
-//!   (`duck-control/src/pickup.rs`). Armar de novo começa limpo, e seguir a torre volta só com movimento pedido.
+//!   (`duck-control/src/pickup.rs`). Armar de novo começa limpo, como todo armar: seguindo a torre, sai um `0x3f/0x22` a zero.
 
 use std::time::{Duration, Instant};
 
