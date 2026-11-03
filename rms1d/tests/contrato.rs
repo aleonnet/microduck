@@ -195,7 +195,8 @@ fn o_calculo_proprio_sai_em_estimate_e_nao_muda_o_robot_state() {
     };
     let mut e = Estimativa::new(&p.estimativa, &p.geometria);
     let mut calc = e.passo(&m, 0);
-    for i in 1..30 {
+    // 3 s de pacotes, acima do tempo do levantado.
+    for i in 1..150 {
         calc = e.passo(
             &Medidas {
                 relogio_ms: 20 * i,
@@ -210,7 +211,7 @@ fn o_calculo_proprio_sai_em_estimate_e_nao_muda_o_robot_state() {
     );
     let amostra = rms1_control::Amostra {
         enlace: rms1_control::Enlace::Recebendo,
-        pacotes: 30,
+        pacotes: 150,
         ignorados: 0,
         medidas: Some(m),
         torre: None,

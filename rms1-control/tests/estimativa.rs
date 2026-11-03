@@ -63,7 +63,8 @@ fn inclinado_parado_a_velocidade_do_controlador_nao_entra_na_nossa() {
         aceleracao: [0.5, 0.0, 0.87],
         ..parado_em_pe()
     };
-    let c = pacotes(&mut e, &base, 50, 0, |_, _| {});
+    // 3 s: passa do tempo do levantado, que é 2 s.
+    let c = pacotes(&mut e, &base, 150, 0, |_, _| {});
     for x in &c {
         assert!(
             x.velocidade_corpo[0].hypot(x.velocidade_corpo[1]) < 0.1,
@@ -72,7 +73,7 @@ fn inclinado_parado_a_velocidade_do_controlador_nao_entra_na_nossa() {
     }
     assert!(
         c.last().unwrap().levantado,
-        "a discordância por 1 s marca levantado"
+        "a discordância por 3 s marca levantado"
     );
 }
 

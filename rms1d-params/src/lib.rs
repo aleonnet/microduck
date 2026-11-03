@@ -287,7 +287,10 @@ impl Default for Estimativa {
             // O mecanismo e os números de partida são os do `s1d` (`s1d/src/tick.rs`, `LIFT_TRIP_M_S`), que os diz sem
             // origem; conferidos nas gravações de 2026-11-03: disparam nos manuseios e não andando.
             levantado_limiar_m_s: 0.4,
-            levantado_tempo_ms: 300,
+            // Medido em 2026-11-03: freando e arrancando a até 2,9 m/s, a discordância passou de 0,4 m/s por 0,28 a 1,10 s
+            // (as rodas param antes do robô); nos manuseios, o primeiro trecho durou de 2,94 a 16,38 s. 300 ms, o do `s1d`,
+            // marcava levantado nas freadas (`out/2026-11-03-firmware-controlador/sombra/`, no laboratório).
+            levantado_tempo_ms: 2000,
             soltar_limiar_m_s: 0.15,
             soltar_tempo_ms: 500,
             // Com estes limites e o bit de parado, 3831 e 6569 pacotes passam como quietos nas duas gravações de 2026-11-03

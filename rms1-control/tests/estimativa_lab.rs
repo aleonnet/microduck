@@ -8,7 +8,8 @@
 
 use std::path::PathBuf;
 
-use rms1_control::estimativa::{Linha, de_strace};
+use rms1_control::estimativa::{Linha, de_recebido, de_strace};
+use rms1_control::gravacao::ler_recebido;
 use rms1_control::telemetria::{BIT_LEVANTADO, BIT_PARADO};
 use rms1d_params::Params;
 
@@ -26,6 +27,43 @@ fn modo_dji() -> Vec<Linha> {
 
 fn modo_nosso() -> Vec<Linha> {
     gravacao("rms1d_fora.strace")
+}
+
+/// O teste do dono no robô em modo sombra, 2026-11-03: manuseios de 145 a 186 s, e andando a até 2,9 m/s, com freadas fortes,
+/// de 330 a 470 s. É o caso que derrubou o levantado com 300 ms: as rodas param antes do robô.
+fn sombra() -> Vec<Linha> {
+    let lab =
+        PathBuf::from(std::env::var("S1_LAB").expect("S1_LAB tem de apontar para o laboratório"));
+    let c = lab.join("out/2026-11-03-firmware-controlador/sombra/recebido.txt");
+    de_recebido(
+        &ler_recebido(&c).unwrap_or_else(|e| panic!("{}: {e}", c.display())),
+        &Params::default(),
+    )
+    .linhas
+}
+
+/// No robô, em modo sombra: levantado nos manuseios, e nunca andando, nem freando forte.
+#[test]
+#[ignore = "precisa do laboratório; rode scripts/test-rms1-telemetria.sh"]
+fn no_robo_em_sombra_freada_nao_e_levantado() {
+    let l = sombra();
+    assert_eq!(l.len(), 25686, "os pacotes da gravação");
+    let marcado = |a: f64, b: f64| {
+        l.iter()
+            .filter(|x| x.t >= a && x.t <= b)
+            .any(|x| x.calculo.levantado)
+    };
+    assert!(marcado(145.0, 186.0), "manuseio sem levantado");
+    let andando: Vec<f64> = l
+        .iter()
+        .filter(|x| x.t >= 330.0 && x.t <= 470.0 && x.calculo.levantado)
+        .map(|x| x.t)
+        .collect();
+    assert!(
+        andando.is_empty(),
+        "levantado andando, freando: {:?}",
+        andando.first()
+    );
 }
 
 /// Os manuseios: (início, fim) em segundos.
