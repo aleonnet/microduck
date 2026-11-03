@@ -13,8 +13,10 @@
 //! - **Seguindo a torre, parar é um `0x3f/0x22` a zero, uma vez**, como a DJI (`_set_chassis_stop_depend_mode`, em
 //!   `rm_ctrl.py`). Repetido a cada ciclo, ele mantinha o controlador alinhando o chassi com a torre, e no ar o chassi nunca
 //!   alinha: as rodas foram a 850 rpm na mão do dono (2026-11-03, `out/2026-11-03-firmware-controlador/levantado/`, no laboratório).
-//! - **Levantado, as rodas param**, em qualquer modo, por `0x3f/0x20` a zero, e ficam paradas até o robô voltar ao chão e o
-//!   cliente parar de pedir movimento. Seguir a torre volta só com um pedido de movimento novo.
+//! - **Levantado, as rodas param**, em qualquer modo, por `0x3f/0x20` a zero, e ficam paradas até desarmar. Nada mede o "voltou
+//!   ao chão": com as rodas paradas na mão, a velocidade do controlador cai e o cálculo solta (gravação de 2026-11-03, 214 s), e
+//!   telemetria parada não diz nada. O pato, sem um "no chão" confiante, também esperava alguém apertar Start
+//!   (`duck-control/src/pickup.rs`). Armar de novo começa limpo, e seguir a torre volta só com movimento pedido.
 
 use std::time::{Duration, Instant};
 
@@ -88,7 +90,7 @@ pub struct Seguranca<C: Corpo> {
     tarefa: u8,
     /// O último `0x3f/0x22` enviado, no sinal da DJI; `None` obriga o próximo.
     ultimo_seguir: Option<[f32; 2]>,
-    /// O robô foi levantado, e as rodas seguem paradas até ele voltar ao chão e o cliente parar de pedir movimento.
+    /// O robô foi levantado: as rodas seguem paradas até desarmar.
     parado_por_levantar: bool,
     /// O nível da DJI, de 0 a 10, de `rms1d.toml`.
     sensibilidade: u8,
@@ -354,8 +356,6 @@ impl<C: Corpo> Seguranca<C> {
         let mut twist = self.limitar_twist(leitura, &mut limites);
         if levantado {
             self.parado_por_levantar = true;
-        } else if self.parado_por_levantar && twist == [0.0; 3] {
-            self.parado_por_levantar = false;
         }
         let mut giro_para_torre = 0.0;
         match self.modo {

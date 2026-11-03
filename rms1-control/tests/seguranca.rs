@@ -887,37 +887,33 @@ fn levantado_as_rodas_param_em_qualquer_modo() {
     }
 }
 
-/// De volta ao chão, as rodas seguem paradas enquanto o cliente pede movimento: só voltam depois de ele parar de pedir. Seguindo
-/// a torre, nem o seguir a zero volta sozinho: ele faria o chassi alinhar sem ninguém pedir.
+/// Levantado, as rodas seguem paradas mesmo de volta ao chão e com o cliente parado: nada mede o "voltou ao chão", e o robô quieto
+/// na mão também parece no chão. Só desarmar solta; armado de novo, seguir a torre volta só com movimento pedido.
 #[test]
-fn de_volta_ao_chao_so_anda_depois_de_o_cliente_parar_de_pedir() {
+fn levantado_so_solta_ao_desarmar() {
     let mut d = Direta::nova(Modo::ChassiSegueTorre);
     d.ciclo([0.0; 3], false);
     d.ciclo([0.5, 0.0, 0.0], true);
-    let (limites, q) = d.ciclo([0.5, 0.0, 0.0], false);
-    assert!(
-        rodas_zero(&q) && limites == vec!["picked_up"],
-        "ainda pedindo: segue parado"
-    );
-    let (limites, q) = d.ciclo([0.0; 3], false);
-    assert!(limites.is_empty());
-    assert!(
-        so(&q, id::SEGUIR).is_empty() && so(&q, id::RODAS).is_empty(),
-        "{q:?}"
-    );
-    for _ in 0..10 {
-        let (_, q) = d.ciclo([0.0; 3], false);
+    for twist in [[0.5, 0.0, 0.0], [0.0; 3], [0.0; 3], [0.3, 0.0, 0.0]] {
+        let (limites, q) = d.ciclo(twist, false);
         assert!(
-            so(&q, id::SEGUIR).is_empty(),
-            "parado no chão, sem seguir a zero"
+            rodas_zero(&q) && limites == vec!["picked_up"] && so(&q, id::SEGUIR).is_empty(),
+            "no chão, {twist:?}: segue parado até desarmar; {limites:?} {q:?}"
         );
     }
+    d.s.desarmar(&d.saude);
+    d.intencoes.pedir_armar(false);
+    d.intencoes.pedir_armar(true);
+    d.s.armar(&d.saude);
+    d.corpo.limpar();
+    let (limites, _) = d.ciclo([0.0; 3], false);
+    assert!(limites.is_empty(), "armado de novo, limpo: {limites:?}");
     let (limites, q) = d.ciclo([0.5, 0.0, 0.0], false);
     assert!(limites.is_empty());
     assert_eq!(
         so(&q, id::SEGUIR).len(),
         1,
-        "movimento pedido de novo: segue a torre"
+        "movimento pedido: segue a torre"
     );
 }
 

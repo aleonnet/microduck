@@ -119,6 +119,11 @@ if S1_TOML="$T/ruim.toml" scripts/s1/rms1d-bench.sh up > "$T/up.txt" 2>&1; then 
 grep -qF "recusado" "$T/up.txt" || { echo "NÃO DISSE RECUSADO:"; tail -5 "$T/up.txt"; falhou=1; }
 if [ -s "$ADB_LOG" ]; then echo "TOCOU O ROBÔ COM O ARQUIVO RECUSADO:"; cat "$ADB_LOG"; falhou=1; else echo "arquivo recusado: nada foi pedido ao robô"; fi
 
+: > "$ADB_LOG"
+if S1_BIN="$T/nao-existe" scripts/s1/rms1d-bench.sh up > "$T/up.txt" 2>&1; then echo "SUBIU SEM O BINÁRIO"; falhou=1; fi
+grep -qF "não achei $T/nao-existe" "$T/up.txt" || { echo "SEM O BINÁRIO, SEM DIZER:"; tail -3 "$T/up.txt"; falhou=1; }
+if [ -s "$ADB_LOG" ]; then echo "TOCOU O ROBÔ SEM O BINÁRIO:"; head -3 "$ADB_LOG"; falhou=1; else echo "sem o binário: nada foi pedido ao robô"; fi
+
 echo sem_chroot > "$DEFEITO"
 reprova "sem chroot" "sem chroot" "stop dji_hdvt_uav"
 echo rms1d_antigo > "$DEFEITO"

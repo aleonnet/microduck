@@ -30,7 +30,7 @@ TOML="${S1_TOML:-deploy/s1/rms1d.toml}"
 ROBOTCTL="${S1_ROBOTCTL:-target/debug/robotctl}"
 BB=/system/xbin/busybox
 ENTRA="$BB chroot $CHROOT /usr/bin/env PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-BIN=target/armv7-unknown-linux-gnueabihf/release/rms1d
+BIN="${S1_BIN:-target/armv7-unknown-linux-gnueabihf/release/rms1d}"
 A=(adb -s "$ALVO")
 # Prova do reinício: `/tmp` é tmpfs (`init.rc`, `mount tmpfs tmpfs /tmp`), e só reiniciar apaga a marca.
 MARCA=/tmp/rms1d_antes_do_reinicio
@@ -82,6 +82,8 @@ up() {
     # Antes de qualquer coisa no robô: o arquivo recusado, com dji_scratch por exemplo, não chega a parar nada.
     local parar
     parar="$(target/debug/rms1d --config "$TOML" --processos-a-parar)" || falha "$TOML recusado; nada foi tocado no robô"
+    # Sem o binário, a soma vazia daria "igual" à do robô sem binário, e a DJI seria parada antes da falha.
+    [ -s "$BIN" ] || falha "não achei $BIN; compile com cargo s1 -p rms1d. Nada foi tocado no robô"
     passo "abrindo o acesso ao robô em $IP"
     python3 -I "$ACESSO" abrir --host "$IP"
     confere chroot_ok "sem chroot em $CHROOT; rode scripts/s1/bench.sh exec uma vez" "test -d $CHROOT/bin && echo chroot_ok"
@@ -96,7 +98,7 @@ up() {
     # Android 4.4 termina a linha com `\r`.
     local no_robo
     no_robo="$("${A[@]}" shell "$BB sha256sum $CHROOT/opt/robot/bin/rms1d 2>/dev/null" | tr -d '\r' | cut -d' ' -f1 || true)"
-    if [ "$no_robo" = "$(shasum -a 256 "$BIN" | cut -d' ' -f1)" ]; then
+    if [ -n "$no_robo" ] && [ "$no_robo" = "$(shasum -a 256 "$BIN" | cut -d' ' -f1)" ]; then
         passo "o rms1d no robô já é este: nada a enviar"
     else
         passo "enviando o rms1d ao robô"

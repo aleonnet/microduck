@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use rms1_control::telemetria::{Enlace, Medidas, Passo};
+use rms1_control::telemetria::{BIT_LEVANTADO, Enlace, Medidas, Passo};
 use rms1_control::{CorpoFalso, Intencoes, Laco, Saude};
 use rms1_proto::barramento::{Layout, Pacote, id};
 use rms1_proto::{PedeAck, Quadro};
@@ -13,6 +13,7 @@ const PARADO: &[u8] = include_bytes!("../../s1-duml/tests/fixtures/dds_push_176_
 
 struct Banca {
     corpo: CorpoFalso,
+    intencoes: Arc<Intencoes>,
     saude: Arc<Saude>,
     laco: Laco<CorpoFalso>,
     agora: Instant,
@@ -27,14 +28,11 @@ fn banca() -> Banca {
 fn banca_com(p: &Params) -> Banca {
     let corpo = CorpoFalso::default();
     let saude = Arc::new(Saude::default());
-    let laco = Laco::new(
-        corpo.clone(),
-        p,
-        Arc::new(Intencoes::default()),
-        saude.clone(),
-    );
+    let intencoes = Arc::new(Intencoes::default());
+    let laco = Laco::new(corpo.clone(), p, intencoes.clone(), saude.clone());
     Banca {
         corpo,
+        intencoes,
         saude,
         laco,
         agora: Instant::now(),
@@ -510,4 +508,65 @@ fn a_conversao_inverte_o_que_tem_de_inverter() {
     let norma = w.iter().map(|v| v * v).sum::<f64>();
     assert!((norma - 1.0).abs() < 1e-9);
     assert!((w[3] - (-15f64).to_radians().sin()).abs() < 0.02, "{w:?}");
+}
+
+impl Banca {
+    /// Um ciclo com o estado, para ver o que a segurança aplicou.
+    fn ciclo_com_estado(&mut self, ms: u64) -> rms1_control::Estado {
+        self.agora += Duration::from_millis(ms);
+        self.laco.ciclo(self.agora, true).expect("estado pedido")
+    }
+}
+
+/// O bit de levantado do controlador, num pacote recente, para as rodas pelo laço inteiro, e elas seguem paradas com pacotes
+/// sem o bit, até desarmar. Nas gravações de 2026-11-03 o bit nunca acendeu: só este teste passa por ele.
+#[test]
+fn bit_de_levantado_do_controlador_para_as_rodas_ate_desarmar() {
+    let mut b = banca();
+    b.ate_receber();
+    b.intencoes.pedir_armar(true);
+    let e = b.ciclo_com_estado(10);
+    assert!(e.limitado_por.is_empty(), "{:?}", e.limitado_por);
+    b.corpo_manda(&pacote_nosso(1, 101, BIT_LEVANTADO));
+    // O laço aplica a segurança antes de ler o corpo: o pacote lido num ciclo vale no seguinte, 10 ms depois.
+    let e = b.ciclo_com_estado(10);
+    assert!(
+        e.limitado_por.is_empty(),
+        "ainda não lido: {:?}",
+        e.limitado_por
+    );
+    let e = b.ciclo_com_estado(10);
+    assert_eq!(e.limitado_por, vec!["picked_up"]);
+    for i in 0..20 {
+        b.corpo_manda(&pacote_nosso(1, 102 + i, 0));
+        let e = b.ciclo_com_estado(20);
+        assert_eq!(
+            e.limitado_por,
+            vec!["picked_up"],
+            "sem o bit, segue parado até desarmar"
+        );
+    }
+    b.intencoes.pedir_armar(false);
+    b.ciclo_com_estado(10);
+    b.intencoes.pedir_armar(true);
+    b.corpo_manda(&pacote_nosso(1, 130, 0));
+    let e = b.ciclo_com_estado(10);
+    assert!(
+        e.limitado_por.is_empty(),
+        "armado de novo, limpo: {:?}",
+        e.limitado_por
+    );
+}
+
+/// O último pacote dizia levantado, mas é velho: a telemetria parou. Dado velho não diz onde o robô está, e não para nada.
+#[test]
+fn bit_de_levantado_em_pacote_velho_nao_para() {
+    let mut b = banca();
+    b.ate_receber();
+    b.corpo_manda(&pacote_nosso(1, 101, BIT_LEVANTADO));
+    b.ciclo(10);
+    b.ciclo(600);
+    b.intencoes.pedir_armar(true);
+    let e = b.ciclo_com_estado(10);
+    assert!(e.limitado_por.is_empty(), "{:?}", e.limitado_por);
 }
