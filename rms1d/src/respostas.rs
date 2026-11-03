@@ -6,6 +6,7 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use duck_ipc_proto as proto;
+use rms1_control::telemetria::{Amostra, BIT_CAPOTOU, BIT_LEVANTADO, BITS_CHASSI, Enlace};
 use rms1_control::{Estado, Intencoes, Modo, Saude};
 use rms1d_params::{Params, TipoCorpo};
 
@@ -19,8 +20,6 @@ pub struct Contexto {
 /// O contrato modela o pato; este corpo responde `roller`, o que está sobre rodas, para `netpadd` usar
 /// os limites de rodas.
 const MODO_CONTRATO: &str = "roller";
-/// Quanto esperar antes de dizer que a serial está muda.
-const SERIAL_MUDA_S: f64 = 3.0;
 /// `robot.modelApi`: o contrato com o atualizador, igual ao do `s1d`.
 const MODEL_API: u32 = 2;
 
@@ -77,7 +76,10 @@ pub fn aplicar_intencao(i: &Intencoes, call: &proto::Call) -> bool {
 }
 
 /// `s1.gimbal`, `{"action": "speed", "yaw": graus/s, "pitch": graus/s}`, yaw à direita e pitch para cima, ou `{"action": "stop"}`.
-pub fn aplicar_taxa_da_torre(i: &Intencoes, params: Option<&serde_json::Value>) -> Result<(), String> {
+pub fn aplicar_taxa_da_torre(
+    i: &Intencoes,
+    params: Option<&serde_json::Value>,
+) -> Result<(), String> {
     let p = params.ok_or("faltam os parâmetros")?;
     match p["action"].as_str() {
         Some("stop") => i.pedir_taxa_torre(0.0, 0.0),
@@ -101,11 +103,13 @@ pub fn saude_do_contrato(c: &Contexto) -> proto::HealthResult {
         c.params.laco.hz_minimo,
         Duration::from_millis(c.params.laco.idade_maxima_ms),
     );
-    // O controlador empurra telemetria com a DJI parada (`scripts/s1/bench.sh`, medido em 2026-10-30). Desarmado nada é
-    // enviado, então sem isto uma serial morta passaria por saudável. O simulador não devolve nada, e fica de fora.
+    let agora = Instant::now();
+    let amostra = c.saude.amostra();
+    // O controlador empurra telemetria com a DJI parada (`scripts/s1/bench.sh`, medido em 2026-10-30). Sem isto uma serial
+    // morta passaria por saudável. O simulador sem página não devolve nada, e isso não é defeito.
     if v.saudavel
         && c.params.corpo.tipo == TipoCorpo::Serial
-        && c.saude.segundos() > SERIAL_MUDA_S
+        && c.saude.segundos() > c.params.laco.serial_muda_ms as f64 / 1000.0
         && c.saude.quadros_recebidos.load(Ordering::Relaxed) == 0
     {
         v.saudavel = false;
@@ -114,6 +118,14 @@ pub fn saude_do_contrato(c: &Contexto) -> proto::HealthResult {
             "o corpo está mudo: nenhum quadro recebido em {:.0} s",
             c.saude.segundos()
         ));
+    }
+    if v.saudavel
+        && c.params.corpo.tipo != TipoCorpo::Falso
+        && let Some(motivo) = problema_da_telemetria(c, amostra.as_deref(), agora)
+    {
+        v.saudavel = false;
+        v.degradado = true;
+        v.motivo = Some(motivo);
     }
     proto::HealthResult {
         healthy: v.saudavel,
@@ -130,13 +142,128 @@ pub fn saude_do_contrato(c: &Contexto) -> proto::HealthResult {
             consecutive_errors: v.erros_seguidos,
             ..proto::BusHealth::default()
         },
+        // Sem pacote recente, nada: bateria velha não é bateria.
+        battery: amostra
+            .as_deref()
+            .and_then(|a| a.medidas.as_ref())
+            .filter(|_| recente(c, agora))
+            .map(|m| proto::Battery {
+                volts: m.volts,
+                percent: m.percentual,
+            }),
         ..proto::HealthResult::default()
     }
 }
 
+fn recente(c: &Contexto, agora: Instant) -> bool {
+    c.saude
+        .idade_do_pacote(agora)
+        .is_some_and(|i| i < Duration::from_millis(c.params.telemetria.idade_maxima_ms))
+}
+
+/// O que dizer sobre a telemetria, se há o que dizer. A palavra "telemetria" é o que `scripts/s1/rms1d-bench.sh` procura: dá
+/// para pilotar sem ela, e a ativação avisa e segue.
+fn problema_da_telemetria(c: &Contexto, a: Option<&Amostra>, agora: Instant) -> Option<String> {
+    let a = a?;
+    if let Enlace::Recusado { passo, codigo } = a.enlace {
+        return Some(format!(
+            "o controlador recusou a telemetria ao {}: código 0x{codigo:02x}, {}",
+            passo.nome(),
+            rms1_control::telemetria::sentido(codigo)
+        ));
+    }
+    let idade = c.saude.idade_do_pacote(agora);
+    if let Some(i) = idade
+        && i >= Duration::from_millis(c.params.telemetria.idade_maxima_ms)
+    {
+        return Some(format!("telemetria parada há {} ms", i.as_millis()));
+    }
+    // No simulador sem página não há ninguém do outro lado, e isso é o estado normal.
+    if let Enlace::SemResposta { passo } = a.enlace
+        && c.params.corpo.tipo == TipoCorpo::Serial
+    {
+        return Some(format!(
+            "o controlador não respondeu à telemetria ao {}",
+            passo.nome()
+        ));
+    }
+    None
+}
+
+/// `s1.state`: tudo o que se sabe do corpo, nos eixos do contrato. O que nunca chegou é `null`, e não zero.
+pub fn estado_s1(a: Option<&Amostra>, idade_ms: Option<u64>, recente: bool) -> serde_json::Value {
+    use serde_json::json;
+    let Some(a) = a else {
+        return json!({"link": {"state": "off", "packets": 0, "ignored": 0, "age_ms": idade_ms, "fresh": false}});
+    };
+    let (codigo, passo) = match a.enlace {
+        Enlace::Recusado { passo, codigo } => (Some(codigo), Some(passo.nome())),
+        Enlace::SemResposta { passo } => (None, Some(passo.nome())),
+        _ => (None, None),
+    };
+    let chassi: serde_json::Map<String, serde_json::Value> = BITS_CHASSI
+        .iter()
+        .enumerate()
+        .map(|(i, n)| {
+            (
+                (*n).to_owned(),
+                json!({"on": a.estado_chassi & (1 << i) != 0, "count": a.contagem_chassi[i]}),
+            )
+        })
+        .collect();
+    let placas: Vec<serde_json::Value> = a
+        .placas
+        .iter()
+        .enumerate()
+        .map(|(i, p)| json!({"plate": i + 1, "hits": p.toques, "kind": p.tipo, "mic": p.microfone, "acc": p.aceleracao}))
+        .collect();
+    json!({
+        "link": {
+            "state": a.enlace.nome(),
+            "code": codigo,
+            "code_meaning": codigo.map(rms1_control::telemetria::sentido),
+            "step": passo,
+            "packets": a.pacotes,
+            "ignored": a.ignorados,
+            "age_ms": idade_ms,
+            "fresh": recente,
+        },
+        "body": a.medidas.map(|m| json!({
+            "velocity_ground": m.velocidade_solo,
+            "velocity_body": m.velocidade_corpo,
+            "wheels_rpm": m.rodas_rpm,
+            "wheels_angle_deg": m.rodas_angulo_grau,
+            "wheels_state": m.rodas_estado,
+            "position_m": m.posicao,
+            "acc_g": m.aceleracao,
+            "gyro_rad_s": m.giro,
+            "attitude_deg": {"yaw": m.rumo, "pitch": m.inclinacao, "roll": m.rolagem},
+            "battery": {"volts": m.volts, "percent": m.percentual, "current_a": m.corrente_a, "temperature_c": m.temperatura_c},
+            "robot_clock_ms": m.relogio_ms,
+        })),
+        "gimbal": a.torre.map(|t| json!({
+            "yaw_deg": t.rumo,
+            "pitch_deg": t.inclinacao,
+            "yaw_ground_deg": t.rumo_solo,
+            "pitch_ground_deg": t.inclinacao_solo,
+        })),
+        "chassis": chassi,
+        "plates": placas,
+        "ir": {"top_left": a.infravermelho[0], "top_right": a.infravermelho[1]},
+    })
+}
+
 /// O estado do laço no formato do contrato.
 pub fn estado_do_contrato(e: &Estado) -> proto::RobotState {
-    let [yaw, pitch] = e.torre.unwrap_or([0.0; 2]);
+    let [mut yaw, mut pitch] = e.torre.unwrap_or([0.0; 2]);
+    let corpo = e.corpo.as_deref().filter(|_| e.corpo_recente);
+    // Com pacote recente, `head` é onde a torre está; sem, é o último alvo, e nunca um dado velho.
+    if let Some(t) = corpo.and_then(|a| a.torre.as_ref()) {
+        yaw = t.rumo.to_radians();
+        pitch = -t.inclinacao.to_radians();
+    }
+    let medidas = corpo.and_then(|a| a.medidas.as_ref());
+    let chassi = corpo.map_or(0, |a| a.estado_chassi);
     proto::RobotState {
         t: e.t,
         movement: proto::MoveState {
@@ -147,11 +274,11 @@ pub fn estado_do_contrato(e: &Estado) -> proto::RobotState {
         head: [0.0, pitch, yaw, 0.0],
         policy: if e.armado { e.modo.nome() } else { "held" }.to_owned(),
         safety: proto::SafetyState {
-            fallen: false,
+            fallen: chassi & BIT_CAPOTOU != 0,
             limp: false,
-            gravity: [0.0, 0.0, -1.0],
+            gravity: medidas.map_or([0.0, 0.0, -1.0], |m| m.gravidade()),
             gain: None,
-            picked_up: false,
+            picked_up: chassi & BIT_LEVANTADO != 0,
         },
         control_loop: proto::LoopState {
             hz: e.hz,
@@ -161,11 +288,17 @@ pub fn estado_do_contrato(e: &Estado) -> proto::RobotState {
         targets: Vec::new(),
         velocities: Vec::new(),
         currents_ma: Vec::new(),
-        odom: proto::OdomState::default(),
+        odom: medidas.map_or_else(proto::OdomState::default, |m| proto::OdomState {
+            position: m.posicao,
+            yaw: m.rumo.to_radians(),
+        }),
         theremin: None,
         chorale: None,
         t_ns: proto::clock::monotonic_ns(),
-        imu: None,
+        imu: medidas.map(|m| proto::ImuState {
+            gyro: m.giro,
+            quat: m.quaternion(),
+        }),
         frames: None,
         skeleton: Vec::new(),
     }

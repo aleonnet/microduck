@@ -30,6 +30,7 @@ pub struct Params {
     #[serde(skip)]
     pub geometria: Geometria,
     pub torre: Torre,
+    pub telemetria: Telemetria,
     pub dji: Dji,
 }
 
@@ -89,6 +90,8 @@ pub struct Laco {
     pub hz_minimo: f64,
     /// Sem ciclo há este tempo, o laço travou.
     pub idade_maxima_ms: u64,
+    /// O controlador fala o tempo todo (medido em 2026-10-30): sem nenhum quadro por este tempo, a serial está muda.
+    pub serial_muda_ms: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
@@ -96,6 +99,10 @@ pub struct Laco {
 pub struct Seguranca {
     /// O mesmo do pato (`duck-control/src/safety.rs`): sem comando novo, as rodas zeram.
     pub prazo_ms: u64,
+    /// Quantas vezes o modo do chassi vai ao armar: a prova de 2026-10-29 enviou cinco.
+    pub vezes_modo_ao_armar: u32,
+    /// Comandos de parar ao desarmar, antes de cortar a permissão.
+    pub vezes_zero_ao_desarmar: u32,
     /// Daqui para baixo, da tabela física.
     #[serde(skip)]
     pub velocidade_max_m_s: f64,
@@ -131,6 +138,23 @@ pub struct Torre {
     pub velocidade: u16,
     /// Reenvio do alvo, em milissegundos, enquanto ele não muda.
     pub reenvio_ms: u64,
+}
+
+/// A assinatura da telemetria. O formato e o ritmo são os da DJI, e ficam em `rms1-proto`; aqui, só as esperas.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct Telemetria {
+    /// Quanto observar antes de cancelar: há mensagem de 1 Hz no ar (`s2.strace`), e ela tem de ser vista.
+    pub janela_ms: u64,
+    /// Quanto esperar por uma resposta do controlador. Só há 17 pares gravados, de 2 a 14 ms: isto é folga, e não medida.
+    pub espera_ms: u64,
+    pub tentativas: u32,
+    /// Sem pacote há este tempo, a saúde diz que a telemetria parou. O ritmo é de 20 ms.
+    pub idade_maxima_ms: u64,
+    /// Sem pacote há este tempo, recomeça a assinatura.
+    pub recomecar_parado_ms: u64,
+    /// Depois de desistir por falta de resposta, quanto esperar para tentar de novo, se houver quadros chegando.
+    pub recomecar_sem_resposta_ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -179,6 +203,7 @@ impl Default for Laco {
             hz: 100,
             hz_minimo: 80.0,
             idade_maxima_ms: 500,
+            serial_muda_ms: 3000,
         }
     }
 }
@@ -187,6 +212,8 @@ impl Default for Seguranca {
     fn default() -> Self {
         Self {
             prazo_ms: 500,
+            vezes_modo_ao_armar: 5,
+            vezes_zero_ao_desarmar: 10,
             ..Fisica::da_tabela().seguranca
         }
     }
@@ -204,6 +231,19 @@ impl Default for Torre {
             coordenada: 4,
             velocidade: Fisica::da_tabela().velocidade_torre,
             reenvio_ms: 100,
+        }
+    }
+}
+
+impl Default for Telemetria {
+    fn default() -> Self {
+        Self {
+            janela_ms: 2500,
+            espera_ms: 500,
+            tentativas: 3,
+            idade_maxima_ms: 500,
+            recomecar_parado_ms: 3000,
+            recomecar_sem_resposta_ms: 10_000,
         }
     }
 }
@@ -244,6 +284,8 @@ impl Fisica {
         Ok(Self {
             seguranca: Seguranca {
                 prazo_ms: 0,
+                vezes_modo_ao_armar: 0,
+                vezes_zero_ao_desarmar: 0,
                 velocidade_max_m_s: n("velocidades_chassi", Some("frente"))?,
                 giro_max_grau_s: n("giro_chassi", None)?,
                 rpm_max: n("rpm_roda", None)?,
@@ -267,6 +309,8 @@ impl Params {
         let f = Fisica::de_json(texto)?;
         self.seguranca = Seguranca {
             prazo_ms: self.seguranca.prazo_ms,
+            vezes_modo_ao_armar: self.seguranca.vezes_modo_ao_armar,
+            vezes_zero_ao_desarmar: self.seguranca.vezes_zero_ao_desarmar,
             ..f.seguranca
         };
         self.geometria = f.geometria;
@@ -321,6 +365,17 @@ impl Params {
         }
         if self.seguranca.prazo_ms == 0 {
             return ruim("seguranca.prazo_ms tem de ser maior que zero".to_owned());
+        }
+        if self.seguranca.vezes_modo_ao_armar == 0 || self.seguranca.vezes_zero_ao_desarmar == 0 {
+            return ruim(
+                "seguranca: as repetições ao armar e ao desarmar têm de ser ao menos 1".to_owned(),
+            );
+        }
+        let t = &self.telemetria;
+        if t.espera_ms == 0 || t.tentativas == 0 || t.janela_ms < 1100 {
+            return ruim(format!(
+                "telemetria: espera e tentativas maiores que zero, e janela de ao menos 1100 ms, para ver a mensagem de 1 Hz: {t:?}"
+            ));
         }
         for (nome, v) in [
             ("geometria.raio_roda_m", self.geometria.raio_roda_m),
@@ -406,6 +461,9 @@ mod testes {
             "[laco]\nhz = 0\n",
             "[seguranca]\nprazo_ms = 0\n",
             "[torre]\ncoordenada = 9\n",
+            "[seguranca]\nvezes_modo_ao_armar = 0\n",
+            "[telemetria]\njanela_ms = 500\n",
+            "[telemetria]\ntentativas = 0\n",
         ] {
             assert!(de(t).is_err(), "{t}");
         }

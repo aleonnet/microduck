@@ -6,12 +6,14 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use rms1_proto::Leitor;
+use rms1_proto::barramento::Pedido;
 use rms1d_params::Params;
 
 use crate::corpo::Corpo;
 use crate::intencoes::{Intencoes, Modo, PedidoEnergia};
 use crate::saude::Saude;
 use crate::seguranca::Seguranca;
+use crate::telemetria::{Amostra, Assinante};
 
 /// O estado de um ciclo. Montado só se alguém está assinando.
 #[derive(Debug, Clone, PartialEq)]
@@ -26,6 +28,12 @@ pub struct Estado {
     pub armado: bool,
     pub hz: f64,
     pub perdidos: u64,
+    /// O corpo, como chegou; `None` no corpo falso, ou antes de publicar.
+    pub corpo: Option<Arc<Amostra>>,
+    /// O último pacote é recente: sem isto, o que está em `corpo` é passado, e não pode parecer vivo.
+    pub corpo_recente: bool,
+    /// Há quantos milissegundos chegou o último pacote.
+    pub idade_pacote_ms: Option<u64>,
 }
 
 pub struct Laco<C: Corpo> {
@@ -33,6 +41,9 @@ pub struct Laco<C: Corpo> {
     intencoes: Arc<Intencoes>,
     saude: Arc<Saude>,
     leitor: Leitor,
+    assinante: Assinante,
+    pedidos: Vec<Pedido>,
+    idade_maxima_pacote: Duration,
     caixa: Vec<u8>,
     periodo: Duration,
     janela_inicio: Option<Instant>,
@@ -48,6 +59,9 @@ impl<C: Corpo> Laco<C> {
             intencoes,
             saude,
             leitor: Leitor::new(),
+            assinante: Assinante::new(p),
+            pedidos: Vec::new(),
+            idade_maxima_pacote: Duration::from_millis(p.telemetria.idade_maxima_ms),
             caixa: vec![0; 4096],
             periodo: Duration::from_secs_f64(1.0 / f64::from(p.laco.hz)),
             janela_inicio: None,
@@ -64,7 +78,13 @@ impl<C: Corpo> Laco<C> {
         }
         let leitura = self.intencoes.ler(agora);
         let aplicado = self.seguranca.aplicar(&leitura, agora, &self.saude);
-        self.ler_corpo();
+        self.ler_corpo(agora);
+        self.assinante.ciclo(agora, &mut self.pedidos);
+        self.enviar_pedidos();
+        if self.assinante.tomar_mudanca() {
+            self.saude
+                .publicar_amostra(Arc::new(self.assinante.amostra().clone()));
+        }
 
         self.saude
             .armado
@@ -82,6 +102,15 @@ impl<C: Corpo> Laco<C> {
             armado: self.seguranca.armado(),
             hz: self.saude.hz().unwrap_or(0.0),
             perdidos: self.saude.perdidos.load(Ordering::Relaxed),
+            corpo: self.saude.amostra(),
+            corpo_recente: self
+                .saude
+                .idade_do_pacote(agora)
+                .is_some_and(|i| i < self.idade_maxima_pacote),
+            idade_pacote_ms: self
+                .saude
+                .idade_do_pacote(agora)
+                .map(|i| i.as_millis() as u64),
         })
     }
 
@@ -98,7 +127,13 @@ impl<C: Corpo> Laco<C> {
         }
     }
 
-    fn ler_corpo(&mut self) {
+    fn enviar_pedidos(&mut self) {
+        for p in self.pedidos.drain(..) {
+            self.seguranca.enviar_barramento(p, &self.saude);
+        }
+    }
+
+    fn ler_corpo(&mut self, agora: Instant) {
         match self.seguranca.ler_corpo(&mut self.caixa) {
             Ok(0) => {}
             Ok(n) => {
@@ -109,6 +144,13 @@ impl<C: Corpo> Laco<C> {
                 self.saude
                     .bytes_descartados
                     .store(self.leitor.descartados(), Ordering::Relaxed);
+                let antes = self.assinante.amostra().pacotes;
+                for q in &quadros {
+                    self.assinante.receber(q, agora, &mut self.pedidos);
+                }
+                if self.assinante.amostra().pacotes != antes {
+                    self.saude.carimbar_pacote(agora);
+                }
             }
             Err(e) => tracing::debug!(erro = %e, "leitura do corpo falhou"),
         }

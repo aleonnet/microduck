@@ -5,12 +5,14 @@
 //!
 //! - **Valor não finito é recusado**, nunca limitado: limitar `NaN` daria um valor plausível na ponta.
 //! - **O resto é limitado à faixa, e reportado**, porque um cliente precisa saber por que o robô não obedeceu.
-//! - **Desarmada, não envia nada.** Ligar o processo não move o robô.
+//! - **Desarmada, não envia nada que mova.** Ligar o processo não move o robô. Só a telemetria sai desarmada: registrar,
+//!   cancelar, assinar e responder, e nada mais cabe em [`Pedido`].
 //! - **Sem comando dentro do prazo, as rodas zeram.** A torre fica: uma torre parada é inofensiva, e uma
 //!   velocidade velha leva o robô à parede.
 
 use std::time::{Duration, Instant};
 
+use rms1_proto::barramento::Pedido;
 use rms1_proto::comando::{
     EIXO_PITCH, EIXO_YAW, TAREFA_PRIMEIRA, TAREFA_ULTIMA, TAXA_MOVENDO, TAXA_PARADA, byte_do_no,
 };
@@ -30,10 +32,6 @@ pub const LIMITE_TORRE: &str = "gimbal_range";
 pub const LIMITE_NAO_FINITO: &str = "not_finite";
 pub const LIMITE_DESARMADO: &str = "disarmed";
 
-/// Quantas vezes o modo do chassi é enviado ao armar: a prova de 2026-10-29 enviou cinco.
-const VEZES_MODO_AO_ARMAR: usize = 5;
-/// Comandos de parar ao desarmar, antes de cortar a permissão.
-const VEZES_ZERO_AO_DESARMAR: usize = 10;
 /// `0x3f/0x19`, kit de programação: `rm_define.chassis_sdk_mode`.
 const MODO_CHASSI_PROGRAMA: u8 = 1;
 /// `_stop_rotate` da DJI (`rm_ctrl.py:1486`).
@@ -71,6 +69,9 @@ pub struct Seguranca<C: Corpo> {
     coordenada: u8,
     velocidade_torre: u16,
     reenvio: Duration,
+    vezes_modo_ao_armar: u32,
+    vezes_zero_ao_desarmar: u32,
+    seq_barramento: u16,
     armado: bool,
     modo: Modo,
     ultimo_alvo: Option<((i16, i16), Instant)>,
@@ -106,6 +107,9 @@ impl<C: Corpo> Seguranca<C> {
             coordenada: p.torre.coordenada,
             velocidade_torre: p.torre.velocidade,
             reenvio: Duration::from_millis(p.torre.reenvio_ms),
+            vezes_modo_ao_armar: p.seguranca.vezes_modo_ao_armar,
+            vezes_zero_ao_desarmar: p.seguranca.vezes_zero_ao_desarmar,
+            seq_barramento: 0,
             armado: false,
             modo: Modo::Livre,
             ultimo_alvo: None,
@@ -144,12 +148,35 @@ impl<C: Corpo> Seguranca<C> {
         }
     }
 
+    /// A telemetria: o único caminho desses quadros. Erro aqui tem contador próprio, porque o corpo simulado sem página não
+    /// recebe, e isso não é o corpo recusando comando.
+    pub fn enviar_barramento(&mut self, p: Pedido, saude: &Saude) {
+        let seq = self.seq_barramento;
+        self.seq_barramento = seq.wrapping_add(1);
+        let bytes = match p.quadro(seq).montar() {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::error!(erro = %e, "pedido não montado");
+                return;
+            }
+        };
+        if let Err(e) = self.corpo.enviar(&bytes) {
+            let n = saude
+                .erros_barramento
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                + 1;
+            if n == 1 || n.is_multiple_of(100) {
+                tracing::debug!(erro = %e, seguidos = n, "pedido de telemetria não chegou ao corpo");
+            }
+        }
+    }
+
     /// Ligar ao corpo: o modo do chassi, e o de quem segue quem. A permissão começa no próximo ciclo.
     pub fn armar(&mut self, saude: &Saude) {
         if self.armado {
             return;
         }
-        for _ in 0..VEZES_MODO_AO_ARMAR {
+        for _ in 0..self.vezes_modo_ao_armar {
             self.enviar(Comando::ModoChassi(MODO_CHASSI_PROGRAMA), saude);
         }
         self.armado = true;
@@ -171,7 +198,7 @@ impl<C: Corpo> Seguranca<C> {
             },
             Modo::Livre | Modo::TorreSegueChassi => Comando::Rodas([0; 4]),
         };
-        for _ in 0..VEZES_ZERO_AO_DESARMAR {
+        for _ in 0..self.vezes_zero_ao_desarmar {
             self.enviar(parar, saude);
         }
         if self.taxa_ligada {

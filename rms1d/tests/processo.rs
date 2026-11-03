@@ -403,6 +403,74 @@ fn processos_a_parar_sai_do_arquivo_validado() {
     assert!(s.stdout.is_empty());
 }
 
+/// `s1.state` chega a quem pede, no ritmo pedido, e o corpo falso diz que não há telemetria.
+#[test]
+fn s1_state_chega_a_quem_assina_e_robot_state_so_a_quem_pede() {
+    let d = pasta("s1st");
+    let p = subir(&d, FALSO);
+    let mut c = Cliente::novo(&p.socket);
+    let r = c.chamar("s1.subscribe", json!({"hz": 20}));
+    assert_eq!(r["result"]["accepted"], true, "{r}");
+    let inicio = Instant::now();
+    let mut n = 0;
+    let mut robot = 0;
+    while inicio.elapsed() < Duration::from_millis(1000) {
+        let mut l = String::new();
+        c.1.read_line(&mut l).unwrap();
+        let v: Value = serde_json::from_str(&l).unwrap();
+        if v["method"] == "s1.state" {
+            n += 1;
+            assert_eq!(v["params"]["link"]["state"], "off", "{v}");
+        }
+        if v["method"] == "robot.state" {
+            robot += 1;
+        }
+    }
+    assert!((12..=25).contains(&n), "{n} em 1 s pedindo 20 Hz");
+    assert_eq!(robot, 0, "não pediu robot.state");
+    let t = c.chamar("s1.telemetry", json!({}));
+    assert_eq!(t["result"]["link"]["state"], "off", "{t}");
+}
+
+/// A mesma conexão pode querer os dois.
+#[test]
+fn a_mesma_conexao_recebe_robot_state_e_s1_state() {
+    let d = pasta("dois");
+    let p = subir(&d, FALSO);
+    let mut c = Cliente::novo(&p.socket);
+    c.chamar("robot.subscribe", json!({"hz": 10}));
+    c.chamar("s1.subscribe", json!({"hz": 10}));
+    let (mut a, mut b) = (false, false);
+    let inicio = Instant::now();
+    while inicio.elapsed() < Duration::from_secs(2) && !(a && b) {
+        let mut l = String::new();
+        c.1.read_line(&mut l).unwrap();
+        let v: Value = serde_json::from_str(&l).unwrap();
+        a |= v["method"] == "robot.state";
+        b |= v["method"] == "s1.state";
+    }
+    assert!(a && b, "robot.state {a}, s1.state {b}");
+}
+
+/// Assinante de `s1.state` que nunca lê não atrasa o laço.
+#[test]
+fn cliente_de_s1_state_que_nao_le_nao_atrasa_o_laco() {
+    let d = pasta("s1tr");
+    let p = subir(&d, FALSO);
+    let mut parado = Cliente::novo(&p.socket);
+    parado.chamar("s1.subscribe", json!({"hz": 100}));
+    let mut c = Cliente::novo(&p.socket);
+    std::thread::sleep(Duration::from_secs(3));
+    let inicio = Instant::now();
+    let h = c.chamar("robot.health", json!({}));
+    assert!(
+        inicio.elapsed() < Duration::from_millis(200),
+        "{:?}",
+        inicio.elapsed()
+    );
+    assert_eq!(h["result"]["control_loop"]["missed"], 0, "{h}");
+}
+
 /// Um assinante que nunca lê enche o socket dele, e o laço nem percebe.
 #[test]
 fn cliente_que_nao_le_nao_atrasa_o_laco() {

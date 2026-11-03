@@ -118,6 +118,10 @@ async fn atender(
     let mut assinatura: Option<broadcast::Receiver<Arc<Estado>>> = None;
     let mut intervalo = Duration::ZERO;
     let mut ultimo: Option<Instant> = None;
+    let mut quer_robo = false;
+    // `s1.state`, na mesma assinatura: a mesma conexão pode querer os dois, cada um no seu ritmo.
+    let mut intervalo_s1: Option<Duration> = None;
+    let mut ultimo_s1: Option<Instant> = None;
 
     loop {
         let linha = match assinatura.as_mut() {
@@ -127,10 +131,18 @@ async fn atender(
                 r = rx.recv() => {
                     match r {
                         Ok(e) => {
-                            if ultimo.is_none_or(|u| u.elapsed() >= intervalo) {
+                            if quer_robo && ultimo.is_none_or(|u| u.elapsed() >= intervalo) {
                                 ultimo = Some(Instant::now());
                                 let estado = respostas::estado_do_contrato(&e);
                                 escrever(&mut saida, &proto::Request::notify_state(&estado)).await?;
+                            }
+                            if let Some(i) = intervalo_s1
+                                && ultimo_s1.is_none_or(|u| u.elapsed() >= i)
+                            {
+                                ultimo_s1 = Some(Instant::now());
+                                let params = respostas::estado_s1(e.corpo.as_deref(), e.idade_pacote_ms, e.corpo_recente);
+                                let n = serde_json::json!({"jsonrpc": "2.0", "method": "s1.state", "params": params});
+                                escrever(&mut saida, &n).await?;
                             }
                         }
                         Err(broadcast::error::RecvError::Lagged(n)) => {
@@ -180,6 +192,43 @@ async fn atender(
             }
             continue;
         }
+        // `s1.subscribe` e `s1.telemetry`: o que o S1 tem a mais, fora do contrato comum, sem esperar o laço.
+        if pedido.method == "s1.subscribe" || pedido.method == "s1.telemetry" {
+            let Some(id) = pedido.id.clone() else {
+                continue;
+            };
+            let resposta = if pedido.method == "s1.subscribe" {
+                let hz = pedido
+                    .params
+                    .as_ref()
+                    .and_then(|p| p["hz"].as_f64())
+                    .filter(|h| *h > 0.0);
+                intervalo_s1 =
+                    Some(hz.map_or(Duration::ZERO, |h| Duration::from_secs_f64(1.0 / h)));
+                ultimo_s1 = None;
+                if assinatura.is_none() {
+                    assinatura = Some(estados.subscribe());
+                }
+                proto::Response::ok(Some(id), &proto::IntentResult::accepted())
+            } else {
+                let agora = Instant::now();
+                let idade = c.saude.idade_do_pacote(agora);
+                let recente = idade.is_some_and(|i| {
+                    i < Duration::from_millis(c.params.telemetria.idade_maxima_ms)
+                });
+                let a = c.saude.amostra();
+                proto::Response::ok(
+                    Some(id),
+                    &respostas::estado_s1(
+                        a.as_deref(),
+                        idade.map(|i| i.as_millis() as u64),
+                        recente,
+                    ),
+                )
+            };
+            escrever(&mut saida, &resposta).await?;
+            continue;
+        }
         let call = pedido.as_call();
         // Notificação não tem resposta: é assim que os pedidos contínuos chegam.
         let Some(id) = pedido.id.clone() else {
@@ -192,7 +241,10 @@ async fn atender(
             intervalo = p.hz.filter(|h| *h > 0).map_or(Duration::ZERO, |h| {
                 Duration::from_secs_f64(1.0 / f64::from(h))
             });
-            assinatura = Some(estados.subscribe());
+            if assinatura.is_none() {
+                assinatura = Some(estados.subscribe());
+            }
+            quer_robo = true;
             ultimo = None;
         }
         let resposta = match call {

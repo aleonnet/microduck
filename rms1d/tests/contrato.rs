@@ -59,10 +59,11 @@ fn seguro_para_reiniciar_usa_o_prazo_do_arquivo() {
 fn serial_muda_nao_e_saudavel() {
     let mut c = contexto();
     c.params.corpo.tipo = rms1d_params::TipoCorpo::Serial;
+    c.params.laco.serial_muda_ms = 100;
     let agora = || std::time::Instant::now();
     c.saude.carimbar_ciclo(agora());
     assert!(saude_do_contrato(&c).healthy, "logo ao subir ainda é cedo");
-    std::thread::sleep(std::time::Duration::from_millis(3100));
+    std::thread::sleep(std::time::Duration::from_millis(150));
     c.saude.carimbar_ciclo(agora());
     let h = saude_do_contrato(&c);
     assert!(!h.healthy && h.degraded, "{h:?}");
@@ -72,12 +73,99 @@ fn serial_muda_nao_e_saudavel() {
         .quadros_recebidos
         .store(1, std::sync::atomic::Ordering::Relaxed);
     assert!(saude_do_contrato(&c).healthy);
-    // No simulador nada volta, e isso não é defeito.
+    // No simulador sem página nada volta, e isso não é defeito.
     c.params.corpo.tipo = rms1d_params::TipoCorpo::Rede;
     c.saude
         .quadros_recebidos
         .store(0, std::sync::atomic::Ordering::Relaxed);
     assert!(saude_do_contrato(&c).healthy);
+}
+
+fn com_amostra(c: &Contexto, enlace: rms1_control::Enlace) {
+    use rms1_control::telemetria::{BITS_CHASSI, PLACAS, Placa};
+    c.saude
+        .publicar_amostra(std::sync::Arc::new(rms1_control::Amostra {
+            enlace,
+            pacotes: 1,
+            ignorados: 0,
+            medidas: None,
+            torre: None,
+            estado_chassi: 0,
+            contagem_chassi: [0; BITS_CHASSI.len()],
+            placas: [Placa::default(); PLACAS],
+            infravermelho: [0; 2],
+        }));
+}
+
+/// Pacote velho não pode parecer vivo: a saúde diz, com a palavra que a bancada procura.
+#[test]
+fn telemetria_parada_nao_e_saudavel() {
+    let mut c = contexto();
+    c.params.corpo.tipo = rms1d_params::TipoCorpo::Rede;
+    c.params.telemetria.idade_maxima_ms = 50;
+    c.saude.carimbar_ciclo(std::time::Instant::now());
+    com_amostra(&c, rms1_control::Enlace::Recebendo);
+    c.saude.carimbar_pacote(std::time::Instant::now());
+    assert!(saude_do_contrato(&c).healthy, "pacote recente");
+    std::thread::sleep(std::time::Duration::from_millis(80));
+    c.saude.carimbar_ciclo(std::time::Instant::now());
+    let h = saude_do_contrato(&c);
+    assert!(!h.healthy && h.degraded, "{h:?}");
+    assert!(h.reason.unwrap().contains("telemetria parada"));
+}
+
+#[test]
+fn recusa_diz_o_codigo_e_o_sentido() {
+    let mut c = contexto();
+    c.params.corpo.tipo = rms1d_params::TipoCorpo::Serial;
+    c.saude
+        .quadros_recebidos
+        .store(1, std::sync::atomic::Ordering::Relaxed);
+    c.saude.carimbar_ciclo(std::time::Instant::now());
+    com_amostra(
+        &c,
+        rms1_control::Enlace::Recusado {
+            passo: rms1_control::telemetria::Passo::Assinar,
+            codigo: 0x23,
+        },
+    );
+    let h = saude_do_contrato(&c);
+    assert!(!h.healthy && h.degraded, "{h:?}");
+    let m = h.reason.unwrap();
+    assert!(
+        m.contains("telemetria") && m.contains("0x23") && m.contains("já está assinado"),
+        "{m}"
+    );
+}
+
+/// O simulador sem página, com o envio falhando: nem doente, nem corpo que não recebe.
+#[test]
+fn simulador_sem_pagina_segue_saudavel() {
+    let mut c = contexto();
+    c.params.corpo.tipo = rms1d_params::TipoCorpo::Rede;
+    c.saude.carimbar_ciclo(std::time::Instant::now());
+    com_amostra(
+        &c,
+        rms1_control::Enlace::SemResposta {
+            passo: rms1_control::telemetria::Passo::Registrar,
+        },
+    );
+    c.saude
+        .erros_barramento
+        .store(50, std::sync::atomic::Ordering::Relaxed);
+    let h = saude_do_contrato(&c);
+    assert!(h.healthy, "{h:?}");
+    assert_eq!(h.bus.consecutive_errors, 0);
+}
+
+/// O que nunca chegou é ausente, e não zero: bateria zero é outra coisa.
+#[test]
+fn sem_pacote_nao_ha_bateria_nem_corpo() {
+    let c = contexto();
+    assert!(saude_do_contrato(&c).battery.is_none());
+    let v = rms1d::respostas::estado_s1(None, None, false);
+    assert_eq!(v["link"]["state"], "off");
+    assert!(v["body"].is_null());
 }
 
 /// Os modos passam por `robot.do`, porque o console recusa `s1.*` (`mediad/src/session.rs`).

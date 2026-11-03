@@ -102,9 +102,10 @@ up() {
     "$ROBOTCTL" --robot-socket "$SOCKET" --config-socket "$SOCKET" --socket "$SOCKET" health > "$OUT/saude.txt" 2>&1 || rc=$?
     cat "$OUT/saude.txt"
     if [ "$rc" != 0 ]; then
-        # Serial muda é o que esta prova quer saber, e o resto dela diz o que é: avisa e segue. Qualquer outra coisa para.
-        grep -q "mudo" "$OUT/saude.txt" || falha "o rms1d está doente"
-        diz "AVISO: nada chegou do corpo pela serial. Se as rodas também não obedecerem, comece por aqui."
+        # Serial muda e telemetria recusada são o que esta prova quer saber, e dá para pilotar sem elas: avisa e segue. Qualquer
+        # outra coisa para.
+        grep -q "mudo\|telemetria" "$OUT/saude.txt" || falha "o rms1d está doente"
+        diz "AVISO: $(grep "robot " "$OUT/saude.txt" | head -1). Se as rodas também não obedecerem, comece por aqui."
     fi
     diz "no ar, desarmado. Nada se moveu."
 }

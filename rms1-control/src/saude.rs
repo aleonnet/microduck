@@ -1,8 +1,13 @@
 //! O que o laço publica a cada ciclo. O socket calcula a saúde daqui, sem perguntar nada ao laço: é isso
 //! que deixa um laço travado se denunciar em vez de pendurar quem pergunta.
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
+
+use arc_swap::ArcSwapOption;
+
+use crate::telemetria::Amostra;
 
 pub struct Saude {
     inicio: Instant,
@@ -15,6 +20,11 @@ pub struct Saude {
     pub armado: AtomicBool,
     pub bytes_descartados: AtomicU64,
     pub quadros_recebidos: AtomicU64,
+    pub erros_barramento: AtomicU64,
+    /// O retrato do corpo, publicado pelo laço. Quem pergunta nunca espera por ele.
+    amostra: ArcSwapOption<Amostra>,
+    /// Microssegundos desde `inicio`, mais um; zero é nunca.
+    ultimo_pacote_us: AtomicU64,
 }
 
 impl Default for Saude {
@@ -29,6 +39,9 @@ impl Default for Saude {
             armado: AtomicBool::new(false),
             bytes_descartados: AtomicU64::new(0),
             quadros_recebidos: AtomicU64::new(0),
+            erros_barramento: AtomicU64::new(0),
+            amostra: ArcSwapOption::empty(),
+            ultimo_pacote_us: AtomicU64::new(0),
         }
     }
 }
@@ -58,6 +71,31 @@ impl Saude {
             Ordering::Relaxed,
         );
         self.ciclos.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn publicar_amostra(&self, a: Arc<Amostra>) {
+        self.amostra.store(Some(a));
+    }
+
+    pub fn amostra(&self) -> Option<Arc<Amostra>> {
+        self.amostra.load_full()
+    }
+
+    pub fn carimbar_pacote(&self, agora: Instant) {
+        let us = agora.saturating_duration_since(self.inicio).as_micros() as u64;
+        self.ultimo_pacote_us.store(us + 1, Ordering::Relaxed);
+    }
+
+    /// `None` se nenhum pacote chegou.
+    pub fn idade_do_pacote(&self, agora: Instant) -> Option<Duration> {
+        match self.ultimo_pacote_us.load(Ordering::Relaxed) {
+            0 => None,
+            us => Some(
+                agora
+                    .saturating_duration_since(self.inicio)
+                    .saturating_sub(Duration::from_micros(us - 1)),
+            ),
+        }
     }
 
     pub fn publicar_hz(&self, hz: f64) {

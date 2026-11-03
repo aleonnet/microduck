@@ -185,7 +185,7 @@ fn varrer(caminho: &std::path::Path, arquivos: &mut Vec<std::path::PathBuf>) {
     }
 }
 
-/// Por texto, de leve: o reset de nó deixou o barramento morto até desligar, e parar `dji_scratch` derrubou
+/// Por texto, de leve: o reset de nó, do conjunto da telemetria, deixou o barramento morto até desligar, e parar `dji_scratch` derrubou
 /// `dji_sys`. Pega quem escreve o código do reset ou manda parar `dji_scratch`, em qualquer pasta do serviço
 /// e nos scripts dele. A garantia de verdade é o teste acima, mais `Seguranca` ser a única dona do corpo.
 #[test]
@@ -213,8 +213,20 @@ fn o_codigo_novo_nao_cita_reset_de_no_nem_para_dji_scratch() {
     for a in arquivos {
         let texto = std::fs::read_to_string(&a).unwrap();
         let junto = texto.replace(' ', "").to_lowercase();
-        // Só código: o reset em decimal é 72, e 0x48 pode vir de qualquer jeito.
-        if junto.contains("0x48") || junto.contains("(72,2)") || junto.contains("72/2") {
+        // O conjunto em si passou a existir, com a telemetria: o proibido é o comando 2 dele, escrito de qualquer jeito.
+        if [
+            "0x48,0x02",
+            "0x48,2",
+            "0x48/0x02",
+            "0x48/2",
+            "72,2",
+            "72/2",
+            "72,0x02",
+            "0x4802",
+        ]
+        .iter()
+        .any(|f| junto.contains(f))
+        {
             achados.push(format!("{}: reset de nó", a.display()));
         }
         if texto.contains("stop dji_scratch") || texto.contains("ctl.stop dji_scratch") {

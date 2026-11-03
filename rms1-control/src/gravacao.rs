@@ -8,6 +8,7 @@ use std::path::Path;
 use std::time::Instant;
 
 use rms1_proto::Quadro;
+use rms1_proto::barramento;
 use rms1_proto::comando::id;
 
 use crate::corpo::Corpo;
@@ -84,6 +85,10 @@ pub fn resumo(caminho: &Path) -> io::Result<Resumo> {
             .collect::<Result<_, _>>()
             .map_err(io::Error::other)?;
         let q = Quadro::ler(&bytes).map_err(io::Error::other)?;
+        // A telemetria depende do que o corpo devolve, e o corpo falso não devolve nada: a comparação é dos comandos.
+        if q.cmd_set == barramento::id::PACOTE.0 {
+            continue;
+        }
         let lista = saida.entry((q.cmd_set, q.cmd_id)).or_default();
         let mut dados = q.dados;
         // O identificador de tarefa muda a cada envio, como na DJI: conta quantos envios, e não o que foi pedido.

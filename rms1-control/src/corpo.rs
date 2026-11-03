@@ -119,6 +119,10 @@ impl Corpo for CorpoRede {
     }
 
     fn ler(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        // Desarmado, só a leitura mantém a conexão: é o corpo simulado que começa a telemetria, como o robô.
+        if self.conexao.is_none() && self.conectar().is_err() {
+            return Ok(0);
+        }
         let Some(s) = self.conexao.as_mut() else {
             return Ok(0);
         };

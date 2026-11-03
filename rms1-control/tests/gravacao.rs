@@ -78,6 +78,27 @@ fn o_identificador_de_tarefa_nao_conta_como_diferenca() {
     assert_eq!(diferencas(&a, &b).unwrap(), Vec::<String>::new());
 }
 
+/// A telemetria depende do que o corpo devolve: simulador e corpo falso não têm de mandar os mesmos pedidos. Os comandos, sim.
+#[test]
+fn a_telemetria_fica_fora_da_comparacao_e_os_comandos_nao() {
+    use rms1_proto::barramento::Pedido;
+    let d = tempfile_dir();
+    let (a, b, c) = (d.join("za"), d.join("zb"), d.join("zc"));
+    gravar(&a, 3, 1.0);
+    gravar(&b, 3, 1.0);
+    gravar(&c, 3, 0.5);
+    let extra = Pedido::RegistrarNo.quadro(0).montar().unwrap();
+    let linha = format!(
+        "1 {}\n",
+        extra.iter().map(|x| format!("{x:02x}")).collect::<String>()
+    );
+    let mut t = std::fs::read_to_string(&b).unwrap();
+    t.push_str(&linha);
+    std::fs::write(&b, t).unwrap();
+    assert_eq!(diferencas(&a, &b).unwrap(), Vec::<String>::new());
+    assert_eq!(diferencas(&a, &c).unwrap().len(), 1);
+}
+
 /// Dois nadas iguais não provam nada.
 #[test]
 fn gravacao_vazia_nao_e_igual_a_nada() {

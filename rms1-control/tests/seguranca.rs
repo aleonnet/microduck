@@ -9,7 +9,7 @@ use rms1_control::intencoes::Modo;
 use rms1_control::{CorpoFalso, Intencoes, Laco, Saude};
 use rms1_proto::Quadro;
 use rms1_proto::comando::id;
-use rms1d_params::Params;
+use rms1d_params::{Params, TipoCorpo};
 
 struct Banca {
     corpo: CorpoFalso,
@@ -571,23 +571,57 @@ fn o_ultimo_pedido_de_energia_vence() {
     assert!(!b.saude.armado.load(Ordering::Relaxed));
 }
 
-/// Nenhum caminho envia o reset de nó de telemetria, que deixou o barramento morto até desligar.
+/// Nenhum caminho envia o reset de nó de telemetria, que deixou o barramento morto até desligar, nem com a telemetria ligada.
 #[test]
 fn nenhum_caminho_envia_reset_de_no() {
-    let mut b = banca();
+    let mut p = Params::default();
+    p.corpo.tipo = TipoCorpo::Serial;
+    let mut b = banca_com(&p);
     b.armar();
     for m in Modo::TODOS {
         b.intencoes.pedir_modo(m);
         b.intencoes.pedir_torre(0.2, 0.1);
         b.pedir_e_ciclar([0.5, 0.1, 0.5]);
     }
+    for _ in 0..400 {
+        b.ciclo();
+    }
     b.intencoes.pedir_armar(false);
     b.ciclo();
     assert!(
-        b.corpo.quadros().iter().all(|q| q.cmd_set != 0x48),
+        b.de((0x48, 0x03)).len() + b.de((0x48, 0x01)).len() > 0,
+        "a telemetria tentou assinar"
+    );
+    assert!(
+        b.corpo
+            .quadros()
+            .iter()
+            .all(|q| (q.cmd_set, q.cmd_id) != (0x48, 0x02)),
         "{:?}",
         b.corpo.quadros()
     );
+}
+
+/// Desarmado, com a telemetria ligada, só saem os pedidos dela: nada que mova.
+#[test]
+fn desarmado_so_sai_a_telemetria() {
+    let mut p = Params::default();
+    p.corpo.tipo = TipoCorpo::Serial;
+    let mut b = banca_com(&p);
+    for _ in 0..600 {
+        b.intencoes.pedir_twist([1.0, 0.0, 0.0]);
+        b.intencoes.pedir_torre(0.5, 0.1);
+        b.ciclo();
+    }
+    let q = b.corpo.quadros();
+    assert!(!q.is_empty(), "a telemetria não tentou assinar");
+    for x in &q {
+        assert!(
+            [(0x48, 0x01), (0x48, 0x03), (0x48, 0x04), (0x48, 0x08)]
+                .contains(&(x.cmd_set, x.cmd_id)),
+            "saiu desarmado: {x:?}"
+        );
+    }
 }
 
 /// Corpo que falha não derruba o ciclo, e aparece na saúde como problema do corpo.
@@ -669,9 +703,20 @@ fn velocidade_da_torre_vai_a_cada_ciclo_sem_tarefa_de_angulo() {
     let t = b.de(id::TORRE_TAXA);
     assert_eq!(t.len(), 10, "um por ciclo");
     let i = |q: &Quadro, p: usize| i16::from_le_bytes([q.dados[p], q.dados[p + 1]]);
-    assert_eq!(i(&t[0], 0), 1200, "yaw em décimos de grau por segundo, à direita");
-    assert_eq!(i(&t[0], 4), -300, "pitch em décimos de grau por segundo, para cima");
-    assert!(b.de(id::TORRE_ANGULOS).is_empty(), "nenhuma tarefa de ângulo");
+    assert_eq!(
+        i(&t[0], 0),
+        1200,
+        "yaw em décimos de grau por segundo, à direita"
+    );
+    assert_eq!(
+        i(&t[0], 4),
+        -300,
+        "pitch em décimos de grau por segundo, para cima"
+    );
+    assert!(
+        b.de(id::TORRE_ANGULOS).is_empty(),
+        "nenhuma tarefa de ângulo"
+    );
 }
 
 /// Sem pedido novo dentro do prazo, a torre para, com uma taxa zero e uma vez só.
@@ -743,5 +788,8 @@ fn velocidade_da_torre_esquece_o_alvo_de_angulo() {
     b.laco.ciclo(b.agora, false);
     b.agora += Duration::from_millis(200);
     b.laco.ciclo(b.agora, false);
-    assert!(b.de(id::TORRE_ANGULOS).is_empty(), "sem reenviar o alvo velho");
+    assert!(
+        b.de(id::TORRE_ANGULOS).is_empty(),
+        "sem reenviar o alvo velho"
+    );
 }
