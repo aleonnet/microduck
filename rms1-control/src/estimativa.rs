@@ -22,12 +22,14 @@
 
 use std::collections::VecDeque;
 
-use rms1_proto::Quadro;
-use rms1_proto::barramento::{Layout, Pacote, id};
-use rms1d_params::{Estimativa as Limiares, Geometria, Params};
+use std::time::{Duration, Instant};
+
+use rms1_proto::barramento::{self, Layout, MENSAGEM, NO_ASSINANTE, Pacote, id};
+use rms1_proto::{Leitor, Quadro};
+use rms1d_params::{Estimativa as Limiares, Geometria, Params, TipoCorpo};
 
 use crate::cinematica::twist_de_rpm;
-use crate::telemetria::{BIT_PARADO, Medidas};
+use crate::telemetria::{Assinante, BIT_PARADO, Medidas};
 
 /// Um passo do cálculo, nos eixos do contrato: x à frente, y à esquerda, z para cima.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -67,6 +69,8 @@ pub struct Estimativa {
     acima_desde: Option<u64>,
     abaixo_desde: Option<u64>,
     levantado: bool,
+    /// O último passo: um pacote com o mesmo relógio é repetido, e devolve o mesmo, sem crescer a janela.
+    ultimo: Option<Calculo>,
 }
 
 /// A inclinação, em graus, de um vetor que aponta para cima no tronco quando o robô está em pé.
@@ -98,6 +102,7 @@ impl Estimativa {
             acima_desde: None,
             abaixo_desde: None,
             levantado: false,
+            ultimo: None,
         }
     }
 
@@ -111,6 +116,12 @@ impl Estimativa {
             }
             Some(u) => {
                 let d = u64::from(m.relogio_ms.wrapping_sub(u));
+                if d == 0
+                    && let Some(c) = self.ultimo
+                {
+                    // O mesmo relógio é o mesmo pacote: sem isto, um relógio parado faria a janela crescer sem limite.
+                    return c;
+                }
                 if d > self.l.lacuna_ms {
                     // Depois da lacuna, nada do que veio antes vale para a média.
                     self.janela.clear();
@@ -169,7 +180,7 @@ impl Estimativa {
             None
         };
 
-        Calculo {
+        let c = Calculo {
             velocidade_corpo: v,
             giro_rodas,
             posicao: self.posicao,
@@ -180,7 +191,9 @@ impl Estimativa {
             gravidade,
             divergencia,
             divergente: divergencia.is_some_and(|d| d > self.l.divergencia_grau),
-        }
+        };
+        self.ultimo = Some(c);
+        c
     }
 
     /// Acima do limiar por `levantado_tempo_ms` marca; abaixo do de soltar por `soltar_tempo_ms` solta; entre os dois,
@@ -210,20 +223,42 @@ impl Estimativa {
 /// Um pacote reprocessado: o que o controlador mandou e o que nós calculamos com ele.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Linha {
-    /// Segundos desde o primeiro pacote, pelo relógio do robô.
+    /// Segundos desde o primeiro pacote, pelo relógio do robô, sem os saltos acima de `lacuna_ms`.
     pub t: f64,
     pub medidas: Medidas,
     pub estado: u32,
     pub calculo: Calculo,
 }
 
-/// Uma gravação: quantos quadros ela tem, e os pacotes da nossa assinatura, reprocessados.
+/// Uma gravação: quantos quadros ela tem, e os pacotes reprocessados.
 pub struct Reprocessada {
     pub quadros: usize,
     pub linhas: Vec<Linha>,
 }
 
-/// O `strace` das leituras de um processo (`rms1_proto::strace`), na ordem da nossa assinatura.
+/// O tempo de cada linha pelo relógio do robô, com a mesma regra da lacuna do cálculo: um relógio que recomeça não salta 49
+/// dias.
+struct Tempo {
+    lacuna_ms: u64,
+    ultimo: Option<u32>,
+    ms: u64,
+}
+
+impl Tempo {
+    fn de(&mut self, relogio_ms: u32) -> f64 {
+        if let Some(u) = self.ultimo {
+            let d = u64::from(relogio_ms.wrapping_sub(u));
+            if d <= self.lacuna_ms {
+                self.ms += d;
+            }
+        }
+        self.ultimo = Some(relogio_ms);
+        self.ms as f64 / 1000.0
+    }
+}
+
+/// O `strace` das leituras de um processo (`rms1_proto::strace`). A assinatura foi feita antes da gravação começar, e por isso
+/// não se reproduz: valem os pacotes da nossa mensagem para o nosso nó, no tamanho da nossa assinatura.
 pub fn de_strace(texto: &[u8], p: &Params) -> Reprocessada {
     let qs: Vec<Quadro> = rms1_proto::strace::quadros(texto)
         .into_iter()
@@ -235,39 +270,78 @@ pub fn de_strace(texto: &[u8], p: &Params) -> Reprocessada {
     }
 }
 
-/// Os bytes de `corpo.gravar_recebido` ([`crate::gravacao::ler_recebido`]), na ordem da nossa assinatura.
-pub fn de_recebido(bytes: &[u8], p: &Params) -> Reprocessada {
-    let qs = rms1_proto::Leitor::new().empurrar(bytes);
-    Reprocessada {
-        quadros: qs.len(),
-        linhas: reprocessar(&qs, &Layout::da_assinatura(), p),
+/// As leituras de `corpo.gravar_recebido` ([`crate::gravacao::ler_recebido`]), pelo mesmo [`Assinante`] do laço, na hora de
+/// cada leitura: os pacotes que contam são, por construção, os que o laço contou (o nosso nó, a nossa mensagem, e só depois de
+/// a assinatura valer), com o mesmo cálculo.
+pub fn de_recebido(leituras: &[(u64, Vec<u8>)], p: &Params) -> Reprocessada {
+    let mut p = p.clone();
+    // A gravação veio de um corpo que respondeu: o corpo falso não assina, e não teria o que reprocessar.
+    if p.corpo.tipo == TipoCorpo::Falso {
+        p.corpo.tipo = TipoCorpo::Serial;
     }
+    let mut a = Assinante::new(&p);
+    let mut leitor = Leitor::new();
+    let mut tempo = Tempo {
+        lacuna_ms: p.estimativa.lacuna_ms,
+        ultimo: None,
+        ms: 0,
+    };
+    let (base, mut descarte) = (Instant::now(), Vec::new());
+    let (mut quadros, mut linhas) = (0, Vec::new());
+    // O laço começa junto com a gravação (`rms1d/src/main.rs`): a observação conta do início dela, e não da primeira leitura.
+    a.ciclo(base, &mut descarte);
+    for (ms, bytes) in leituras {
+        let agora = base + Duration::from_millis(*ms);
+        a.ciclo(agora, &mut descarte);
+        for q in leitor.empurrar(bytes) {
+            quadros += 1;
+            let antes = a.amostra().pacotes;
+            a.receber(&q, agora, &mut descarte);
+            let am = a.amostra();
+            if am.pacotes != antes
+                && let (Some(m), Some(c)) = (am.medidas, am.estimativa)
+            {
+                linhas.push(Linha {
+                    t: tempo.de(m.relogio_ms),
+                    medidas: m,
+                    estado: am.estado_chassi,
+                    calculo: c,
+                });
+            }
+        }
+        descarte.clear();
+    }
+    Reprocessada { quadros, linhas }
 }
 
-/// Uma gravação inteira, pacote a pacote: os pacotes de telemetria do tamanho que `layout` diz, na ordem em que chegaram.
+/// Os pacotes de telemetria da nossa mensagem, para o nosso nó, do tamanho que `layout` diz, na ordem em que chegaram.
 pub fn reprocessar<'a>(
     quadros: impl IntoIterator<Item = &'a Quadro>,
     layout: &Layout,
     p: &Params,
 ) -> Vec<Linha> {
     let mut e = Estimativa::new(&p.estimativa, &p.geometria);
+    let mut tempo = Tempo {
+        lacuna_ms: p.estimativa.lacuna_ms,
+        ultimo: None,
+        ms: 0,
+    };
     let mut saida = Vec::new();
-    let mut t_ms: u64 = 0;
-    let mut ultimo: Option<u32> = None;
     for q in quadros {
-        if q.resposta || (q.cmd_set, q.cmd_id) != id::PACOTE || q.dados.len() != layout.total {
+        if q.resposta
+            || q.destino != NO_ASSINANTE
+            || (q.cmd_set, q.cmd_id) != id::PACOTE
+            || barramento::mensagem_do_pacote(&q.dados) != Some(MENSAGEM)
+            || q.dados.len() != layout.total
+        {
             continue;
         }
         let Ok(pac) = Pacote::ler(&q.dados, layout) else {
             continue;
         };
-        if let Some(u) = ultimo {
-            t_ms += u64::from(pac.tempo_ms.wrapping_sub(u));
-        }
-        ultimo = Some(pac.tempo_ms);
         let m = Medidas::de(&pac);
         saida.push(Linha {
-            t: t_ms as f64 / 1000.0,
+            t: tempo.de(pac.tempo_ms),
             medidas: m,
             estado: pac.estado,
             calculo: e.passo(&m, pac.estado),

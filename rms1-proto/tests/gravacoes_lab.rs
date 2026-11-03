@@ -102,7 +102,8 @@ fn as_duas_ordens_gravadas_decodificam_nas_faixas() {
         }
     }
     // 2501 e 4867 eram os do leitor que perdia as leituras retomadas; com elas, 2517 e 6396, os mesmos de uma contagem
-    // independente, em Python, em 2026-11-03 (`out/2026-11-03-firmware-controlador/conta_retomadas.py`, no laboratório).
+    // independente, em Python, feita em 2026-11-03. O script entra no laboratório pelo plano de lá, em
+    // `out/2026-11-03-firmware-controlador/conta_retomadas.py`.
     assert_eq!(
         (hoje, antiga),
         (2517, 6396),

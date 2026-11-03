@@ -7,6 +7,9 @@
 //!
 //! Texto cortado pelo `-s` do `strace` termina em `"...`: o que veio até o corte entra, e o resto se perdeu na gravação.
 //! O [`Leitor`] acha o próximo quadro inteiro.
+//!
+//! **Limite:** os fluxos se separam pelo número do descritor, que é o certo para as threads de um processo, como nas
+//! gravações do laboratório. Dois processos com o mesmo número de descritor no mesmo `strace` se misturariam.
 
 use std::collections::HashMap;
 

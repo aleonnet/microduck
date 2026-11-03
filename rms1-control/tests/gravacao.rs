@@ -146,9 +146,128 @@ fn o_recebido_gravado_da_os_mesmos_quadros_que_a_leitura() {
     }
     drop(g);
     assert_eq!(vistos.len(), 40);
-    let bytes = ler_recebido(&recebido).unwrap();
+    let bytes: Vec<u8> = ler_recebido(&recebido)
+        .unwrap()
+        .into_iter()
+        .flat_map(|(_, b)| b)
+        .collect();
     assert_eq!(bytes, fluxo, "os bytes, na ordem");
     assert_eq!(Leitor::new().empurrar(&bytes), vistos);
+}
+
+/// Critério 22, pelo caminho inteiro: o laço real, com o corpo respondendo como o controlador, e o reprocessamento do recebido
+/// contando os mesmos pacotes, com o mesmo cálculo. No fluxo vão pacotes da mensagem da DJI e da nossa antes de a assinatura
+/// valer, e de outra mensagem depois: o laço não os conta, e o reprocessamento também não pode contar.
+#[test]
+fn o_reprocessamento_do_recebido_conta_os_pacotes_que_o_laco_contou() {
+    use rms1_control::Enlace;
+    use rms1_control::estimativa::de_recebido;
+    use rms1_control::gravacao::ler_recebido;
+    use rms1_proto::barramento::id;
+    use rms1_proto::{PedeAck, Quadro};
+    use rms1d_params::TipoCorpo;
+
+    let pacote = |mensagem: u8, seq: u16, relogio_ms: u32| {
+        let mut d = vec![0u8; 163];
+        d[1] = mensagem;
+        d[2..6].copy_from_slice(&relogio_ms.to_le_bytes());
+        // Rodas a 100 rpm, para o cálculo ter o que calcular.
+        d[58..60].copy_from_slice(&100i16.to_le_bytes());
+        Quadro {
+            origem: 0x03,
+            destino: 0x09,
+            seq,
+            resposta: false,
+            pede: PedeAck::Agora,
+            cmd_set: 0x48,
+            cmd_id: 0x08,
+            dados: d,
+        }
+    };
+    let resposta = |cmd: (u8, u8)| Quadro {
+        origem: 0x03,
+        destino: 0x09,
+        seq: 0,
+        resposta: true,
+        pede: PedeAck::Nada,
+        cmd_set: cmd.0,
+        cmd_id: cmd.1,
+        dados: vec![0],
+    };
+
+    let mut p = Params::default();
+    p.corpo.tipo = TipoCorpo::Serial;
+    // Em tempo real, porque a gravação usa o relógio de verdade: a observação e as esperas, encurtadas.
+    p.telemetria.janela_ms = 60;
+    p.telemetria.espera_ms = 200;
+    let d = tempfile_dir();
+    let (enviado, recebido) = (d.join("rl-enviado"), d.join("rl-recebido"));
+    let corpo = CorpoFalso::default();
+    let gravando = Gravando::new(corpo.clone(), &enviado)
+        .unwrap()
+        .com_recebido(&recebido)
+        .unwrap();
+    let saude = Arc::new(Saude::default());
+    let mut laco = Laco::new(gravando, &p, Arc::new(Intencoes::default()), saude.clone());
+    let manda = |q: &Quadro| corpo.a_ler.lock().unwrap().extend(q.montar().unwrap());
+    let mut ciclo = || {
+        std::thread::sleep(Duration::from_millis(5));
+        laco.ciclo(Instant::now(), false);
+    };
+    let enlace = |s: &Saude| s.amostra().map(|a| a.enlace);
+
+    ciclo();
+    // Durante a observação: a mensagem 0 e a nossa, que o laço vê e não conta.
+    for i in 0..4 {
+        manda(&pacote(i % 2, i.into(), 1000 + 20 * u32::from(i)));
+        ciclo();
+    }
+    for _ in 0..200 {
+        ciclo();
+        match enlace(&saude) {
+            Some(Enlace::Registrando) => {
+                // Folga para o fim da observação no reprocessamento, que conta do início da gravação.
+                for _ in 0..4 {
+                    ciclo();
+                }
+                manda(&resposta(id::REGISTRAR));
+            }
+            Some(Enlace::Cancelando) => manda(&resposta(id::CANCELAR)),
+            Some(Enlace::Assinando) => manda(&resposta(id::ASSINAR)),
+            Some(Enlace::Esperando) => break,
+            _ => {}
+        }
+    }
+    assert_eq!(
+        enlace(&saude),
+        Some(Enlace::Esperando),
+        "a assinatura valeu"
+    );
+    for i in 0..30u16 {
+        manda(&pacote(1, 100 + i, 2000 + 20 * u32::from(i)));
+        if i % 5 == 0 {
+            manda(&pacote(2, 500 + i, 2000 + 20 * u32::from(i)));
+        }
+        ciclo();
+    }
+    let vivo = saude.amostra().unwrap();
+    assert_eq!(
+        vivo.pacotes, 30,
+        "o laço conta só os da nossa mensagem, depois de assinar"
+    );
+    drop(laco);
+
+    let r = de_recebido(&ler_recebido(&recebido).unwrap(), &p);
+    assert_eq!(
+        r.linhas.len() as u64,
+        vivo.pacotes,
+        "os mesmos pacotes que o laço contou"
+    );
+    assert_eq!(
+        r.linhas.last().map(|l| l.calculo),
+        vivo.estimativa,
+        "o mesmo cálculo do último pacote"
+    );
 }
 
 /// Dois nadas iguais não provam nada.

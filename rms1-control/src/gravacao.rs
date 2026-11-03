@@ -25,6 +25,8 @@ pub struct Gravando<C: Corpo> {
     pendentes: u32,
     /// O que o corpo devolveu, `ms hex` por leitura, no mesmo relógio do enviado.
     recebido: Option<(BufWriter<File>, u32)>,
+    /// A gravação do recebido está falhando: o aviso sai uma vez por falha, e não a cada leitura.
+    recebido_falhando: bool,
 }
 
 impl<C: Corpo> Gravando<C> {
@@ -35,6 +37,7 @@ impl<C: Corpo> Gravando<C> {
             inicio: Instant::now(),
             pendentes: 0,
             recebido: None,
+            recebido_falhando: false,
         })
     }
 
@@ -83,8 +86,13 @@ impl<C: Corpo> Corpo for Gravando<C> {
             );
             *pendentes += 1;
             if gravou.is_err() || *pendentes >= DESCARGA {
-                if let Err(e) = gravou.and_then(|()| arquivo.flush()) {
-                    tracing::warn!(erro = %e, "gravar o recebido falhou");
+                match gravou.and_then(|()| arquivo.flush()) {
+                    Err(e) if !self.recebido_falhando => {
+                        tracing::warn!(erro = %e, "gravar o recebido falhou");
+                        self.recebido_falhando = true;
+                    }
+                    Err(_) => {}
+                    Ok(()) => self.recebido_falhando = false,
                 }
                 *pendentes = 0;
             }
@@ -102,17 +110,20 @@ impl<C: Corpo> Drop for Gravando<C> {
     }
 }
 
-/// Os bytes de uma gravação do recebido, na ordem em que chegaram, para o [`rms1_proto::Leitor`].
-pub fn ler_recebido(caminho: &Path) -> io::Result<Vec<u8>> {
-    let mut bytes = Vec::new();
+/// As leituras de uma gravação do recebido, na ordem em que chegaram: os milissegundos desde o início e os bytes.
+pub fn ler_recebido(caminho: &Path) -> io::Result<Vec<(u64, Vec<u8>)>> {
+    let mut leituras = Vec::new();
     for linha in BufReader::new(File::open(caminho)?).lines() {
         let linha = linha?;
-        let Some((_, h)) = linha.split_once(' ') else {
+        let Some((ms, h)) = linha.split_once(' ') else {
             continue;
         };
-        bytes.extend(de_hex(h)?);
+        let ms = ms
+            .parse()
+            .map_err(|e| io::Error::other(format!("milissegundos `{ms}`: {e}")))?;
+        leituras.push((ms, de_hex(h)?));
     }
-    Ok(bytes)
+    Ok(leituras)
 }
 
 fn de_hex(h: &str) -> io::Result<Vec<u8>> {

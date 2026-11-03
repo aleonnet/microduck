@@ -231,3 +231,76 @@ fn relogio_que_recomeca_nao_vira_deslocamento() {
         .posicao;
     assert_eq!(antes, depois);
 }
+
+/// Um pacote com o mesmo relógio é o mesmo pacote: devolve o mesmo cálculo, e a média não cresce com as repetições.
+#[test]
+fn pacote_repetido_nao_entra_de_novo_na_media() {
+    let (mut e, p) = nova();
+    let r = rpm_de(0.4, &p);
+    let primeiro = e.passo(
+        &Medidas {
+            rodas_rpm: [r; 4],
+            ..parado_em_pe()
+        },
+        0,
+    );
+    let mut ultimo = primeiro;
+    for _ in 0..100 {
+        ultimo = e.passo(&parado_em_pe(), 0);
+    }
+    assert_eq!(ultimo, primeiro, "o relógio não andou: é o mesmo pacote");
+}
+
+/// O tempo das linhas do reprocessamento segue a regra da lacuna: um relógio que recomeça não salta 49 dias.
+#[test]
+fn relogio_que_recomeca_nao_salta_o_tempo_das_linhas() {
+    use rms1_control::estimativa::reprocessar;
+    use rms1_proto::barramento::Layout;
+    use rms1_proto::{PedeAck, Quadro};
+    let quadro = |relogio_ms: u32| {
+        let mut d = vec![0u8; 163];
+        d[1] = 1;
+        d[2..6].copy_from_slice(&relogio_ms.to_le_bytes());
+        Quadro {
+            origem: 0x03,
+            destino: 0x09,
+            seq: 0,
+            resposta: false,
+            pede: PedeAck::Agora,
+            cmd_set: 0x48,
+            cmd_id: 0x08,
+            dados: d,
+        }
+    };
+    let qs: Vec<Quadro> = [1000, 1020, 5, 25].into_iter().map(quadro).collect();
+    let l = reprocessar(&qs, &Layout::da_assinatura(), &Params::default());
+    let t: Vec<f64> = l.iter().map(|x| x.t).collect();
+    assert_eq!(t, vec![0.0, 0.02, 0.02, 0.04]);
+}
+
+/// Só a nossa mensagem, para o nosso nó: o pacote de outra assinatura não entra no reprocessamento do `strace`.
+#[test]
+fn reprocessar_ignora_outra_mensagem_e_outro_no() {
+    use rms1_control::estimativa::reprocessar;
+    use rms1_proto::barramento::Layout;
+    use rms1_proto::{PedeAck, Quadro};
+    let quadro = |mensagem: u8, destino: u8| {
+        let mut d = vec![0u8; 163];
+        d[1] = mensagem;
+        Quadro {
+            origem: 0x03,
+            destino,
+            seq: 0,
+            resposta: false,
+            pede: PedeAck::Agora,
+            cmd_set: 0x48,
+            cmd_id: 0x08,
+            dados: d,
+        }
+    };
+    let qs = vec![quadro(1, 0x09), quadro(2, 0x09), quadro(1, 0x0a)];
+    assert_eq!(
+        reprocessar(&qs, &Layout::da_assinatura(), &Params::default()).len(),
+        1
+    );
+}

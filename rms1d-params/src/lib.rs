@@ -465,13 +465,21 @@ impl Params {
                 e.soltar_limiar_m_s, e.levantado_limiar_m_s
             ));
         }
-        if e.levantado_tempo_ms == 0 || e.soltar_tempo_ms == 0 {
-            return ruim(
-                "estimativa: os tempos do levantado têm de ser maiores que zero".to_owned(),
-            );
-        }
-        if e.lacuna_ms == 0 {
-            return ruim("estimativa.lacuna_ms tem de ser maior que zero".to_owned());
+        // Um tempo absurdo desliga o cálculo em silêncio: o levantado nunca marcaria, ou todo pacote seria lacuna.
+        for (nome, v, min, max) in [
+            (
+                "estimativa.levantado_tempo_ms",
+                e.levantado_tempo_ms,
+                1,
+                10_000,
+            ),
+            ("estimativa.soltar_tempo_ms", e.soltar_tempo_ms, 1, 10_000),
+            // Abaixo de 100 ms, cinco pacotes a 50 por segundo, o ritmo normal já seria lacuna.
+            ("estimativa.lacuna_ms", e.lacuna_ms, 100, 60_000),
+        ] {
+            if !(min..=max).contains(&v) {
+                return ruim(format!("{nome} fora de {min} a {max}: {v}"));
+            }
         }
         for (nome, v) in [
             ("geometria.raio_roda_m", self.geometria.raio_roda_m),
@@ -598,9 +606,15 @@ mod testes {
             ),
             (
                 "[estimativa]\nlevantado_tempo_ms = 0\n",
-                "tempos do levantado",
+                "levantado_tempo_ms",
             ),
+            (
+                "[estimativa]\nlevantado_tempo_ms = 1000000000\n",
+                "levantado_tempo_ms",
+            ),
+            ("[estimativa]\nsoltar_tempo_ms = 99999\n", "soltar_tempo_ms"),
             ("[estimativa]\nlacuna_ms = 0\n", "lacuna_ms"),
+            ("[estimativa]\nlacuna_ms = 5\n", "lacuna_ms"),
             ("[estimativa]\nlimiar = 0.4\n", "limiar"),
             ("[corpo]\ngravar_recebido = \"/tmp/r\"\n", "gravar_recebido"),
         ] {
