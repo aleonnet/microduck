@@ -228,6 +228,8 @@ pub struct Assinante {
     ultimo_pacote: Option<Instant>,
     ultimo_quadro: Option<Instant>,
     desistiu_em: Option<Instant>,
+    /// Já cancelou a nossa mensagem por ouvir que ela existia: na segunda vez, é recusa.
+    cancelou_a_nossa: bool,
     mudou: bool,
 }
 
@@ -267,6 +269,7 @@ impl Assinante {
             ultimo_pacote: None,
             ultimo_quadro: None,
             desistiu_em: None,
+            cancelou_a_nossa: false,
             mudou: true,
         }
     }
@@ -330,6 +333,7 @@ impl Assinante {
         self.enviadas = 0;
         self.inicio = Some(agora);
         self.desistiu_em = None;
+        self.cancelou_a_nossa = false;
         self.ir(Enlace::Observando);
     }
 
@@ -562,6 +566,14 @@ impl Assinante {
                 if codigo == OK || ja_valeu {
                     self.enviado_em = Some(agora);
                     self.ir(Enlace::Esperando);
+                } else if codigo == MENSAGEM_JA_EXISTE && !self.cancelou_a_nossa {
+                    // A mensagem existia calada durante a observação, e o código diz qual é: cancela essa, uma vez, e assina de novo.
+                    tracing::warn!(
+                        "a mensagem que assinamos já existia, calada: cancelando e assinando de novo"
+                    );
+                    self.cancelou_a_nossa = true;
+                    self.a_cancelar = vec![MENSAGEM];
+                    self.proximo_cancelamento(agora, saida);
                 } else {
                     self.recusa(Passo::Assinar, codigo);
                 }

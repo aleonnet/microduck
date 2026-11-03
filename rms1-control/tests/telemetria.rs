@@ -261,6 +261,40 @@ fn reenvio_que_ouve_ja_existe_nao_e_recusa() {
     assert_eq!(b.enlace(), Enlace::Esperando);
 }
 
+/// Assinou sem ter visto a mensagem, que existia calada: o controlador diz que ela existe. Cancela essa, uma vez, e assina de
+/// novo; na segunda, é recusa. Medido na página, em 2026-11-02: a física parada na abertura calou o corpo durante a observação.
+#[test]
+fn mensagem_que_existia_calada_e_cancelada_uma_vez() {
+    let mut b = banca();
+    b.observar(&[]);
+    b.corpo_manda(&resposta(id::REGISTRAR, 0));
+    b.ciclo(10);
+    b.corpo_manda(&resposta(id::ASSINAR, 0x04));
+    b.ciclo(10);
+    assert_eq!(b.enlace(), Enlace::Cancelando);
+    assert_eq!(
+        b.saidos(id::CANCELAR).last().map(|q| q.dados.clone()),
+        Some(vec![0, 9, 1]),
+        "cancela a nossa mensagem"
+    );
+    b.corpo_manda(&resposta(id::CANCELAR, 0));
+    b.ciclo(10);
+    b.corpo_manda(&resposta(id::REGISTRAR, 0x50));
+    b.ciclo(10);
+    assert_eq!(b.saidos(id::ASSINAR).len(), 2, "assina de novo");
+    b.corpo_manda(&resposta(id::ASSINAR, 0x04));
+    b.ciclo(10);
+    assert_eq!(
+        b.enlace(),
+        Enlace::Recusado {
+            passo: Passo::Assinar,
+            codigo: 0x04
+        },
+        "uma vez só"
+    );
+    assert_eq!(b.saidos(id::CANCELAR).len(), 1);
+}
+
 /// É o caso de recarregar a página: o corpo simulado volta sem assinatura.
 #[test]
 fn pacotes_parados_recomecam_a_assinatura() {
