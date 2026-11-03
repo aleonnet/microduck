@@ -67,8 +67,26 @@ São os de `RobotCtrl.set_mode_attr` (`rm_ctrl.py`). `0x3f/0x46` vai a `dji_hdvt
 | `chassi_segue_torre` | `0x3f/0x22` | `0x04/0x4c` 0, `0x3f/0xb0` uma vez por mudança | taxa da torre, `0x04/0x0c`, e o chassi vai atrás |
 | `torre_segue_chassi` | `0x3f/0x20` | `0x04/0x4c` 2, `0x3f/0xb0` só pitch | rodas |
 
+## Telemetria
+
+Etapa 3. O `rms1d` assina a telemetria do controlador como a DJI faz, com os mesmos quadros, e lê o pacote com um decodificador próprio, em `rms1-proto/src/barramento.rs`. A sequência mora em `rms1-control/src/telemetria.rs`, sem E/S.
+
+```text
+observar 2,5 s ─► cancelar o que viu ─► registrar o nó 09 ─► assinar a mensagem 1, 50 Hz, 9 dados ─► esperar ─► receber
+                                                                     │ código 4: a mensagem existia calada
+                                                                     └─► cancelar a mensagem 1, uma vez, e assinar de novo
+```
+
+- **Cada pacote é respondido,** como a DJI faz, com a mesma sequência.
+- **Recusa para e diz o código.** Sem resposta, desiste depois de `tentativas`, e só recomeça com quadros chegando, sem martelar. Pacotes parados por `recomecar_parado_ms` recomeçam a sequência.
+- **Fora da assinatura:** torre (`0x3f/0x76`), estado do chassi (`0x3f/0x29`), toque em cada placa (`0x3f/0x02`, pelo remetente) e infravermelho (`0x3f/0x10`).
+- **No contrato:** `s1.state`, por assinatura com `s1.subscribe {hz}`, e `s1.telemetry`, uma vez. `robot.state` ganha IMU, odometria, segurança e, com pacote recente, `head` medido. A saúde diz "telemetria parada" pela idade do último pacote (`idade_maxima_ms`).
+- **Eixos:** o fio usa x à frente, y à direita e z para baixo; o contrato, y à esquerda e z para cima. A conversão é uma só, em `Medidas::de`.
+- **Parâmetros:** `[telemetria]` em `rms1d.toml`. O corpo falso não assina.
+- **Nunca sai `0x48/0x02`,** o reset de nó: um teste confere em todos os caminhos.
+
 ## Limitação conhecida
 
-Sem telemetria, não há malha fechada: `rms1d` manda rpm às rodas. No simulador, pelo mesmo caminho, a 1,2 m/s por 3 s o desvio é de até 0,006 m, em 8 fases de início. A 3,5 m/s varia de 0,013 a 0,768 m, sem tendência: compatível com o contato dos roletes, mas a causa não está provada. A malha fechada entra com a telemetria, na etapa 3. Fonte: `tools/simulador/test_quadros.mjs`, no laboratório.
+Com telemetria, ainda não há malha fechada: `rms1d` manda rpm às rodas, e a velocidade medida não volta ao comando. No simulador, pelo mesmo caminho, a 1,2 m/s por 3 s o desvio é de até 0,006 m, em 8 fases de início. A 3,5 m/s varia de 0,013 a 0,768 m, sem tendência: compatível com o contato dos roletes, mas a causa não está provada. A malha fechada pede plano próprio. Fonte: `tools/simulador/test_quadros.mjs`, no laboratório.
 
-Pelo mesmo motivo, `head`, no estado, é o último alvo pedido e limitado, e não onde a torre está. No modo em que o chassi segue a torre, a taxa move a torre sem mudar esse alvo.
+`head`, no estado, é onde a torre está quando há pacote recente; sem ele, é o último alvo pedido e limitado, e nunca um dado velho.

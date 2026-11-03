@@ -49,6 +49,21 @@ until grep -q "ponte ligada" "$T/corpo.log"; do
 done
 
 # Fala com o corpo simulado pela porta de quem olha, nunca pelo caminho do robô.
+# A telemetria que o rms1d decodificou, pelo socket dele.
+tele() {
+    "$PYTHON" -I -c '
+import json, socket, sys
+s = socket.socket(socket.AF_UNIX)
+s.connect(sys.argv[1])
+s.sendall(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"s1.telemetry\"}\n")
+f = s.makefile()
+while True:
+    v = json.loads(f.readline())
+    if v.get("id") == 1:
+        print(json.dumps(v["result"]))
+        break
+' "$1"
+}
 verdade() {
     "$PYTHON" -I -c '
 import json, socket, sys
@@ -90,7 +105,11 @@ A0="$(verdade sim.verdade)"
 echo "PASSOU ligar não arma o corpo"
 
 echo "--- o roteiro, pelo socket, contra o corpo simulado"
-"$ROTEIRO" --socket "$T/sim.sock" || falha "roteiro contra o simulador"
+"$ROTEIRO" --socket "$T/sim.sock" > "$T/roteiro.txt" 2>&1 || { cat "$T/roteiro.txt"; falha "roteiro contra o simulador"; }
+cat "$T/roteiro.txt"
+# O corpo simulado devolve a telemetria como o robô: "sem telemetria" aqui é defeito, e não corpo falso.
+grep -q "^PASSOU a telemetria chega, com todos os dados" "$T/roteiro.txt" || falha "o roteiro não recebeu a telemetria do simulador"
+echo "PASSOU a telemetria real chegou pelo caminho do robô"
 
 Q="$(verdade sim.quadros)"
 [ "$(campo "$Q" 'v["desconhecidos"]')" = 0 ] || falha "quadros desconhecidos: $Q"
@@ -203,11 +222,18 @@ descer
 
 echo "--- a verdade do simulador: o robô anda para onde o cliente pediu"
 subir verdade rede
-sleep 0.5
+# O rms1d observa 2,5 s antes de assinar: a primeira leitura só vale com a telemetria chegando.
+n=0
+until [ "$(campo "$(tele "$T/verdade.sock")" 'v["link"]["state"] == "receiving" and v["link"]["fresh"]')" = True ]; do
+    n=$((n + 1)); [ "$n" -lt 100 ] || falha "a telemetria não chegou em 10 s"
+    sleep 0.1
+done
 A0="$(verdade sim.verdade)"
+B0="$(tele "$T/verdade.sock")"
 "$ROTEIRO" --socket "$T/verdade.sock" --so-andar --velocidade 0.5 || falha "andar"
 sleep 0.3
 A1="$(verdade sim.verdade)"
+B1="$(tele "$T/verdade.sock")"
 FRENTE="$("$PYTHON" -I -c '
 import json,math,sys
 a,b=json.loads(sys.argv[1]),json.loads(sys.argv[2])
@@ -219,6 +245,18 @@ import sys
 f,l=map(float,sys.argv[1].split())
 sys.exit(0 if 0.3<f<0.8 and abs(l)<0.05 else 1)' "$FRENTE" || falha "0,5 m/s por 1 s andou $FRENTE (frente, lado)"
 echo "PASSOU andou para a frente: $FRENTE m (frente, lado)"
+# A mesma distância pela telemetria: o deslocamento que o rms1d leu é o que a física fez.
+TELE="$("$PYTHON" -I -c '
+import json,math,sys
+a,b=json.loads(sys.argv[1]),json.loads(sys.argv[2])
+if not b["link"]["fresh"]:
+    sys.exit("telemetria velha no fim: %s" % b["link"])
+print(round(math.hypot(b["body"]["position_m"][0]-a["body"]["position_m"][0], b["body"]["position_m"][1]-a["body"]["position_m"][1]),3))' "$B0" "$B1")" || falha "a telemetria não deu o deslocamento"
+"$PYTHON" -I -c '
+import sys
+f=float(sys.argv[1].split()[0]); t=float(sys.argv[2])
+sys.exit(0 if abs(f-t)<0.03 else 1)' "$FRENTE" "$TELE" || falha "a telemetria leu $TELE m, a física andou $FRENTE"
+echo "PASSOU a telemetria leu o mesmo deslocamento: $TELE m"
 RPM="$(campo "$A1" 'max(abs(r) for r in v["rpm"])')"
 [ "$RPM" -lt 15 ] || falha "ficou com rodas girando: $RPM rpm"
 echo "PASSOU parou"

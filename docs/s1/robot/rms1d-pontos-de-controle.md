@@ -1,4 +1,4 @@
-# `rms1d`: pontos de controle, etapas 1 e 2
+# `rms1d`: pontos de controle, etapas 1, 2 e 3
 
 Cada ponto diz como a DJI faz, como `rms1d` faz, o que o dono viu, o que falta provar, e o que esperar. Fontes: `~/Development/RoboMaster-S1/biblioteca/guia/chassi.md` e `torre.md`, e o firmware copiado do robô.
 
@@ -18,6 +18,21 @@ Cada ponto diz como a DJI faz, como `rms1d` faz, o que o dono viu, o que falta p
 | Parar ao desarmar ou sair | `_set_chassis_stop_depend_mode`, `_stop_rotate` | rodas ou seguir a zero, dez vezes, conforme o modo; taxa zero com controle 0, se ligada. `SIGTERM` faz o mesmo | | que para. O que o corpo faz com `kill -9`, sem o comando de parar, não foi lido | segue andando |
 | Reset de nó, `0x48/0x02` | deixou o barramento morto até desligar | nenhum comando de `rms1-proto` é desse conjunto, e um teste confere | | | |
 | Processos parados | | só `dji_monitor` e `dji_hdvt_uav`, nessa ordem; `rms1d.toml` recusa qualquer outro nome, antes de o script tocar no robô | | `up` confere que os dois saíram e que ninguém segura `/dev/ttyS3` | `up` para e diz quem |
+
+## Etapa 3: telemetria
+
+Fontes: `~/Development/RoboMaster-S1/biblioteca/guia/telemetria.md` e `docs/2026-11-02-1749-telemetria-s1.md`, no laboratório, com as gravações de `out/2026-11-02-rms1d-telemetria/`. Nada aqui foi rodado no robô pelo `rms1d`.
+
+| Ponto | DJI | `rms1d` | Unidade e sentido | Falta provar no robô | Reprova se |
+|---|---|---|---|---|---|
+| Registrar | `0x48/0x01`, 09 para 03, gravado | o mesmo, byte a byte com a gravação | `0x50` é o nó que já existe, e segue | resposta 0 ou `0x50` | outro código |
+| Cancelar | `0x48/0x04`, gravado | as mensagens vistas em 2,5 s, a menor primeiro | `0x0c` não trava | que cancela a mensagem 1 da DJI | recusa |
+| Assinar | `0x48/0x03`, mensagem 1, 50 Hz, configuração 3, 9 dados, reconstruída | a mesma; código 4 cancela a 1, uma vez, e assina de novo | | código 0 na primeira | outro código |
+| Pacote | `0x48/0x08`, 163 bytes, 50 por segundo, medido pelo relógio do pacote | lido em `Pacote::ler`; respondido com `01` | g, rad/s, graus, m, m/s; rodas 2 e 3 invertidas no fio | 50 por segundo; sinal de cada roda | ritmo ou sinal errado |
+| Atitude | no pacote | rumo à esquerda no contrato | graus | **hipótese:** nariz para cima positivo, e o sinal da rolagem | sinal errado |
+| Torre | `0x3f/0x76`, 04 para 09 | giro e inclinação, relativos e no solo | décimos de grau, à direita no fio | sentido | sentido errado |
+| Estado do chassi | `0x3f/0x29` e o pacote | 11 bits, contados por subida | parado, rampa, levantado, escorregou, impactos, capotou | levantar e inclinar | evento errado |
+| Toque | `0x3f/0x02`, do remetente `placa*32+24` | conta na placa, com tipo, som e batida | placas 1 a 6 | cada uma das 6 | placa errada |
 
 ## O que a leitura não fecha, e só o robô responde
 
@@ -46,5 +61,6 @@ O `s1d` não mudou. Cada diferença, com a razão:
 | Giro seguindo a torre | ignorado | vira taxa da torre, e o chassi vai atrás | a alavanca da DJI faz assim, e o console só tem esse giro |
 | Parâmetros | flags e constantes | `rms1d.toml`, com fonte e chave desconhecida recusada | pedido do dono |
 | Modos | `s1.follow`, que o console recusa | skills de `robot.do` | caminho que o console já permite |
-| Telemetria, luzes, som, tiro, câmera | presentes | etapas 3, 4 e 5 | plano próprio para cada uma, com prova no robô |
+| Telemetria | presente | etapa 3: assinada como a DJI, decodificador próprio | `s1d` e `s1-duml` não são base nem evidência, por ordem do dono |
+| Luzes, som, tiro, câmera | presentes | etapas 4 e 5 | plano próprio para cada uma, com prova no robô |
 | Saúde sem cliente | | laço publica; `system.info` e `telemetry.status` respondem | o console mostraria alerta sem eles |
