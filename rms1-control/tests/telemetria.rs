@@ -116,12 +116,25 @@ impl Banca {
     }
 }
 
-/// A sequência da gravação da DJI: vê, cancela, registra e assina, nesta ordem.
+/// A ordem da DJI com o robô em funcionamento (`hdvt_exec_writes.strace`): registra antes de cancelar e de assinar. Cancelar
+/// antes de registrar deu código 2 no robô, em 2026-11-03 (`out/2026-11-03-rms1d-chassi-torre/robo-085248.quadros`).
 #[test]
-fn observa_cancela_o_que_viu_registra_e_assina() {
+fn observa_registra_cancela_o_que_viu_e_assina() {
     let mut b = banca();
     b.observar(&[0, 1]);
-    assert_eq!(b.enlace(), Enlace::Cancelando);
+    assert_eq!(b.enlace(), Enlace::Registrando);
+    assert!(
+        b.saidos(id::CANCELAR).is_empty(),
+        "registrar antes de cancelar"
+    );
+    assert_eq!(b.saidos(id::REGISTRAR).len(), 1);
+    b.corpo_manda(&resposta(id::REGISTRAR, 0x50));
+    b.ciclo(10);
+    assert_eq!(
+        b.enlace(),
+        Enlace::Cancelando,
+        "0x50, nó já existe, é o caso comum, sem reset"
+    );
     let c = b.saidos(id::CANCELAR);
     assert_eq!(c.len(), 1);
     assert_eq!(c[0].dados, vec![0, 9, 0], "a menor primeiro");
@@ -129,20 +142,14 @@ fn observa_cancela_o_que_viu_registra_e_assina() {
     b.ciclo(10);
     assert_eq!(b.saidos(id::CANCELAR)[1].dados, vec![0, 9, 1]);
     assert!(
-        b.saidos(id::REGISTRAR).is_empty(),
-        "registrar só depois de cancelar tudo"
+        b.saidos(id::ASSINAR).is_empty(),
+        "assinar só depois de cancelar tudo"
     );
     b.corpo_manda(&resposta(id::CANCELAR, 0x0c));
     b.ciclo(10);
-    assert_eq!(
-        b.saidos(id::REGISTRAR).len(),
-        1,
-        "mensagem que não existe mais não trava"
-    );
-    b.corpo_manda(&resposta(id::REGISTRAR, 0x50));
-    b.ciclo(10);
     let a = b.saidos(id::ASSINAR);
-    assert_eq!(a.len(), 1, "0x50, nó já existe, é o caso comum, sem reset");
+    assert_eq!(a.len(), 1, "mensagem que não existe mais não trava");
+    assert_eq!(b.saidos(id::REGISTRAR).len(), 1, "um registro só");
     assert_eq!(
         &a[0].dados[..5],
         &[9, 1, 3, 0, 9],
@@ -279,9 +286,8 @@ fn mensagem_que_existia_calada_e_cancelada_uma_vez() {
     );
     b.corpo_manda(&resposta(id::CANCELAR, 0));
     b.ciclo(10);
-    b.corpo_manda(&resposta(id::REGISTRAR, 0x50));
-    b.ciclo(10);
     assert_eq!(b.saidos(id::ASSINAR).len(), 2, "assina de novo");
+    assert_eq!(b.saidos(id::REGISTRAR).len(), 1, "o nó já está registrado");
     b.corpo_manda(&resposta(id::ASSINAR, 0x04));
     b.ciclo(10);
     assert_eq!(

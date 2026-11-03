@@ -306,6 +306,7 @@ impl Assinante {
         self.enviadas += 1;
     }
 
+    /// Cancela o que falta, e depois assina: o nó já foi registrado antes de cancelar, como a DJI faz.
     fn proximo_cancelamento(&mut self, agora: Instant, saida: &mut Vec<Pedido>) {
         self.cancelando = self.a_cancelar.pop();
         if let Some(mensagem) = self.cancelando {
@@ -313,10 +314,14 @@ impl Assinante {
             self.ir(Enlace::Cancelando);
             self.pedir(agora, Pedido::Cancelar { mensagem }, saida);
         } else {
-            self.enviadas = 0;
-            self.ir(Enlace::Registrando);
-            self.pedir(agora, Pedido::RegistrarNo, saida);
+            self.assinar(agora, saida);
         }
+    }
+
+    fn registrar(&mut self, agora: Instant, saida: &mut Vec<Pedido>) {
+        self.enviadas = 0;
+        self.ir(Enlace::Registrando);
+        self.pedir(agora, Pedido::RegistrarNo, saida);
     }
 
     fn assinar(&mut self, agora: Instant, saida: &mut Vec<Pedido>) {
@@ -346,8 +351,10 @@ impl Assinante {
             Enlace::Observando => {
                 let inicio = *self.inicio.get_or_insert(agora);
                 if agora.saturating_duration_since(inicio) >= self.janela {
+                    // Registrar antes de cancelar, como a DJI com o robô em funcionamento (`hdvt_exec_writes.strace`).
+                    // Cancelar primeiro deu código 2 ao registrar, no robô, em 2026-11-03.
                     self.a_cancelar = self.vistas.iter().rev().copied().collect();
-                    self.proximo_cancelamento(agora, saida);
+                    self.registrar(agora, saida);
                 }
             }
             Enlace::Cancelando | Enlace::Registrando | Enlace::Assinando => {
@@ -554,7 +561,7 @@ impl Assinante {
             }
             (Enlace::Registrando, id::REGISTRAR) => {
                 if codigo == OK || codigo == NO_JA_EXISTE {
-                    self.assinar(agora, saida);
+                    self.proximo_cancelamento(agora, saida);
                 } else {
                     self.recusa(Passo::Registrar, codigo);
                 }
