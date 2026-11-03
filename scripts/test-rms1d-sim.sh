@@ -118,6 +118,9 @@ Q="$(verdade sim.quadros)"
 [ "$(campo "$Q" 'v["avisos"]')" = 0 ] || falha "quadros com aviso: $Q"
 [ "$(campo "$Q" 'v["total"] > 100')" = True ] || falha "poucos quadros: $Q"
 echo "PASSOU todos os quadros entendidos: $(campo "$Q" 'v["total"]')"
+# A sensibilidade das placas sai uma vez, com o primeiro pacote, no nível padrão: picos 160, 180 e 200 (a0 00 b4 00 c8 00).
+[ "$(campo "$Q" '[(c["total"], c["ultimo"][26:]) for c in v["comandos"] if c["comando"] == "0x3f/0x07"]')" = "[(1, 'a000b400c800')]" ] || falha "a sensibilidade das placas não chegou uma vez: $Q"
+echo "PASSOU a sensibilidade das placas chegou ao corpo, uma vez"
 descer
 sleep 1
 A="$(verdade sim.verdade)"

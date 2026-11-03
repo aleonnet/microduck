@@ -19,6 +19,11 @@ permissao = "dji"
 # 4 é yaw no chassi e pitch NED, o padrão da DJI; 3 é o plano B, que moveu a torre em 2026-10-29.
 coordenada = 4
 
+[armadura]
+# De 0 a 10, como no app da DJI; maior, golpe mais leve conta. 10 é o máximo da DJI, pelo pedido do dono em 2026-11-03:
+# "Deixe as placas sensíveis ao toque". O padrão da DJI é 5.
+sensibilidade = 10
+
 [dji]
 # O monitor primeiro: ele religa quem cair.
 parar = ["dji_monitor", "dji_hdvt_uav"]

@@ -35,7 +35,9 @@ console, robotctl, rms1d-roteiro, e depois a inteligência
 ## O que vem do desenho do pato, e quem garante
 
 - Só a segurança escreve no corpo. `Seguranca` é dona do único `Corpo`, e o compilador garante.
-- Ligar não move nada. Desarmada, ela não envia nenhum quadro; e armar não leva a torre a lugar nenhum enquanto ninguém pediu.
+- Ligar não move nada. Desarmada, ela não envia nada que mova: só a telemetria e, uma vez, a sensibilidade das placas (`0x3f/0x07`, da central para a 2401, como a DJI). Armar não leva a torre a lugar nenhum enquanto ninguém pediu.
+- Seguindo a torre, parar é um `0x3f/0x22` a zero, uma vez, como a DJI: repetido, ele manteve o controlador alinhando o chassi no ar, e as rodas foram a 850 rpm na mão do dono (2026-11-03).
+- Levantado, pelo cálculo próprio ou pelo bit do controlador, as rodas param em qualquer modo e ficam paradas até o robô voltar ao chão e o cliente parar de pedir movimento; o estado diz `picked_up`. Pela regra de 2 s do levantado, a parada chega cerca de 3,5 s depois de as rodas dispararem (medido na gravação de 2026-11-03).
 - O laço nunca espera cliente. Intenções são trocas atômicas; o estado sai num canal limitado, e só é montado com assinante.
 - A saúde é publicada pelo laço, então um laço travado se denuncia pela idade do último ciclo.
 - Sair para o robô. `SIGTERM` e Ctrl-C passam pelo laço, que desarma e descarrega a gravação antes de o processo terminar. `kill -9` não tem esse caminho.

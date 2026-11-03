@@ -187,3 +187,96 @@ fn nas_gravacoes_a_gravidade_confere_sem_aviso() {
         assert!(aviso.is_none(), "{nome}: {aviso:?}");
     }
 }
+
+/// O teste do dono de 2026-11-03, às 18:50: armado, seguindo a torre, sem pilotar, ele levantou o robô e as rodas foram a 850 rpm,
+/// porque o `rms1d` repetia o seguir a zero a cada ciclo (`out/2026-11-03-firmware-controlador/levantado/`). A gravação do que o
+/// robô mandou passa aqui pelo laço inteiro, como no robô: o seguir a zero vai uma vez, e no trecho levantado só vão rodas a zero.
+#[test]
+#[ignore = "precisa do laboratório; rode scripts/test-rms1-telemetria.sh"]
+fn no_robo_levantado_seguindo_a_torre_as_rodas_param() {
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    use rms1_control::intencoes::Modo;
+    use rms1_control::{CorpoFalso, Intencoes, Laco, Saude};
+    use rms1_proto::comando::id;
+    use rms1d_params::TipoCorpo;
+
+    let lab =
+        PathBuf::from(std::env::var("S1_LAB").expect("S1_LAB tem de apontar para o laboratório"));
+    let c = lab.join("out/2026-11-03-firmware-controlador/levantado/recebido.txt");
+    let leituras = ler_recebido(&c).unwrap_or_else(|e| panic!("{}: {e}", c.display()));
+    let mut p = Params::default();
+    p.corpo.tipo = TipoCorpo::Serial;
+    p.armadura.sensibilidade = 10;
+    let corpo = CorpoFalso::default();
+    let intencoes = Arc::new(Intencoes::default());
+    let mut laco = Laco::new(
+        corpo.clone(),
+        &p,
+        intencoes.clone(),
+        Arc::new(Saude::default()),
+    );
+    intencoes.pedir_armar(true);
+    intencoes.pedir_modo(Modo::ChassiSegueTorre);
+    let base = Instant::now();
+    let (mut seguir, mut no_ar, mut placas) = (0, Vec::new(), Vec::new());
+    for (ms, bytes) in &leituras {
+        corpo.a_ler.lock().unwrap().extend_from_slice(bytes);
+        let agora = base + Duration::from_millis(*ms);
+        while {
+            let e = laco.ciclo(agora, true).expect("estado pedido");
+            let q = corpo.quadros();
+            corpo.limpar();
+            let s = q
+                .iter()
+                .filter(|x| (x.cmd_set, x.cmd_id) == id::SEGUIR)
+                .count();
+            seguir += s;
+            placas.extend(
+                q.iter()
+                    .filter(|x| (x.cmd_set, x.cmd_id) == id::ARMADURA_VOZ)
+                    .cloned(),
+            );
+            if e.limitado_por.contains(&"picked_up") {
+                let rodas: Vec<_> = q
+                    .iter()
+                    .filter(|x| (x.cmd_set, x.cmd_id) == id::RODAS)
+                    .collect();
+                assert!(
+                    s == 0 && rodas.len() == 1 && rodas[0].dados[..8].iter().all(|b| *b == 0),
+                    "levantado aos {} ms: {q:?}",
+                    ms
+                );
+                no_ar.push(*ms);
+            }
+            !corpo.a_ler.lock().unwrap().is_empty()
+        } {}
+    }
+    assert_eq!(seguir, 1, "sem pilotar, um seguir a zero, ao armar");
+    // A sensibilidade vai uma vez, com o primeiro pacote, da central (900) para a placa 2401, no nível do arquivo.
+    assert_eq!(placas.len(), 1, "{placas:?}");
+    assert_eq!((placas[0].origem, placas[0].destino), (0x09, 0x38));
+    assert_eq!(
+        placas[0].dados[13..],
+        [80, 0, 90, 0, 100, 0],
+        "nível 10: picos 80, 90 e 100"
+    );
+    assert!(
+        !no_ar.is_empty(),
+        "nenhum ciclo parou as rodas por levantado"
+    );
+    let (de, ate) = (
+        no_ar[0] as f64 / 1000.0,
+        *no_ar.last().unwrap() as f64 / 1000.0,
+    );
+    println!(
+        "rodas paradas por levantado de {de:.1} a {ate:.1} s, em {} ciclos",
+        no_ar.len()
+    );
+    // No tempo desta gravação, as rodas giraram de 205,5 a 216,5 s (`scripts/rodas.py`, no laboratório). O levantado vem da
+    // discordância entre a velocidade do controlador e a das rodas, que passa de 0,4 m/s perto de 207 s e precisa durar 2 s
+    // (`levantado_tempo_ms`, medido contra as freadas): a parada chega 3,5 s depois de as rodas dispararem. É a rede de
+    // proteção; o conserto da causa é o seguir a zero ir uma vez só, conferido acima.
+    assert!((205.5..209.5).contains(&de) && ate < 217.0, "{de} a {ate}");
+}

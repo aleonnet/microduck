@@ -6,7 +6,7 @@ set -eu
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 S1_LAB="${S1_LAB:-$HOME/Development/RoboMaster-S1}"
 export S1_LAB
-for g in out/2026-11-02-rms1d-telemetria/s2.strace out/2026-11-03-firmware-controlador/ctrl_fora.strace out/2026-11-03-firmware-controlador/rms1d_fora.strace out/2026-11-03-firmware-controlador/sombra/recebido.txt; do
+for g in out/2026-11-02-rms1d-telemetria/s2.strace out/2026-11-03-firmware-controlador/ctrl_fora.strace out/2026-11-03-firmware-controlador/rms1d_fora.strace out/2026-11-03-firmware-controlador/sombra/recebido.txt out/2026-11-03-firmware-controlador/levantado/recebido.txt; do
   [ -f "$S1_LAB/$g" ] || { echo "REPROVOU: não achei $g em $S1_LAB"; exit 1; }
 done
 cd "$REPO"

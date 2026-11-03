@@ -151,8 +151,9 @@ pub fn resumo(caminho: &Path) -> io::Result<Resumo> {
         };
         let bytes = de_hex(h)?;
         let q = Quadro::ler(&bytes).map_err(io::Error::other)?;
-        // A telemetria depende do que o corpo devolve, e o corpo falso não devolve nada: a comparação é dos comandos.
-        if q.cmd_set == barramento::id::PACOTE.0 {
+        // A telemetria depende do que o corpo devolve, e o corpo falso não devolve nada: a comparação é dos comandos. A
+        // sensibilidade das placas também: ela sai com o primeiro pacote (`Laco::ciclo`).
+        if q.cmd_set == barramento::id::PACOTE.0 || (q.cmd_set, q.cmd_id) == id::ARMADURA_VOZ {
             continue;
         }
         let lista = saida.entry((q.cmd_set, q.cmd_id)).or_default();

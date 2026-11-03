@@ -793,3 +793,167 @@ fn velocidade_da_torre_esquece_o_alvo_de_angulo() {
         "sem reenviar o alvo velho"
     );
 }
+
+/// Seguindo a torre, parado, o `0x3f/0x22` a zero vai uma vez, como a DJI (`_set_chassis_stop_depend_mode`, em `rm_ctrl.py`):
+/// repetido, ele mantinha o controlador alinhando o chassi, e no ar as rodas foram a 850 rpm (2026-11-03). Com movimento
+/// pedido, a cada ciclo; ao parar, um a zero.
+#[test]
+fn seguindo_a_torre_parado_o_seguir_vai_uma_vez_como_a_dji() {
+    let mut b = banca();
+    b.armar();
+    b.intencoes.pedir_modo(Modo::ChassiSegueTorre);
+    for _ in 0..50 {
+        b.ciclo();
+    }
+    assert_eq!(b.de(id::SEGUIR).len(), 1, "parado: um seguir a zero, e só");
+    b.corpo.limpar();
+    for _ in 0..3 {
+        b.pedir_e_ciclar([0.5, 0.0, 0.0]);
+    }
+    b.pedir_e_ciclar([0.0, 0.0, 0.0]);
+    for _ in 0..20 {
+        b.ciclo();
+    }
+    let s = b.de(id::SEGUIR);
+    assert_eq!(s.len(), 4, "três andando e um ao parar");
+    assert_eq!(s[3].dados, vec![0; 12]);
+    // Só o giro, que a torre leva e o chassi persegue, também é movimento pedido.
+    b.corpo.limpar();
+    b.pedir_e_ciclar([0.0, 0.0, 1.0]);
+    b.pedir_e_ciclar([0.0, 0.0, 1.0]);
+    assert_eq!(b.de(id::SEGUIR).len(), 2);
+}
+
+struct Direta {
+    corpo: CorpoFalso,
+    s: rms1_control::Seguranca<CorpoFalso>,
+    intencoes: Intencoes,
+    saude: Saude,
+}
+
+impl Direta {
+    fn nova(modo: Modo) -> Self {
+        let corpo = CorpoFalso::default();
+        let mut d = Direta {
+            s: rms1_control::Seguranca::new(corpo.clone(), &Params::default()),
+            corpo,
+            intencoes: Intencoes::default(),
+            saude: Saude::default(),
+        };
+        d.intencoes.pedir_armar(true);
+        d.s.armar(&d.saude);
+        d.intencoes.pedir_modo(modo);
+        d
+    }
+
+    /// Um ciclo com o pedido dado, levantado ou não; devolve os motivos de limite e limpa o corpo.
+    fn ciclo(&mut self, twist: [f64; 3], levantado: bool) -> (Vec<&'static str>, Vec<Quadro>) {
+        self.intencoes.pedir_twist(twist);
+        let agora = Instant::now();
+        let a = self
+            .s
+            .aplicar(&self.intencoes.ler(agora), levantado, agora, &self.saude);
+        let q = self.corpo.quadros();
+        self.corpo.limpar();
+        (a.limitado_por, q)
+    }
+}
+
+fn so(q: &[Quadro], cmd: (u8, u8)) -> Vec<Quadro> {
+    q.iter()
+        .filter(|x| (x.cmd_set, x.cmd_id) == cmd)
+        .cloned()
+        .collect()
+}
+
+fn rodas_zero(q: &[Quadro]) -> bool {
+    let r = so(q, id::RODAS);
+    r.len() == 1 && r[0].dados[..8].iter().all(|b| *b == 0)
+}
+
+/// Levantado, as rodas param nos três modos, mesmo com o cliente pedindo movimento, e o cliente fica sabendo.
+#[test]
+fn levantado_as_rodas_param_em_qualquer_modo() {
+    for modo in Modo::TODOS {
+        let mut d = Direta::nova(modo);
+        d.ciclo([0.0; 3], false);
+        let (limites, q) = d.ciclo([0.5, 0.2, 0.5], true);
+        assert!(rodas_zero(&q), "{modo:?}: {q:?}");
+        assert!(
+            so(&q, id::SEGUIR).is_empty(),
+            "{modo:?}: nada de seguir no ar"
+        );
+        assert_eq!(limites, vec!["picked_up"], "{modo:?}");
+    }
+}
+
+/// De volta ao chão, as rodas seguem paradas enquanto o cliente pede movimento: só voltam depois de ele parar de pedir. Seguindo
+/// a torre, nem o seguir a zero volta sozinho: ele faria o chassi alinhar sem ninguém pedir.
+#[test]
+fn de_volta_ao_chao_so_anda_depois_de_o_cliente_parar_de_pedir() {
+    let mut d = Direta::nova(Modo::ChassiSegueTorre);
+    d.ciclo([0.0; 3], false);
+    d.ciclo([0.5, 0.0, 0.0], true);
+    let (limites, q) = d.ciclo([0.5, 0.0, 0.0], false);
+    assert!(
+        rodas_zero(&q) && limites == vec!["picked_up"],
+        "ainda pedindo: segue parado"
+    );
+    let (limites, q) = d.ciclo([0.0; 3], false);
+    assert!(limites.is_empty());
+    assert!(
+        so(&q, id::SEGUIR).is_empty() && so(&q, id::RODAS).is_empty(),
+        "{q:?}"
+    );
+    for _ in 0..10 {
+        let (_, q) = d.ciclo([0.0; 3], false);
+        assert!(
+            so(&q, id::SEGUIR).is_empty(),
+            "parado no chão, sem seguir a zero"
+        );
+    }
+    let (limites, q) = d.ciclo([0.5, 0.0, 0.0], false);
+    assert!(limites.is_empty());
+    assert_eq!(
+        so(&q, id::SEGUIR).len(),
+        1,
+        "movimento pedido de novo: segue a torre"
+    );
+}
+
+/// Desarmar levantado, seguindo a torre, para com rodas a zero: o seguir a zero faria o chassi tentar alinhar no ar.
+#[test]
+fn desarmar_levantado_seguindo_a_torre_para_com_rodas_a_zero() {
+    let mut d = Direta::nova(Modo::ChassiSegueTorre);
+    d.ciclo([0.0; 3], false);
+    d.ciclo([0.0; 3], true);
+    d.s.desarmar(&d.saude);
+    let q = d.corpo.quadros();
+    assert!(so(&q, id::SEGUIR).is_empty(), "{q:?}");
+    assert!(!so(&q, id::RODAS).is_empty());
+    assert!(
+        so(&q, id::RODAS)
+            .iter()
+            .all(|r| r.dados[..8].iter().all(|b| *b == 0))
+    );
+}
+
+/// A sensibilidade das placas sai desarmada, porque não move nada: da central para a placa 2401, no nível do arquivo.
+#[test]
+fn a_sensibilidade_das_placas_vai_da_central_para_a_placa_no_nivel_do_arquivo() {
+    let mut p = Params::default();
+    p.armadura.sensibilidade = 10;
+    let corpo = CorpoFalso::default();
+    let mut s = rms1_control::Seguranca::new(corpo.clone(), &p);
+    s.ajustar_placas(&Saude::default());
+    let q = corpo.quadros();
+    assert_eq!(q.len(), 1);
+    assert_eq!(
+        (q[0].origem, q[0].destino, q[0].cmd_set, q[0].cmd_id),
+        (0x09, 0x38, 0x3f, 0x07)
+    );
+    assert_eq!(
+        q[0],
+        rms1_proto::comando::sensibilidade_das_placas(10).quadro(&rms1_proto::Nos::default(), 0)
+    );
+}

@@ -163,6 +163,7 @@ fn um_de_cada() -> Vec<Comando> {
             pitch_ddeg_s: 0,
             controle: 0,
         },
+        rms1_proto::comando::sensibilidade_das_placas(5),
     ]
 }
 
@@ -242,4 +243,52 @@ fn o_codigo_novo_nao_cita_reset_de_no_nem_para_dji_scratch() {
         achados.push("deploy/s1/rms1d.toml: dji_scratch na lista de processos".to_owned());
     }
     assert!(achados.is_empty(), "{achados:?}");
+}
+
+/// O quadro que a central da DJI mandou à placa 2401, gravado duas vezes na bancada de 150 s (`hdvt_uav.strace`, no
+/// laboratório, às 17:07:22 e 17:07:28 de 2026-10-30), com a sensibilidade padrão, nível 5.
+const ARMADURA_VOZ_NIVEL_5: [u8; 32] = [
+    0x55, 0x20, 0x04, 0x7b, 0x09, 0x38, 0x03, 0x00, 0x40, 0x3f, 0x07, 0x00, 0xf4, 0x01, 0x2c, 0x01,
+    0x32, 0x00, 0x0d, 0x00, 0x06, 0x00, 0x01, 0x00, 0xa0, 0x00, 0xb4, 0x00, 0xc8, 0x00, 0x92, 0xda,
+];
+
+#[test]
+fn sensibilidade_padrao_e_o_quadro_gravado_da_central() {
+    igual_ao_gravado(
+        rms1_proto::comando::sensibilidade_das_placas(5),
+        &ARMADURA_VOZ_NIVEL_5,
+    );
+}
+
+/// Os picos dos 11 níveis, pela conta da DJI rodada em Python (`int(160 * (1.5 - nivel / 10))`, e 180 e 200): o truncamento
+/// dá 251 no nível 1 e 125 no nível 8.
+#[test]
+fn os_picos_de_cada_nivel_sao_os_da_conta_da_dji() {
+    let esperado: [[u16; 3]; 11] = [
+        [240, 270, 300],
+        [224, 251, 280],
+        [208, 234, 260],
+        [192, 216, 240],
+        [176, 198, 220],
+        [160, 180, 200],
+        [144, 162, 180],
+        [128, 144, 160],
+        [112, 125, 140],
+        [96, 108, 120],
+        [80, 90, 100],
+    ];
+    for (nivel, e) in esperado.iter().enumerate() {
+        assert_eq!(
+            rms1_proto::comando::sensibilidade_das_placas(nivel as u8),
+            Comando::ArmaduraVoz { picos: *e },
+            "nível {nivel}"
+        );
+    }
+    assert_eq!(
+        rms1_proto::comando::sensibilidade_das_placas(200),
+        Comando::ArmaduraVoz {
+            picos: esperado[10]
+        },
+        "acima de 10, o 10, como a DJI limita"
+    );
 }

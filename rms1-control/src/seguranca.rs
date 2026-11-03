@@ -5,16 +5,23 @@
 //!
 //! - **Valor não finito é recusado**, nunca limitado: limitar `NaN` daria um valor plausível na ponta.
 //! - **O resto é limitado à faixa, e reportado**, porque um cliente precisa saber por que o robô não obedeceu.
-//! - **Desarmada, não envia nada que mova.** Ligar o processo não move o robô. Só a telemetria sai desarmada: registrar,
-//!   cancelar, assinar e responder, e nada mais cabe em [`Pedido`].
+//! - **Desarmada, não envia nada que mova.** Ligar o processo não move o robô. Desarmada, saem a telemetria (registrar,
+//!   cancelar, assinar e responder, e nada mais cabe em [`Pedido`]) e, uma vez, a sensibilidade das placas, que a DJI
+//!   manda pela central que paramos ([`Seguranca::ajustar_placas`]).
 //! - **Sem comando dentro do prazo, as rodas zeram.** A torre fica: uma torre parada é inofensiva, e uma
 //!   velocidade velha leva o robô à parede.
+//! - **Seguindo a torre, parar é um `0x3f/0x22` a zero, uma vez**, como a DJI (`_set_chassis_stop_depend_mode`, em
+//!   `rm_ctrl.py`). Repetido a cada ciclo, ele mantinha o controlador alinhando o chassi com a torre, e no ar o chassi nunca
+//!   alinha: as rodas foram a 850 rpm na mão do dono (2026-11-03, `out/2026-11-03-firmware-controlador/levantado/`, no laboratório).
+//! - **Levantado, as rodas param**, em qualquer modo, por `0x3f/0x20` a zero, e ficam paradas até o robô voltar ao chão e o
+//!   cliente parar de pedir movimento. Seguir a torre volta só com um pedido de movimento novo.
 
 use std::time::{Duration, Instant};
 
 use rms1_proto::barramento::Pedido;
 use rms1_proto::comando::{
     EIXO_PITCH, EIXO_YAW, TAREFA_PRIMEIRA, TAREFA_ULTIMA, TAXA_MOVENDO, TAXA_PARADA, byte_do_no,
+    sensibilidade_das_placas,
 };
 use rms1_proto::{Comando, Nos, PermissaoForma, SeqPorComando};
 use rms1d_params::{Params, Permissao};
@@ -31,6 +38,7 @@ pub const LIMITE_RPM: &str = "max_rpm";
 pub const LIMITE_TORRE: &str = "gimbal_range";
 pub const LIMITE_NAO_FINITO: &str = "not_finite";
 pub const LIMITE_DESARMADO: &str = "disarmed";
+pub const LIMITE_LEVANTADO: &str = "picked_up";
 
 /// `0x3f/0x19`, kit de programação: `rm_define.chassis_sdk_mode`.
 const MODO_CHASSI_PROGRAMA: u8 = 1;
@@ -78,6 +86,12 @@ pub struct Seguranca<C: Corpo> {
     torre_aplicada: Option<[f64; 2]>,
     taxa_ligada: bool,
     tarefa: u8,
+    /// O último `0x3f/0x22` enviado, no sinal da DJI; `None` obriga o próximo.
+    ultimo_seguir: Option<[f32; 2]>,
+    /// O robô foi levantado, e as rodas seguem paradas até ele voltar ao chão e o cliente parar de pedir movimento.
+    parado_por_levantar: bool,
+    /// O nível da DJI, de 0 a 10, de `rms1d.toml`.
+    sensibilidade: u8,
 }
 
 impl<C: Corpo> Seguranca<C> {
@@ -89,6 +103,7 @@ impl<C: Corpo> Seguranca<C> {
                 remetente_alavanca: byte_do_no(p.nos.remetente_alavanca),
                 chassi: byte_do_no(p.nos.chassi),
                 torre: byte_do_no(p.nos.torre),
+                armadura: byte_do_no(p.nos.armadura),
             },
             seq: SeqPorComando::default(),
             permissao: match p.corpo.permissao {
@@ -116,6 +131,9 @@ impl<C: Corpo> Seguranca<C> {
             torre_aplicada: None,
             taxa_ligada: false,
             tarefa: 0,
+            ultimo_seguir: None,
+            parado_por_levantar: false,
+            sensibilidade: p.armadura.sensibilidade,
         }
     }
 
@@ -171,6 +189,15 @@ impl<C: Corpo> Seguranca<C> {
         }
     }
 
+    /// A sensibilidade das placas, `0x3f/0x07`, da central para a placa, como a DJI a mandou (`bancada-150s`). Não move nada.
+    pub fn ajustar_placas(&mut self, saude: &Saude) {
+        self.enviar(sensibilidade_das_placas(self.sensibilidade), saude);
+        tracing::info!(
+            nivel = self.sensibilidade,
+            "sensibilidade das placas enviada"
+        );
+    }
+
     /// Ligar ao corpo: o modo do chassi, e o de quem segue quem. A permissão começa no próximo ciclo.
     pub fn armar(&mut self, saude: &Saude) {
         if self.armado {
@@ -182,6 +209,8 @@ impl<C: Corpo> Seguranca<C> {
         self.armado = true;
         self.configurar_modo(saude);
         self.ultimo_alvo = None;
+        self.ultimo_seguir = None;
+        self.parado_por_levantar = false;
         tracing::info!(modo = self.modo.nome(), "armado");
     }
 
@@ -189,8 +218,10 @@ impl<C: Corpo> Seguranca<C> {
         if !self.armado {
             return;
         }
-        // Parar como a DJI, conforme o modo (`_set_chassis_stop_depend_mode`): rodas não valem seguindo a torre.
+        // Parar como a DJI, conforme o modo (`_set_chassis_stop_depend_mode`): rodas não valem seguindo a torre. Levantado,
+        // o seguir a zero faria o chassi tentar alinhar no ar: rodas a zero, como no ciclo.
         let parar = match self.modo {
+            _ if self.parado_por_levantar => Comando::Rodas([0; 4]),
             Modo::ChassiSegueTorre => Comando::Seguir {
                 vx: 0.0,
                 vy: 0.0,
@@ -206,6 +237,7 @@ impl<C: Corpo> Seguranca<C> {
             self.taxa_ligada = false;
         }
         self.armado = false;
+        self.parado_por_levantar = false;
         tracing::info!("desarmado");
     }
 
@@ -291,7 +323,13 @@ impl<C: Corpo> Seguranca<C> {
     }
 
     /// O ciclo: o único caminho até o corpo.
-    pub fn aplicar(&mut self, leitura: &Leitura, agora: Instant, saude: &Saude) -> Aplicado {
+    pub fn aplicar(
+        &mut self,
+        leitura: &Leitura,
+        levantado: bool,
+        agora: Instant,
+        saude: &Saude,
+    ) -> Aplicado {
         let mudou_modo = leitura.modo != self.modo;
         self.modo = leitura.modo;
         if !self.armado {
@@ -309,12 +347,25 @@ impl<C: Corpo> Seguranca<C> {
         }
         if mudou_modo {
             self.configurar_modo(saude);
+            self.ultimo_seguir = None;
         }
         let mut limites = Vec::new();
         self.enviar(Comando::Permissao(self.permissao), saude);
         let mut twist = self.limitar_twist(leitura, &mut limites);
+        if levantado {
+            self.parado_por_levantar = true;
+        } else if self.parado_por_levantar && twist == [0.0; 3] {
+            self.parado_por_levantar = false;
+        }
         let mut giro_para_torre = 0.0;
         match self.modo {
+            _ if self.parado_por_levantar => {
+                limites.push(LIMITE_LEVANTADO);
+                twist = [0.0; 3];
+                self.enviar(Comando::Rodas([0; 4]), saude);
+                // Um seguir a zero, mesmo no chão, faria o chassi alinhar sem ninguém pedir: só com movimento pedido.
+                self.ultimo_seguir = Some([0.0; 2]);
+            }
             Modo::Livre | Modo::TorreSegueChassi => {
                 let (rodas, escala) = self.rodas(twist, &mut limites);
                 self.enviar(Comando::Rodas(rodas), saude);
@@ -322,15 +373,20 @@ impl<C: Corpo> Seguranca<C> {
             }
             Modo::ChassiSegueTorre => {
                 // O contrato tem y à esquerda; a DJI, à direita (`_move_ctrl` em `rm_ctrl.py`). Subtração, porque
-                // `-0.0` sairia no fio com o bit de sinal, e parado tem de ser zero.
-                self.enviar(
-                    Comando::Seguir {
-                        vx: twist[0] as f32,
-                        vy: (0.0 - twist[1]) as f32,
-                        angulo: 0.0,
-                    },
-                    saude,
-                );
+                // `-0.0` sairia no fio com o bit de sinal, e parado tem de ser zero. Com movimento pedido, inclusive só o giro,
+                // que a torre leva e o chassi persegue (`_turn` em `rm_ctrl.py`), a cada ciclo; parado, uma vez.
+                let v = [twist[0] as f32, (0.0 - twist[1]) as f32];
+                if twist != [0.0; 3] || self.ultimo_seguir != Some(v) {
+                    self.enviar(
+                        Comando::Seguir {
+                            vx: v[0],
+                            vy: v[1],
+                            angulo: 0.0,
+                        },
+                        saude,
+                    );
+                    self.ultimo_seguir = Some(v);
+                }
                 // O giro vira taxa da torre: o aplicado é o que cabe nela.
                 let limite = self.giro_torre_max.to_radians();
                 giro_para_torre = twist[2].clamp(-limite, limite);

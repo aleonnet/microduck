@@ -13,7 +13,7 @@ use crate::corpo::Corpo;
 use crate::intencoes::{Intencoes, Modo, PedidoEnergia};
 use crate::saude::Saude;
 use crate::seguranca::Seguranca;
-use crate::telemetria::{Amostra, Assinante};
+use crate::telemetria::{Amostra, Assinante, BIT_LEVANTADO};
 
 /// O estado de um ciclo. Montado só se alguém está assinando.
 #[derive(Debug, Clone, PartialEq)]
@@ -48,6 +48,8 @@ pub struct Laco<C: Corpo> {
     periodo: Duration,
     janela_inicio: Option<Instant>,
     janela_ciclos: u32,
+    /// A sensibilidade das placas já foi: vai uma vez, quando chega o primeiro pacote, e o barramento está vivo.
+    placas_ajustadas: bool,
 }
 
 const JANELA: Duration = Duration::from_secs(1);
@@ -66,6 +68,7 @@ impl<C: Corpo> Laco<C> {
             periodo: Duration::from_secs_f64(1.0 / f64::from(p.laco.hz)),
             janela_inicio: None,
             janela_ciclos: 0,
+            placas_ajustadas: false,
         }
     }
 
@@ -77,8 +80,15 @@ impl<C: Corpo> Laco<C> {
             None => {}
         }
         let leitura = self.intencoes.ler(agora);
-        let aplicado = self.seguranca.aplicar(&leitura, agora, &self.saude);
+        let levantado = self.levantado(agora);
+        let aplicado = self
+            .seguranca
+            .aplicar(&leitura, levantado, agora, &self.saude);
         self.ler_corpo(agora);
+        if !self.placas_ajustadas && self.saude.idade_do_pacote(agora).is_some() {
+            self.seguranca.ajustar_placas(&self.saude);
+            self.placas_ajustadas = true;
+        }
         self.assinante.ciclo(agora, &mut self.pedidos);
         self.enviar_pedidos();
         if self.assinante.tomar_mudanca() {
@@ -125,6 +135,18 @@ impl<C: Corpo> Laco<C> {
         if duracao > self.periodo {
             self.saude.perdidos.fetch_add(1, Ordering::Relaxed);
         }
+    }
+
+    /// Levantado pelo nosso cálculo ou pelo bit do controlador, com telemetria recente: dado velho não diz onde o robô está.
+    fn levantado(&self, agora: Instant) -> bool {
+        let recente = self
+            .saude
+            .idade_do_pacote(agora)
+            .is_some_and(|i| i < self.idade_maxima_pacote);
+        let a = self.assinante.amostra();
+        recente
+            && (a.estado_chassi & BIT_LEVANTADO != 0
+                || a.estimativa.as_ref().is_some_and(|c| c.levantado))
     }
 
     fn enviar_pedidos(&mut self) {

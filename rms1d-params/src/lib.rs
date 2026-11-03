@@ -32,6 +32,7 @@ pub struct Params {
     pub torre: Torre,
     pub telemetria: Telemetria,
     pub estimativa: Estimativa,
+    pub armadura: Armadura,
     pub dji: Dji,
 }
 
@@ -82,6 +83,8 @@ pub struct Nos {
     pub remetente_alavanca: u16,
     pub chassi: u16,
     pub torre: u16,
+    /// Quem recebe a sensibilidade das placas: a central da DJI a mandou à 2401 (`bancada-150s`).
+    pub armadura: u16,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
@@ -185,6 +188,14 @@ pub struct Estimativa {
     pub lacuna_ms: u64,
 }
 
+/// As placas de golpe.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct Armadura {
+    /// A sensibilidade da DJI, de 0 a 10: maior, golpe mais leve conta (`RobotArmor.set_hit_sensitivity`, `rm_ctrl.py`).
+    pub sensibilidade: u8,
+}
+
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct Dji {
@@ -221,6 +232,7 @@ impl Default for Nos {
             remetente_alavanca: 900,
             chassi: 306,
             torre: 400,
+            armadura: 2401,
         }
     }
 }
@@ -302,6 +314,13 @@ impl Default for Estimativa {
             // O ritmo é de 20 ms (`gravacoes_lab.rs`, `o_relogio_anda_20_ms_por_pacote`): 1 s são 50 pacotes perdidos.
             lacuna_ms: 1000,
         }
+    }
+}
+
+impl Default for Armadura {
+    fn default() -> Self {
+        // O padrão da DJI: `reset_hit_sensitivity` volta a 5, e 5 é o que a central mandou ao ligar (`bancada-150s`).
+        Self { sensibilidade: 5 }
     }
 }
 
@@ -506,6 +525,12 @@ impl Params {
         if self.seguranca.pitch_min_grau >= self.seguranca.pitch_max_grau {
             return ruim("seguranca.pitch_min_grau tem de ser menor que pitch_max_grau".to_owned());
         }
+        if self.armadura.sensibilidade > 10 {
+            return ruim(format!(
+                "armadura.sensibilidade fora de 0 a 10, a faixa da DJI: {}",
+                self.armadura.sensibilidade
+            ));
+        }
         if self.torre.coordenada > 7 {
             return ruim(format!(
                 "torre.coordenada cabe em 3 bits: {}",
@@ -571,6 +596,7 @@ mod testes {
             "[seguranca]\nvezes_modo_ao_armar = 0\n",
             "[telemetria]\njanela_ms = 500\n",
             "[telemetria]\ntentativas = 0\n",
+            "[armadura]\nsensibilidade = 11\n",
         ] {
             assert!(de(t).is_err(), "{t}");
         }

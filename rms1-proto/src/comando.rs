@@ -27,6 +27,8 @@ pub mod id {
     pub const MODO_TORRE: (u8, u8) = (0x04, 0x4c);
     /// `torre.GIMBAL_EXT_CTRL_ACCEL`.
     pub const TORRE_TAXA: (u8, u8) = (0x04, 0x0c);
+    /// `armadura.RM_ARMOR_VOICE_PARAMS_SET`: o que a placa conta como golpe.
+    pub const ARMADURA_VOZ: (u8, u8) = (0x3f, 0x07);
 }
 
 /// Quem é quem no barramento: o número da DJI, centena o hospedeiro e resto o índice (`306` é o
@@ -37,6 +39,8 @@ pub struct Nos {
     pub remetente_alavanca: u8,
     pub chassi: u8,
     pub torre: u8,
+    /// Quem recebe a sensibilidade das placas.
+    pub armadura: u8,
 }
 
 /// Número da DJI para o byte do quadro: `índice * 32 + hospedeiro` (`tools.hostid2packid`).
@@ -53,6 +57,7 @@ impl Default for Nos {
             remetente_alavanca: byte_do_no(900),
             chassi: byte_do_no(306),
             torre: byte_do_no(400),
+            armadura: byte_do_no(2401),
         }
     }
 }
@@ -110,6 +115,25 @@ pub enum Comando {
         pitch_ddeg_s: i16,
         controle: u8,
     },
+    /// `0x3f/0x07`, os três picos do golpe; o resto é fixo na DJI. Feito por [`sensibilidade_das_placas`].
+    ArmaduraVoz { picos: [u16; 3] },
+}
+
+/// Os campos fixos de `Armor.set_hit_sensitivity` (`rm_module.py:773-793`), em ordem: energia de entrada e de saída,
+/// duração máxima e mínima, espera de silêncio e contagem mínima de picos.
+const VOZ_FIXOS: [u16; 6] = [500, 300, 50, 13, 6, 1];
+/// O primeiro byte, como o robô o recebe: a central da DJI mandou `0x00` à placa 2401 nas duas vezes gravadas
+/// (`bancada-150s`, `hdvt_uav.strace`); o script da DJI põe `0x3f` na mensagem que vai à central, que a refaz.
+const VOZ_TIPO: u8 = 0x00;
+
+/// A sensibilidade da DJI, de 0 a 10: `k = 1,5 - nível/10` (`RobotArmor.set_hit_sensitivity`, `rm_ctrl.py:2554-2567`), e
+/// os picos `int(160k)`, `int(180k)` e `int(200k)` (`rm_module.py:774-776`). Maior nível, picos menores: mais sensível. O
+/// padrão da DJI é 5 (`reset_hit_sensitivity`). Fora de 0 a 10, a DJI limita, e aqui também.
+pub fn sensibilidade_das_placas(nivel: u8) -> Comando {
+    let k = 1.5 - f64::from(nivel.min(10)) / 10.0;
+    Comando::ArmaduraVoz {
+        picos: [160.0, 180.0, 200.0].map(|base: f64| (base * k) as u16),
+    }
 }
 
 /// `accel_contral_flag` da DJI, para a torre em movimento (`rm_module.py:376`).
@@ -137,6 +161,7 @@ impl Comando {
             Self::ModoTorre(_) => id::MODO_TORRE,
             Self::TorreAngulos { .. } => id::TORRE_ANGULOS,
             Self::TorreTaxa { .. } => id::TORRE_TAXA,
+            Self::ArmaduraVoz { .. } => id::ARMADURA_VOZ,
         }
     }
 
@@ -202,6 +227,13 @@ impl Comando {
                 d.push(controle);
                 (nos.remetente, nos.torre, d)
             }
+            Self::ArmaduraVoz { picos } => {
+                let mut d = vec![VOZ_TIPO];
+                for v in VOZ_FIXOS.iter().chain(picos.iter()) {
+                    d.extend_from_slice(&v.to_le_bytes());
+                }
+                (nos.remetente_alavanca, nos.armadura, d)
+            }
         };
         let (cmd_set, cmd_id) = self.id();
         Quadro {
@@ -209,7 +241,11 @@ impl Comando {
             destino,
             seq,
             resposta: false,
-            pede: PedeAck::Nada,
+            // A central pediu resposta ao fim (atributo `0x40`) nos dois quadros gravados à placa.
+            pede: match self {
+                Self::ArmaduraVoz { .. } => PedeAck::AoTerminar,
+                _ => PedeAck::Nada,
+            },
             cmd_set,
             cmd_id,
             dados,

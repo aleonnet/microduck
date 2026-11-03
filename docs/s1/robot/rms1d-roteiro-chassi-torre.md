@@ -18,7 +18,7 @@ Compila, sobe o serviço local, abre a página e fica aguardando o robô na rede
 | 4 | segure `W`, `S`, `A`, `D`, `Q`, `E` | anda e gira no sentido da tecla, a 1,2 m/s e 2,4 rad/s; com `Shift`, mais rápido. O robô EP fica à esquerda do início, e `A` bate nele |
 | 5 | setas, e arrastar na tela no modo Pilotar | a torre gira e inclina no sentido certo, até os limites da tabela |
 | 6 | `F` até `Torre segue o chassi` | `Q` gira chassi e torre juntos, e arrastar só muda a inclinação |
-| 7 | `F` até `Chassi segue a torre` | `W` anda; `Q` gira a torre, e o chassi vai atrás; ao soltar, ele alinha e as rodas param. A faixa avisa do que acontece fora do chão |
+| 7 | `F` até `Chassi segue a torre` | `W` anda; `Q` gira a torre, e o chassi vai atrás; ao soltar, ele alinha e as rodas param |
 | 8 | feche a aba com `W` apertado | o robô para sozinho em 500 ms |
 | 9 | abra "Quadros do corpo", na caixa de controle | contagem por comando; nenhum em vermelho |
 | 10 | botão `Telemetria` | cada leitura presa à sua peça, "50 pacotes por segundo" no canto; ao andar e girar a câmera, as linhas seguem as peças |
@@ -35,12 +35,12 @@ Robô ligado com a DJI e conectado ao mesmo roteador deste Mac: o anúncio na re
 | 2a | botão `Telemetria` | "50 pacotes por segundo"; o 3D colorido e parado como o robô; bateria do robô | "O controlador recusou", ou 3D cinza: anote o código da tela |
 | 3 | `Armar`, e `W`, `S`, `A`, `D`, `Q`, `E` | cada roda gira no sentido do simulador; ao soltar, para; no painel, a rotação de cada roda tem o sinal do movimento | sentido errado, ou segue girando |
 | 4 | setas e arrasto | a torre obedece na hora, sem tremer, nos dois eixos, no sentido certo e até o limite; a faixa mostra "resposta em X ms" | eixo ou sentido errado, tremor ou atraso |
-| 5 | `F` até `Chassi segue a torre`, `Q` e soltar | as rodas seguem girando, como a faixa avisa: fora do chão o chassi nunca alinha | |
+| 5 | `F` até `Chassi segue a torre`, armado e sem pilotar: levante o robô e gire-o na mão | as rodas não disparam; se dispararem, o `rms1d` as para em até 4 s, e a faixa diz que parou por estar levantado. No chão, soltas as teclas, ele volta a obedecer | rodas girando por mais de 4 s; a gravação de 2026-11-03 mostra 850 rpm por 11 s antes do conserto |
 | 6 | no chão, em espaço que o dono liberar: `Q` e soltar, depois os três modos | o chassi alinha e para; obedece nos três | segue girando no chão |
-| 6a | desarmado, bata com a mão em cada uma das 6 placas | a placa certa pisca no gêmeo, e só o contador dela sobe | placa errada |
+| 6a | desarmado, toque de leve em cada uma das 6 placas | a placa certa pisca no gêmeo, e só o contador dela sobe; com a sensibilidade 10 de `rms1d.toml`, um toque leve conta | placa errada, ou só a placa 1 ficou sensível: a DJI manda a sensibilidade só à 2401 |
 | 6b | levante o robô; depois incline o nariz para cima, e para um lado | "levantado" acende; o gêmeo inclina para o mesmo lado que o robô | gêmeo para o outro lado: é a hipótese do sinal |
 | 6c | no chão, ande e gire | o gêmeo anda e gira com o robô, e o rastro fica no chão | gêmeo parado ou para outro lado |
-| 7 | "Voltar ao modo DJI" | o simulador volta na hora; o robô termina ao fundo, com os passos na faixa; a DJI voltou; a gravação fica em `out/` do laboratório | não volta, ou segue andando |
+| 7 | "Voltar ao modo DJI" | o simulador volta na hora; o robô termina ao fundo, com os passos na faixa; a DJI voltou; a gravação fica em `~/.local/state/rms1/gravacoes/<data>/` | não volta, ou segue andando |
 | 8 | desligue na chave | só isso fecha a porta root, e a faixa lembra | |
 
 **Se as rodas não obedecerem:** em `deploy/s1/rms1d.toml`, `permissao = "proroklab"`, e "Ativar robô" de novo. Se a torre errar, `coordenada = 3`. Registre qual valeu.
