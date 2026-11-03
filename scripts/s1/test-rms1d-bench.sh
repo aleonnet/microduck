@@ -26,6 +26,7 @@ case "$*" in
   *parada_conferida*) tem dji_vivo && echo AINDA_NO_AR_dji_hdvt_uav; tem serial_presa && echo SERIAL_PRESA /proc/9/fd/3; echo parada_conferida ;;
   *"pidof rms1d"*) if tem rms1d_morto; then echo RMS1D_MORTO; else echo rms1d_no_ar; fi ;;
   *"pidof dji_hdvt_uav"*) echo dji_voltou ;;
+  *sha256sum*) tem mesmo_binario && printf '%s  /data/debian/opt/robot/bin/rms1d\r\n' "$SOMA_BIN" ;;
   *marca_gravada*) if tem sem_marca; then exit 0; fi; touch "$DEFEITO.marca"; echo marca_gravada ;;
   *marca_viva*) if [ -f "$DEFEITO.uma_falha" ] && [ -f "$DEFEITO.reiniciou" ]; then rm -f "$DEFEITO.uma_falha"; exit 1; fi; if [ -f "$DEFEITO.marca" ]; then echo marca_viva; else echo marca_sumiu; fi ;;
   *"shell reboot"*) touch "$DEFEITO.reiniciou"; rm -f "$DEFEITO.conectado"; tem nao_reinicia || rm -f "$DEFEITO.marca" ;;
@@ -66,6 +67,7 @@ reprova() {
 }
 
 cargo build -q -p rms1d -p robotctl
+export SOMA_BIN="$(shasum -a 256 target/armv7-unknown-linux-gnueabihf/release/rms1d | cut -d' ' -f1)"
 
 echo "--- o caminho certo"
 scripts/s1/rms1d-bench.sh up > "$T/up.txt" 2>&1 || { echo "up falhou:"; tail -20 "$T/up.txt"; exit 1; }
@@ -80,6 +82,35 @@ antes "stop dji_monitor" "/opt/robot/bin/rms1d --config"
 antes "pkill -TERM rms1d" "pull /data/debian/var/lib/robot/rms1d-quadros.ndjson"
 antes "pull /data/debian/var/lib/robot/rms1d-quadros.ndjson" "/opt/robot/bin/rms1d --config"
 grep "stop dji_monitor" "$ADB_LOG" | grep -q "stop dji_monitor.*stop dji_hdvt_uav" || { echo "O MONITOR NÃO VEIO PRIMEIRO"; falhou=1; }
+pediu "pull /data/debian/var/lib/robot/rms1d-recebido.txt"
+pediu "push target/armv7-unknown-linux-gnueabihf/release/rms1d"
+# Cada passo termina com o tempo dele: tantas linhas de tempo quanto passos, e cada uma logo depois do seu passo.
+python3 -I - "$T/up.txt" <<'PY' || falhou=1
+import re, sys
+linhas = [l[len("[rms1d-bench] "):].rstrip("\n") for l in open(sys.argv[1], encoding="utf-8") if l.startswith("[rms1d-bench] ")]
+passos = [l for l in linhas if not l.startswith(("TEMPO ", "AVISO", "gravação anterior", "sem gravação", "no ar,"))]
+tempos = [l for l in linhas if re.fullmatch(r"TEMPO \d+ .+", l)]
+# Cada passo tem o seu tempo, com o mesmo texto, antes do passo seguinte.
+fechados = [re.fullmatch(r"TEMPO \d+ (.+)", l).group(1) for l in tempos]
+seguido = fechados == passos
+print(("tempo por passo: %d passos, %d tempos" % (len(passos), len(tempos))) if len(passos) == len(tempos) and seguido
+      else "PASSO SEM TEMPO: %r" % linhas)
+sys.exit(0 if len(passos) == len(tempos) and seguido else 1)
+PY
+
+echo "--- o mesmo binário não vai de novo"
+echo mesmo_binario > "$DEFEITO"
+: > "$ADB_LOG"
+scripts/s1/rms1d-bench.sh up > "$T/up.txt" 2>&1 || { echo "up com o mesmo binário falhou:"; tail -5 "$T/up.txt"; falhou=1; }
+if grep -qF "push target/armv7-unknown-linux-gnueabihf/release/rms1d" "$ADB_LOG"; then echo "ENVIOU O MESMO BINÁRIO"; falhou=1; else echo "mesmo binário: não enviou"; fi
+pediu "push deploy/s1/rms1d.toml /data/debian/etc/robot/rms1d.toml"
+grep -qF "nada a enviar" "$T/up.txt" && echo "mesmo binário: a tela diz" || { echo "MESMO BINÁRIO SEM DIZER"; falhou=1; }
+: > "$DEFEITO"
+
+echo "--- as gravações ficam fora dos repositórios"
+rm -rf "$T/xdg"
+env -u S1_OUT XDG_STATE_HOME="$T/xdg" S1_LAB="$T/lab" scripts/s1/rms1d-bench.sh up > "$T/up.txt" 2>&1 || { echo "up sem S1_OUT falhou:"; tail -5 "$T/up.txt"; falhou=1; }
+if [ -f "$T/xdg/rms1/gravacoes/$(date +%Y-%m-%d)/up.txt" ] && [ ! -e "$T/lab/out" ]; then echo "gravações em \$XDG_STATE_HOME/rms1/gravacoes/<data>/, nada no laboratório"; else echo "GRAVAÇÕES FORA DO LUGAR:"; find "$T/xdg" "$T/lab" 2>/dev/null | head; falhou=1; fi
 
 echo "--- o que tem de parar a subida"
 printf '[dji]\nparar = ["dji_scratch"]\n' > "$T/ruim.toml"
