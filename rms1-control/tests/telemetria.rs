@@ -163,6 +163,31 @@ fn observa_registra_cancela_o_que_viu_e_assina() {
     assert_eq!(b.enlace(), Enlace::Recebendo);
 }
 
+/// O código 2 ao registrar é a versão da biblioteca do controlador diferente da pedida (`dji_hdvt_uav`, `0x3e500`): o robô
+/// respondeu assim 3 de 3 vezes, e a DJI assina mesmo assim (`hdvt_fresh_after_our_reset.strace`). Quem diz se o nó existe é a
+/// assinatura.
+#[test]
+fn registro_com_codigo_2_segue_como_a_dji() {
+    let mut b = banca();
+    b.observar(&[1]);
+    b.corpo_manda(&resposta(id::REGISTRAR, 0x02));
+    b.ciclo(10);
+    assert_eq!(b.enlace(), Enlace::Cancelando, "segue para cancelar");
+    b.corpo_manda(&resposta(id::CANCELAR, 0));
+    b.ciclo(10);
+    assert_eq!(b.saidos(id::ASSINAR).len(), 1, "e assina");
+    b.corpo_manda(&resposta(id::ASSINAR, 0x0f));
+    b.ciclo(10);
+    assert_eq!(
+        b.enlace(),
+        Enlace::Recusado {
+            passo: Passo::Assinar,
+            codigo: 0x0f
+        },
+        "nó que não existe aparece na assinatura"
+    );
+}
+
 /// A DJI responde a todos, com a mesma sequência, e desde o começo.
 #[test]
 fn responde_a_cada_pacote_com_a_mesma_sequencia() {
@@ -200,7 +225,7 @@ fn durante_a_observacao_tambem_responde_e_nao_decodifica() {
 #[test]
 fn recusa_para_e_diz_o_codigo_sem_repetir() {
     for (passo, cmd, codigo) in [
-        (Passo::Registrar, id::REGISTRAR, 0x02),
+        (Passo::Registrar, id::REGISTRAR, 0x0e),
         (Passo::Assinar, id::ASSINAR, 0x23),
     ] {
         let mut b = banca();

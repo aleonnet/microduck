@@ -17,7 +17,8 @@ use std::time::{Duration, Instant};
 use rms1_proto::Quadro;
 use rms1_proto::barramento::{
     self, ASSINATURA, CONTROLADOR, DADO_JA_ASSINADO, FREQUENCIA_HZ, Layout, MENSAGEM,
-    MENSAGEM_JA_EXISTE, MENSAGEM_NAO_EXISTE, NO_ASSINANTE, NO_JA_EXISTE, OK, Pacote, Pedido, id,
+    MENSAGEM_JA_EXISTE, MENSAGEM_NAO_EXISTE, NO_ASSINANTE, NO_JA_EXISTE, OK, Pacote, Pedido,
+    VERSAO_NAO_CONFERE, id,
 };
 use rms1d_params::Params;
 
@@ -560,7 +561,13 @@ impl Assinante {
                 self.proximo_cancelamento(agora, saida);
             }
             (Enlace::Registrando, id::REGISTRAR) => {
-                if codigo == OK || codigo == NO_JA_EXISTE {
+                if codigo == VERSAO_NAO_CONFERE {
+                    // A resposta deste controlador ao registro, 3 de 3 vezes no robô; a DJI segue. A assinatura diz se o nó existe.
+                    tracing::info!(
+                        "registro com versão diferente, como a DJI recebe: seguindo para a assinatura"
+                    );
+                }
+                if codigo == OK || codigo == NO_JA_EXISTE || codigo == VERSAO_NAO_CONFERE {
                     self.proximo_cancelamento(agora, saida);
                 } else {
                     self.recusa(Passo::Registrar, codigo);

@@ -53,6 +53,9 @@ const TEMPO: usize = 8;
 /// Códigos de sucesso. Qualquer outro é recusa, e o sentido está em [`sentido_do_codigo`].
 pub const OK: u8 = 0x00;
 pub const NO_JA_EXISTE: u8 = 0x50;
+/// Versão do nó diferente da biblioteca do controlador: `0x3e500` compara os 16 bits altos. O robô respondeu assim 3 de 3 vezes,
+/// e a DJI assina mesmo assim.
+pub const VERSAO_NAO_CONFERE: u8 = 0x02;
 pub const MENSAGEM_NAO_EXISTE: u8 = 0x0c;
 pub const MENSAGEM_JA_EXISTE: u8 = 0x04;
 pub const DADO_JA_ASSINADO: u8 = 0x23;
