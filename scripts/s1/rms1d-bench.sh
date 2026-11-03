@@ -104,8 +104,13 @@ up() {
     if [ "$rc" != 0 ]; then
         # Serial muda e telemetria recusada são o que esta prova quer saber, e dá para pilotar sem elas: avisa e segue. Qualquer
         # outra coisa para.
-        grep -q "mudo\|telemetria" "$OUT/saude.txt" || falha "o rms1d está doente"
-        diz "AVISO: $(grep "robot " "$OUT/saude.txt" | head -1). Se as rodas também não obedecerem, comece por aqui."
+        if grep -q "mudo" "$OUT/saude.txt"; then
+            diz "AVISO: nada chegou do corpo pela serial. Se as rodas também não obedecerem, comece por aqui."
+        elif grep -q "telemetria" "$OUT/saude.txt"; then
+            diz "AVISO: sem telemetria ($(grep "robot " "$OUT/saude.txt" | head -1 | sed 's/^robot *//')). Dá para pilotar; o gêmeo e o painel ficam sem dados."
+        else
+            falha "o rms1d está doente"
+        fi
     fi
     diz "no ar, desarmado. Nada se moveu."
 }
