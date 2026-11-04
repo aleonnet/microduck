@@ -113,6 +113,12 @@ Nas gravações de 2026-11-03:
 
 **Sem prova:** o levantado com o robô carregado e as rodas girando, ou levantado devagar demais para o controlador acusar velocidade; o escorregamento real das rodas.
 
+## Ativação pela bancada
+
+`scripts/s1/rms1d-bench.sh up` escolhe pelo que o robô tem: o mesmo `rms1d` no ar, com o mesmo binário e a mesma configuração pela soma `sha256`, e saudável, só religa a ponte ("Conectando ao robô"); outro `rms1d` no ar, "Atualizando o robô"; nada nosso, "Preparando o robô". Os três terminam em "Robô pronto". O binário só vai ao robô quando a soma muda, e os processos da DJI só param se estiverem no ar.
+
+As gravações do `rms1d` que sai (`corpo.gravar` e `corpo.gravar_recebido`) mudam de nome no robô para `<arquivo>.robo-<data>-<hora>`, um nome por ativação, e são copiadas ao fundo, logo, para `$XDG_STATE_HOME/rms1/gravacoes/<data>/`; só são apagadas no robô depois de a cópia chegar. A ativação seguinte e a volta à DJI esperam a cópia em curso, com prazo. Prova: `scripts/s1/test-rms1d-bench.sh`, com contraprova de cada caso.
+
 ## Limitação conhecida
 
 Com telemetria, ainda não há malha fechada: `rms1d` manda rpm às rodas, e a velocidade medida não volta ao comando. No simulador, pelo mesmo caminho, a 1,2 m/s por 3 s o desvio é de até 0,006 m, em 8 fases de início. A 3,5 m/s varia de 0,013 a 0,768 m, sem tendência: compatível com o contato dos roletes, mas a causa não está provada. A malha fechada pede plano próprio. Fonte: `tools/simulador/test_quadros.mjs`, no laboratório.
