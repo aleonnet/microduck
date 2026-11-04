@@ -85,20 +85,25 @@ separar_gravacao() { # separar_gravacao <prefixo em $OUT>
     local g r
     { read -r g; read -r r; } < <(gravacoes)
     for f in $g $r; do "${A[@]}" shell "$BB test -f $CHROOT$f && $BB mv -f $CHROOT$f $CHROOT$f.$1" >/dev/null 2>&1 || true; done
+    # A própria cópia grava o seu número e o apaga ao terminar: um número velho no arquivo não fica esperando outro processo.
+    # O número sai do `sh` filho (o pai dele é esta cópia): o bash do macOS, 3.2, não tem `BASHPID`.
     (
+        sh -c 'echo "$PPID"' > "$ESTADO/copia.pid"
         if [ -n "$g" ] && "${A[@]}" pull "$CHROOT$g.$1" "$OUT/$1.quadros"; then "${A[@]}" shell "$BB rm -f $CHROOT$g.$1"; fi
         if [ -n "$r" ] && "${A[@]}" pull "$CHROOT$r.$1" "$OUT/$1.recebido.txt"; then "${A[@]}" shell "$BB rm -f $CHROOT$r.$1"; fi
+        rm -f "$ESTADO/copia.pid"
     ) >"$ESTADO/copia.log" 2>&1 </dev/null &
-    echo $! > "$ESTADO/copia.pid"
 }
 
-# A cópia ao fundo termina antes de outra ativação ou da volta: o reinício a cortaria no meio. Confere que o processo é a cópia,
-# e não outro que herdou o número. Com o prazo vencido, segue: a gravação fica no robô, com o nome da ativação dela.
+# A cópia ao fundo termina antes de outra ativação ou da volta: o reinício a cortaria no meio. Só espera a cópia, que nasce de
+# um `up` desta bancada, e nunca a si mesma nem outro processo que herdou o número (a ponte também tem `rms1d-bench` no nome
+# do socket). Com o prazo vencido, segue: a gravação fica no robô, com o nome da ativação dela.
 esperar_copia() {
     local pid limite=$((SECONDS + ${S1_ESPERA_COPIA:-120}))
     [ -f "$ESTADO/copia.pid" ] || return 0
     pid="$(cat "$ESTADO/copia.pid")"
-    while ps -p "$pid" -o command= 2>/dev/null | grep -q rms1d-bench; do
+    [ "$pid" != "$$" ] || return 0
+    while ps -p "$pid" -o command= 2>/dev/null | grep -q "rms1d-bench.sh up"; do
         if [ "$SECONDS" -ge "$limite" ]; then
             echo "a cópia da gravação anterior não terminou em ${S1_ESPERA_COPIA:-120} s; ela fica no robô, com o nome da ativação dela"
             return 0
@@ -168,7 +173,7 @@ up() {
     # Um `rms1d` de antes sai pelo caminho que para o robô, e antes do envio: binário em uso não se sobrescreve, e a trava
     # faria o novo morrer em silêncio, com o velho respondendo no lugar dele.
     confere sem_rms1d "o rms1d anterior não saiu; desligue o robô na chave" "$BB pkill -TERM rms1d; $BB sleep 1; $BB pidof rms1d >/dev/null && echo RMS1D_ANTIGO_VIVO || echo sem_rms1d"
-    separar_gravacao "robo-$(date +%H%M%S)"
+    separar_gravacao "robo-$(date +%Y%m%d-%H%M%S)"
     if [ -z "$mesmo_bin" ]; then "${A[@]}" push "$BIN" "$CHROOT/opt/robot/bin/rms1d" >/dev/null; fi
     "${A[@]}" push "$TOML" "$CHROOT/etc/robot/rms1d.toml" >/dev/null
     "${A[@]}" shell "chmod 755 $CHROOT/opt/robot/bin/rms1d"

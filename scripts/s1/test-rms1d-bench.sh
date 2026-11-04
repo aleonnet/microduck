@@ -36,7 +36,7 @@ case "$*" in
   *marca_gravada*) if tem sem_marca; then exit 0; fi; touch "$DEFEITO.marca"; echo marca_gravada ;;
   *marca_viva*) if [ -f "$DEFEITO.uma_falha" ] && [ -f "$DEFEITO.reiniciou" ]; then rm -f "$DEFEITO.uma_falha"; exit 1; fi; if [ -f "$DEFEITO.marca" ]; then echo marca_viva; else echo marca_sumiu; fi ;;
   # Só a cópia ao fundo da ativação, de nome `.robo-`, fica lenta: a da própria volta, rápida, não cobre a falta da espera.
-  *" pull "*".robo-"*) if tem copia_lenta; then sleep 4; fi ;;
+  *" pull "*".robo-"*) if tem copia_lenta; then sleep 4; fi; if tem pull_falha; then exit 1; fi ;;
   *"shell reboot"*) touch "$DEFEITO.reiniciou"; rm -f "$DEFEITO.conectado"; tem nao_reinicia || rm -f "$DEFEITO.marca" ;;
 esac
 exit 0
@@ -66,7 +66,7 @@ antes() { # antes <primeiro> <segundo>: as duas linhas existem, nessa ordem
     p="$(grep -nF -- "$1" "$ADB_LOG" | head -1 | cut -d: -f1 || true)"; s="$(grep -nF -- "$2" "$ADB_LOG" | head -1 | cut -d: -f1 || true)"
     if [ -n "$p" ] && [ -n "$s" ] && [ "$p" -lt "$s" ]; then echo "antes: $1, depois: $2"; else echo "FORA DE ORDEM: $1 ($p), $2 ($s)"; falhou=1; fi
 }
-# A cópia da gravação anterior roda ao fundo, depois do "Robô pronto": espera ela acabar antes de olhar ou zerar o registro.
+# A cópia da gravação anterior roda ao fundo, logo depois de separada: espera ela acabar antes de olhar ou zerar o registro.
 esperar_copia() { for f in "$T/e/copia.pid"; do [ -f "$f" ] && while kill -0 "$(cat "$f")" 2>/dev/null; do sleep 0.1; done; done; return 0; }
 # reprova <nome> <palavra na mensagem> <o que não pode ter sido pedido>: `up` tem de parar, com a mensagem.
 reprova() {
@@ -214,6 +214,28 @@ apagou="$(grep -nF "rm -f /data/debian/var/lib/robot/rms1d-recebido.txt.robo-" "
 segunda="$(grep -nF "estado_do_robo" "$ADB_LOG" | sed -n 2p | cut -d: -f1 || true)"
 if [ -n "$apagou" ] && [ -n "$segunda" ] && [ "$apagou" -lt "$segunda" ]; then echo "segunda subida: depois da cópia da primeira"; else echo "SEGUNDA SUBIDA ANTES DA CÓPIA DA PRIMEIRA: $apagou, $segunda"; falhou=1; fi
 : > "$DEFEITO"
+
+echo "--- a cópia que falha não apaga a gravação no robô, e cada ativação usa um nome seu"
+echo pull_falha > "$DEFEITO"
+: > "$ADB_LOG"
+for n in 1 2; do scripts/s1/rms1d-bench.sh up > "$T/up.txt" 2>&1 || { echo "subida $n com o pull falhando parou:"; tail -5 "$T/up.txt"; falhou=1; }; done
+esperar_copia
+if grep -qF "rm -f /data/debian/var/lib/robot/rms1d-quadros.ndjson.robo-" "$ADB_LOG"; then echo "APAGOU NO ROBÔ SEM A CÓPIA TER CHEGADO"; falhou=1; else echo "pull falhou: a gravação fica no robô"; fi
+nomes="$(grep -oE "mv -f /data/debian/var/lib/robot/rms1d-quadros.ndjson /data/debian/var/lib/robot/rms1d-quadros.ndjson[.][^ ]+" "$ADB_LOG" | sort -u | wc -l | tr -d ' ')"
+if [ "$nomes" = 2 ]; then echo "duas ativações: dois nomes"; else echo "DUAS ATIVAÇÕES, $nomes NOME(S)"; falhou=1; fi
+grep -qE "mv -f /data/debian/var/lib/robot/rms1d-quadros.ndjson /data/debian/var/lib/robot/rms1d-quadros.ndjson[.]robo-[0-9]{8}-[0-9]{6}" "$ADB_LOG" && echo "o nome leva a data" || { echo "O NOME NÃO LEVA A DATA"; falhou=1; }
+[ ! -e "$T/e/copia.pid" ] && echo "a cópia apaga o seu número ao terminar" || { echo "O NÚMERO DA CÓPIA FICOU"; falhou=1; }
+: > "$DEFEITO"
+
+echo "--- a espera não espera outro processo que herdou o número da cópia"
+bash -c 'exec -a rms1d-bench-alheio sleep 30' &
+alheio=$!
+echo "$alheio" > "$T/e/copia.pid"
+inicio=$SECONDS
+S1_ESPERA_COPIA=20 scripts/s1/rms1d-bench.sh volta > "$T/volta.txt" 2>&1 || true
+if [ $((SECONDS - inicio)) -lt 15 ]; then echo "número herdado: não esperou"; else echo "ESPEROU UM PROCESSO ALHEIO"; falhou=1; fi
+kill "$alheio" 2>/dev/null || true
+rm -f "$T/e/copia.pid" "$DEFEITO.reiniciou"
 
 echo "--- a volta"
 : > "$ADB_LOG"
