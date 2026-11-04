@@ -13,11 +13,13 @@
 //!   controlador estava no primeiro pacote.
 //! - **Rumo:** o do controlador, que é o giro integrado por ele. O nosso, pelo giro da IMU, sai ao lado para comparar.
 //! - **Levantado:** quando o controlador acusa mais velocidade do que as rodas, por tempo: é o erro dele ao inclinar, e
-//!   no ar as rodas não andam. Mecanismo do `s1d` (`s1d/src/tick.rs`, `LiftDetector`), conferido nas gravações.
+//!   no ar as rodas não andam. Mecanismo do `s1d` (`s1d/src/tick.rs`, `LiftDetector`), conferido nas gravações. E também
+//!   quando o giro pelas rodas passa do giro z da IMU por mais de `giro_levantado_rad_s`, por `giro_levantado_tempo_ms`:
+//!   girando no lugar, no ar, a velocidade em linha reta quase não aparece (gravação de 2026-11-03, 20:40).
 //! - **Gravidade:** pela atitude do controlador. Com o robô quieto, ela é conferida contra a aceleração: a inclinação
 //!   pela atitude e a pela aceleração, em módulo, que não depende do sinal da inclinação, ainda sem prova.
 //!
-//! **Sem prova:** o levantado com o robô carregado e as rodas girando, ou levantado devagar demais para o controlador
+//! **Sem prova:** o levantado com o robô carregado e as rodas paradas, ou levantado devagar demais para o controlador
 //! acusar velocidade; o escorregamento das rodas no chão. A prova é o robô em modo sombra.
 
 use std::collections::VecDeque;

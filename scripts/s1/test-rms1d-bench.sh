@@ -24,6 +24,9 @@ case "$*" in
   *estado_do_robo*)
     # O que o robô tem: o `rms1d` no ar e as somas do programa e da configuração.
     if tem ja_no_ar; then echo RMS1D_VIVO; printf '%s  /data/debian/opt/robot/bin/rms1d\r\n%s  /data/debian/etc/robot/rms1d.toml\r\n' "$SOMA_BIN" "$SOMA_TOML";
+    elif tem outro_no_ar; then echo RMS1D_VIVO; printf '%s  /data/debian/opt/robot/bin/rms1d\r\n%s  /data/debian/etc/robot/rms1d.toml\r\n' 0000 0000;
+    elif tem outro_toml; then echo RMS1D_VIVO; printf '%s  /data/debian/opt/robot/bin/rms1d\r\n%s  /data/debian/etc/robot/rms1d.toml\r\n' "$SOMA_BIN" 0000;
+    elif tem vivo_sem_somas; then echo RMS1D_VIVO;
     elif tem mesmo_binario; then printf '%s  /data/debian/opt/robot/bin/rms1d\r\n' "$SOMA_BIN"; fi ;;
   *"test -d"*) tem sem_chroot || echo chroot_ok ;;
   *"pkill -TERM rms1d"*sem_rms1d*) if tem rms1d_antigo; then echo RMS1D_ANTIGO_VIVO; else echo sem_rms1d; fi ;;
@@ -32,6 +35,8 @@ case "$*" in
   *"pidof dji_hdvt_uav"*) echo dji_voltou ;;
   *marca_gravada*) if tem sem_marca; then exit 0; fi; touch "$DEFEITO.marca"; echo marca_gravada ;;
   *marca_viva*) if [ -f "$DEFEITO.uma_falha" ] && [ -f "$DEFEITO.reiniciou" ]; then rm -f "$DEFEITO.uma_falha"; exit 1; fi; if [ -f "$DEFEITO.marca" ]; then echo marca_viva; else echo marca_sumiu; fi ;;
+  # Só a cópia ao fundo da ativação, de nome `.robo-`, fica lenta: a da própria volta, rápida, não cobre a falta da espera.
+  *" pull "*".robo-"*) if tem copia_lenta; then sleep 4; fi ;;
   *"shell reboot"*) touch "$DEFEITO.reiniciou"; rm -f "$DEFEITO.conectado"; tem nao_reinicia || rm -f "$DEFEITO.marca" ;;
 esac
 exit 0
@@ -88,9 +93,11 @@ antes "stop dji_monitor" "/opt/robot/bin/rms1d --config"
 antes "pkill -TERM rms1d" "mv -f /data/debian/var/lib/robot/rms1d-quadros.ndjson"
 antes "mv -f /data/debian/var/lib/robot/rms1d-quadros.ndjson" "/opt/robot/bin/rms1d --config"
 grep "stop dji_monitor" "$ADB_LOG" | grep -q "stop dji_monitor.*stop dji_hdvt_uav" || { echo "O MONITOR NÃO VEIO PRIMEIRO"; falhou=1; }
-# A cópia da gravação anterior vai ao fundo, depois do "Robô pronto".
+# A gravação anterior muda para um nome desta ativação e é copiada ao fundo, logo; só é apagada no robô depois de chegar.
 esperar_copia
-antes "/opt/robot/bin/rms1d --config" "pull /data/debian/var/lib/robot/rms1d-recebido.txt.anterior"
+antes "mv -f /data/debian/var/lib/robot/rms1d-quadros.ndjson /data/debian/var/lib/robot/rms1d-quadros.ndjson.robo-" "pull /data/debian/var/lib/robot/rms1d-quadros.ndjson.robo-"
+antes "pull /data/debian/var/lib/robot/rms1d-recebido.txt.robo-" "rm -f /data/debian/var/lib/robot/rms1d-recebido.txt.robo-"
+grep -q "Preparando o robô" "$T/up.txt" && echo "nada nosso no robô: prepara" || { echo "NADA NOSSO, SEM PREPARAR:"; tail -5 "$T/up.txt"; falhou=1; }
 grep -q "Robô pronto" "$T/up.txt" && echo "termina em Robô pronto" || { echo "NÃO DISSE ROBÔ PRONTO"; falhou=1; }
 pediu "push target/armv7-unknown-linux-gnueabihf/release/rms1d"
 # Cada passo termina com o tempo dele: tantas linhas de tempo quanto passos, e cada uma logo depois do seu passo.
@@ -127,6 +134,27 @@ done
 pediu "forward tcp:9010 localfilesystem:/data/debian/run/robotd.sock"
 : > "$DEFEITO"
 
+# atualiza <defeito> <envia o binário: sim|nao>: outro `rms1d` no ar, ou o mesmo com outra configuração, ou sem as somas: atualiza,
+# e nunca só conecta. Uma soma vazia ou diferente nunca vale como igual.
+atualiza() {
+    echo "$1" > "$DEFEITO"
+    : > "$ADB_LOG"
+    scripts/s1/rms1d-bench.sh up > "$T/up.txt" 2>&1 || { echo "up em $1 falhou:"; tail -5 "$T/up.txt"; falhou=1; }
+    esperar_copia
+    if grep -q "Atualizando o robô" "$T/up.txt" && ! grep -q "Conectando ao robô" "$T/up.txt" && grep -q "Robô pronto" "$T/up.txt"; then echo "$1: atualiza"; else echo "$1: NÃO ATUALIZOU:"; tail -5 "$T/up.txt"; falhou=1; fi
+    pediu "pkill -TERM rms1d"
+    pediu "push deploy/s1/rms1d.toml /data/debian/etc/robot/rms1d.toml"
+    if grep -qF "push target/armv7-unknown-linux-gnueabihf/release/rms1d" "$ADB_LOG"; then enviou=sim; else enviou=nao; fi
+    [ "$enviou" = "$2" ] && echo "$1: binário enviado $enviou" || { echo "$1: BINÁRIO ENVIADO $enviou, ESPERADO $2"; falhou=1; }
+    : > "$DEFEITO"
+}
+echo "--- outro rms1d no ar: atualiza"
+atualiza outro_no_ar sim
+echo "--- o mesmo rms1d no ar com outra configuração: atualiza"
+atualiza outro_toml nao
+echo "--- o rms1d no ar sem as somas: atualiza"
+atualiza vivo_sem_somas sim
+
 echo "--- as gravações ficam fora dos repositórios"
 rm -rf "$T/xdg"
 env -u S1_OUT XDG_STATE_HOME="$T/xdg" S1_LAB="$T/lab" scripts/s1/rms1d-bench.sh up > "$T/up.txt" 2>&1 || { echo "up sem S1_OUT falhou:"; tail -5 "$T/up.txt"; falhou=1; }
@@ -144,6 +172,11 @@ if [ -s "$ADB_LOG" ]; then echo "TOCOU O ROBÔ COM O ARQUIVO RECUSADO:"; cat "$A
 if S1_BIN="$T/nao-existe" scripts/s1/rms1d-bench.sh up > "$T/up.txt" 2>&1; then echo "SUBIU SEM O BINÁRIO"; falhou=1; fi
 grep -qF "não achei $T/nao-existe" "$T/up.txt" || { echo "SEM O BINÁRIO, SEM DIZER:"; tail -3 "$T/up.txt"; falhou=1; }
 if [ -s "$ADB_LOG" ]; then echo "TOCOU O ROBÔ SEM O BINÁRIO:"; head -3 "$ADB_LOG"; falhou=1; else echo "sem o binário: nada foi pedido ao robô"; fi
+: > "$T/vazio"
+: > "$ADB_LOG"
+if S1_BIN="$T/vazio" scripts/s1/rms1d-bench.sh up > "$T/up.txt" 2>&1; then echo "SUBIU COM O BINÁRIO VAZIO"; falhou=1; fi
+grep -qF "não achei $T/vazio" "$T/up.txt" || { echo "BINÁRIO VAZIO, SEM DIZER:"; tail -3 "$T/up.txt"; falhou=1; }
+if [ -s "$ADB_LOG" ]; then echo "TOCOU O ROBÔ COM O BINÁRIO VAZIO:"; head -3 "$ADB_LOG"; falhou=1; else echo "binário vazio: nada foi pedido ao robô"; fi
 
 echo sem_chroot > "$DEFEITO"
 reprova "sem chroot" "sem chroot" "stop dji_hdvt_uav"
@@ -157,10 +190,29 @@ echo rms1d_morto > "$DEFEITO"
 reprova "rms1d morre ao subir" "não subiu" "forward tcp:9010"
 echo doente > "$DEFEITO"
 reprova "rms1d doente" "doente" ""
+esperar_copia
+pediu "pull /data/debian/var/lib/robot/rms1d-quadros.ndjson.robo-"
 echo serial_muda > "$DEFEITO"
 : > "$ADB_LOG"
 scripts/s1/rms1d-bench.sh up > "$T/up.txt" 2>&1 || { echo "SERIAL MUDA PAROU A SUBIDA:"; tail -5 "$T/up.txt"; falhou=1; }
 if grep -q "AVISO: nada chegou do controlador" "$T/up.txt"; then echo "serial muda: avisa e segue"; else echo "SERIAL MUDA SEM AVISO"; falhou=1; fi
+: > "$DEFEITO"
+
+echo "--- a volta espera a cópia da ativação antes de reiniciar"
+echo copia_lenta > "$DEFEITO"
+: > "$ADB_LOG"
+scripts/s1/rms1d-bench.sh up > "$T/up.txt" 2>&1 || { echo "up com a cópia lenta falhou:"; tail -5 "$T/up.txt"; falhou=1; }
+scripts/s1/rms1d-bench.sh volta > "$T/volta.txt" 2>&1 || { echo "volta com a cópia lenta falhou:"; tail -5 "$T/volta.txt"; falhou=1; }
+antes "rm -f /data/debian/var/lib/robot/rms1d-recebido.txt.robo-" "shell reboot"
+rm -f "$DEFEITO.reiniciou"
+echo "--- a ativação seguinte espera a cópia da anterior antes de tocar o robô"
+: > "$ADB_LOG"
+scripts/s1/rms1d-bench.sh up > "$T/up.txt" 2>&1 || { echo "primeira subida com a cópia lenta falhou:"; tail -5 "$T/up.txt"; falhou=1; }
+scripts/s1/rms1d-bench.sh up > "$T/up2.txt" 2>&1 || { echo "segunda subida com a cópia lenta falhou:"; tail -5 "$T/up2.txt"; falhou=1; }
+esperar_copia
+apagou="$(grep -nF "rm -f /data/debian/var/lib/robot/rms1d-recebido.txt.robo-" "$ADB_LOG" | head -1 | cut -d: -f1 || true)"
+segunda="$(grep -nF "estado_do_robo" "$ADB_LOG" | sed -n 2p | cut -d: -f1 || true)"
+if [ -n "$apagou" ] && [ -n "$segunda" ] && [ "$apagou" -lt "$segunda" ]; then echo "segunda subida: depois da cópia da primeira"; else echo "SEGUNDA SUBIDA ANTES DA CÓPIA DA PRIMEIRA: $apagou, $segunda"; falhou=1; fi
 : > "$DEFEITO"
 
 echo "--- a volta"
@@ -209,5 +261,6 @@ nunca "0x48"
 nunca "stop dji_vision"
 nunca "dd if="
 nunca "remount"
+nunca ".anterior"
 [ "$falhou" = 0 ] || { echo "BANCADA FALSA REPROVOU"; exit 1; }
 echo "BANCADA FALSA OK"

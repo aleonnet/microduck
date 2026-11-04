@@ -98,7 +98,7 @@ O pato faz o mesmo que este desenho: odometria e levantado próprios (`odometry/
 `rms1-control/src/estimativa.rs` calcula, por pacote e pelo relógio do pacote, ao lado do que o controlador manda:
 - **Velocidade:** das quatro rodas, pela inversa da cinemática (`twist_de_rpm`), na média de `janela_ms`. É zero quando o controlador marca parado, porque parado as rodas só dão ruído.
 - **Posição:** essa velocidade, girada pelo rumo do controlador e integrada. Acima de `lacuna_ms` entre dois pacotes, não integra.
-- **Levantado:** o controlador acusa mais velocidade do que as rodas, acima de `levantado_limiar_m_s`, por `levantado_tempo_ms`.
+- **Levantado:** o controlador acusa mais velocidade do que as rodas, acima de `levantado_limiar_m_s`, por `levantado_tempo_ms`. Ou o giro pelas rodas passa do giro z da IMU por mais de `giro_levantado_rad_s`, por `giro_levantado_tempo_ms`.
 - **Gravidade:** pela atitude do controlador, conferida contra a aceleração com o robô quieto. Quieto é parado pelo controlador, com o giro e a aceleração dentro dos limites. Acima de `divergencia_grau` há aviso: é o caso dos -24° presos de 2026-11-03.
 
 Tudo sai em `s1.state.estimate`, ao lado do `body`. **O `robot.state` não muda:** `picked_up`, `odom` e `gravity` seguem com o controlador até a prova no robô em modo sombra, e a troca é decisão do dono. Os limiares ficam em `[estimativa]`, no `rms1d.toml`, e não são números do robô.

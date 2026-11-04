@@ -77,22 +77,34 @@ guardar_gravacao() { # guardar_gravacao <prefixo em $OUT>
     echo "gravação anterior em $OUT"
 }
 
-# Ativação: no robô, só renomeia as gravações do `rms1d` anterior, o que é instantâneo; a cópia pelo Wi-Fi, que chegou a 18 s,
-# fica para depois do "Robô pronto" (`copiar_depois`).
-separar_gravacao() {
+# Ativação: no robô, as gravações do `rms1d` anterior só mudam de nome, o que é instantâneo, para um nome desta ativação, que
+# nenhuma outra sobrescreve. A cópia pelo Wi-Fi, que chegou a 18 s, começa logo, ao fundo, e só apaga a do robô depois de chegar:
+# uma falha adiante na ativação, ou uma ativação seguinte, não perde a gravação (o leitor frio, 2026-11-04: com um `.anterior`
+# fixo e a cópia só depois do "Robô pronto", uma subida que parava no meio deixava a gravação para a próxima apagar).
+separar_gravacao() { # separar_gravacao <prefixo em $OUT>
     local g r
     { read -r g; read -r r; } < <(gravacoes)
-    for f in $g $r; do "${A[@]}" shell "$BB test -f $CHROOT$f && $BB mv -f $CHROOT$f $CHROOT$f.anterior" >/dev/null 2>&1 || true; done
-}
-
-copiar_depois() { # copiar_depois <prefixo em $OUT>: ao fundo, sem segurar quem chamou
-    local g r
-    { read -r g; read -r r; } < <(gravacoes)
+    for f in $g $r; do "${A[@]}" shell "$BB test -f $CHROOT$f && $BB mv -f $CHROOT$f $CHROOT$f.$1" >/dev/null 2>&1 || true; done
     (
-        if [ -n "$g" ]; then "${A[@]}" pull "$CHROOT$g.anterior" "$OUT/$1.quadros" || true; fi
-        if [ -n "$r" ]; then "${A[@]}" pull "$CHROOT$r.anterior" "$OUT/$1.recebido.txt" || true; fi
+        if [ -n "$g" ] && "${A[@]}" pull "$CHROOT$g.$1" "$OUT/$1.quadros"; then "${A[@]}" shell "$BB rm -f $CHROOT$g.$1"; fi
+        if [ -n "$r" ] && "${A[@]}" pull "$CHROOT$r.$1" "$OUT/$1.recebido.txt"; then "${A[@]}" shell "$BB rm -f $CHROOT$r.$1"; fi
     ) >"$ESTADO/copia.log" 2>&1 </dev/null &
     echo $! > "$ESTADO/copia.pid"
+}
+
+# A cópia ao fundo termina antes de outra ativação ou da volta: o reinício a cortaria no meio. Confere que o processo é a cópia,
+# e não outro que herdou o número. Com o prazo vencido, segue: a gravação fica no robô, com o nome da ativação dela.
+esperar_copia() {
+    local pid limite=$((SECONDS + ${S1_ESPERA_COPIA:-120}))
+    [ -f "$ESTADO/copia.pid" ] || return 0
+    pid="$(cat "$ESTADO/copia.pid")"
+    while ps -p "$pid" -o command= 2>/dev/null | grep -q rms1d-bench; do
+        if [ "$SECONDS" -ge "$limite" ]; then
+            echo "a cópia da gravação anterior não terminou em ${S1_ESPERA_COPIA:-120} s; ela fica no robô, com o nome da ativação dela"
+            return 0
+        fi
+        sleep 0.2
+    done
 }
 
 # A página até o `rms1d` do robô: a porta do `adb` e a ponte do socket.
@@ -115,6 +127,7 @@ saude() { # saude: 0 saudável; 1 doente; o texto em $OUT/saude.txt
 # `rms1d` (atualizar, sem parar de novo a DJI, que já está parada). Na tela, só os passos de quem usa; o resto vai ao registro.
 up() {
     mkdir -p "$ESTADO" "$OUT"
+    esperar_copia
     if [ -z "${S1_SEM_COMPILAR:-}" ]; then
         passo "Compilando o rms1d"
         cargo s1 -p rms1d
@@ -155,7 +168,7 @@ up() {
     # Um `rms1d` de antes sai pelo caminho que para o robô, e antes do envio: binário em uso não se sobrescreve, e a trava
     # faria o novo morrer em silêncio, com o velho respondendo no lugar dele.
     confere sem_rms1d "o rms1d anterior não saiu; desligue o robô na chave" "$BB pkill -TERM rms1d; $BB sleep 1; $BB pidof rms1d >/dev/null && echo RMS1D_ANTIGO_VIVO || echo sem_rms1d"
-    separar_gravacao
+    separar_gravacao "robo-$(date +%H%M%S)"
     if [ -z "$mesmo_bin" ]; then "${A[@]}" push "$BIN" "$CHROOT/opt/robot/bin/rms1d" >/dev/null; fi
     "${A[@]}" push "$TOML" "$CHROOT/etc/robot/rms1d.toml" >/dev/null
     "${A[@]}" shell "chmod 755 $CHROOT/opt/robot/bin/rms1d"
@@ -187,7 +200,6 @@ up() {
     fi
     passo
     diz "Robô pronto"
-    copiar_depois "robo-$(date +%H%M%S)"
 }
 
 solta() {
@@ -206,6 +218,7 @@ volta() {
         echo "$saida"
         falha "não consegui abrir o acesso ao robô em $IP: $(printf '%s\n' "$saida" | tail -1). O runbook do acesso diz o que fazer"
     }
+    esperar_copia
     passo "parando o rms1d no robô"
     # SIGTERM: o `rms1d` para o robô e descarrega a gravação antes de sair.
     "${A[@]}" shell "$BB pkill -TERM rms1d; $BB sleep 1" || true
