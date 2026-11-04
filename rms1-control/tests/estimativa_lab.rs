@@ -254,12 +254,21 @@ fn no_robo_levantado_seguindo_a_torre_as_rodas_param() {
         } {}
     }
     assert_eq!(seguir, 1, "sem pilotar, um seguir a zero, ao armar");
-    // A sensibilidade vai uma vez, com o primeiro pacote, da central (900) para a placa 2401, no nível do arquivo.
-    assert_eq!(placas.len(), 1, "{placas:?}");
-    assert_eq!((placas[0].origem, placas[0].destino), (0x09, 0x38));
+    // A sensibilidade vai uma vez, com o primeiro pacote, da central (900) para as seis placas, no nível do arquivo.
     assert_eq!(
-        placas[0].dados[13..],
-        [80, 0, 90, 0, 100, 0],
+        placas
+            .iter()
+            .map(|q| (q.origem, q.destino))
+            .collect::<Vec<_>>(),
+        [0x38, 0x58, 0x78, 0x98, 0xb8, 0xd8]
+            .map(|d| (0x09, d))
+            .to_vec(),
+        "{placas:?}"
+    );
+    assert!(
+        placas
+            .iter()
+            .all(|q| q.dados[13..] == [80, 0, 90, 0, 100, 0]),
         "nível 10: picos 80, 90 e 100"
     );
     assert!(

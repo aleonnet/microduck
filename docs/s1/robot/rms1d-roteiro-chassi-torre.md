@@ -31,13 +31,13 @@ Robô ligado com a DJI e conectado ao mesmo roteador deste Mac: o anúncio na re
 | Passo | Faça | Esperado | Reprova se |
 |---|---|---|---|
 | 1 | espere | "Ativar robô" aparece, e a faixa diz o endereço do robô | não aparece: o anúncio real nunca foi ouvido por este Mac, e isto é o que se mede aqui |
-| 2 | clique em "Ativar robô" e confirme as rodas | os passos aparecem um a um; a faixa acende em `Robô real`. Nada se move. `AVISO` de serial muda ou de telemetria não para a subida, mas anote | para com erro, ou moveu |
+| 2 | clique em "Ativar robô" | os passos aparecem um a um; a faixa acende em `Robô real`. Nada se move. `AVISO` de serial muda ou de telemetria não para a subida, mas anote | para com erro, ou moveu |
 | 2a | botão `Telemetria` | "50 pacotes por segundo"; o 3D colorido e parado como o robô; bateria do robô | "O controlador recusou", ou 3D cinza: anote o código da tela |
 | 3 | `Armar`, e `W`, `S`, `A`, `D`, `Q`, `E` | cada roda gira no sentido do simulador; ao soltar, para; no painel, a rotação de cada roda tem o sinal do movimento | sentido errado, ou segue girando |
 | 4 | setas e arrasto | a torre obedece na hora, sem tremer, nos dois eixos, no sentido certo e até o limite; a faixa mostra "resposta em X ms" | eixo ou sentido errado, tremor ou atraso |
 | 5 | `F` até `Chassi segue a torre`, armado e sem pilotar: levante o robô e gire-o na mão | as rodas não disparam; se dispararem, o `rms1d` as para em até 4 s, e a faixa diz que parou por estar levantado. No chão, ele só volta a obedecer depois de `Desarmar` e `Armar` | rodas girando por mais de 4 s; a gravação de 2026-11-03 mostra 850 rpm por 11 s antes do conserto |
 | 6 | no chão, em espaço que o dono liberar: `Q` e soltar, depois os três modos | o chassi alinha e para; obedece nos três | segue girando no chão |
-| 6a | desarmado, toque de leve em cada uma das 6 placas | a placa certa pisca no gêmeo, e só o contador dela sobe; com a sensibilidade 10 de `rms1d.toml`, um toque leve conta | placa errada, ou só a placa 1 ficou sensível: a DJI manda a sensibilidade só à 2401 |
+| 6a | desarmado, toque de leve em cada uma das 6 placas, inclusive as duas do topo | a placa certa pisca no gêmeo, e só o contador dela sobe; com a sensibilidade 10 de `rms1d.toml`, que vai às seis placas, um toque leve conta | placa errada, ou placa que só conta com batida forte |
 | 6b | levante o robô; depois incline o nariz para cima, e para um lado | "levantado" acende; o gêmeo inclina para o mesmo lado que o robô | gêmeo para o outro lado: é a hipótese do sinal |
 | 6c | no chão, ande e gire | o gêmeo anda e gira com o robô, e o rastro fica no chão | gêmeo parado ou para outro lado |
 | 7 | "Voltar ao modo DJI" | o simulador volta na hora; o robô termina ao fundo, com os passos na faixa; a DJI voltou; a gravação fica em `~/.local/state/rms1/gravacoes/<data>/` | não volta, ou segue andando |

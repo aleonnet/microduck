@@ -936,20 +936,30 @@ fn desarmar_levantado_seguindo_a_torre_para_com_rodas_a_zero() {
 
 /// A sensibilidade das placas sai desarmada, porque não move nada: da central para a placa 2401, no nível do arquivo.
 #[test]
-fn a_sensibilidade_das_placas_vai_da_central_para_a_placa_no_nivel_do_arquivo() {
+fn a_sensibilidade_das_placas_vai_da_central_para_as_seis_placas_no_nivel_do_arquivo() {
     let mut p = Params::default();
     p.armadura.sensibilidade = 10;
     let corpo = CorpoFalso::default();
     let mut s = rms1_control::Seguranca::new(corpo.clone(), &p);
     s.ajustar_placas(&Saude::default());
-    let q = corpo.quadros();
-    assert_eq!(q.len(), 1);
+    // A sequência é por comando, de 0 a 5: o resto tem de ser o do quadro de cada placa.
+    let sem_seq = |q: &rms1_proto::Quadro| {
+        (
+            q.origem,
+            q.destino,
+            q.cmd_set,
+            q.cmd_id,
+            q.pede,
+            q.dados.clone(),
+        )
+    };
+    let q: Vec<_> = corpo.quadros().iter().map(sem_seq).collect();
+    let esperado: Vec<_> = rms1_proto::comando::sensibilidade_das_placas(10)
+        .iter()
+        .map(|c| sem_seq(&c.quadro(&rms1_proto::Nos::default(), 0)))
+        .collect();
     assert_eq!(
-        (q[0].origem, q[0].destino, q[0].cmd_set, q[0].cmd_id),
-        (0x09, 0x38, 0x3f, 0x07)
-    );
-    assert_eq!(
-        q[0],
-        rms1_proto::comando::sensibilidade_das_placas(10).quadro(&rms1_proto::Nos::default(), 0)
+        q, esperado,
+        "as seis placas, da central, no nível do arquivo"
     );
 }

@@ -39,8 +39,6 @@ pub struct Nos {
     pub remetente_alavanca: u8,
     pub chassi: u8,
     pub torre: u8,
-    /// Quem recebe a sensibilidade das placas.
-    pub armadura: u8,
 }
 
 /// Número da DJI para o byte do quadro: `índice * 32 + hospedeiro` (`tools.hostid2packid`).
@@ -57,7 +55,6 @@ impl Default for Nos {
             remetente_alavanca: byte_do_no(900),
             chassi: byte_do_no(306),
             torre: byte_do_no(400),
-            armadura: byte_do_no(2401),
         }
     }
 }
@@ -115,25 +112,35 @@ pub enum Comando {
         pitch_ddeg_s: i16,
         controle: u8,
     },
-    /// `0x3f/0x07`, os três picos do golpe; o resto é fixo na DJI. Feito por [`sensibilidade_das_placas`].
-    ArmaduraVoz { picos: [u16; 3] },
+    /// `0x3f/0x07` a uma placa, de 1 a 6, com os três picos do golpe; o resto é fixo na DJI. Feito por
+    /// [`sensibilidade_das_placas`].
+    ArmaduraVoz { placa: u8, picos: [u16; 3] },
 }
 
 /// Os campos fixos de `Armor.set_hit_sensitivity` (`rm_module.py:773-793`), em ordem: energia de entrada e de saída,
 /// duração máxima e mínima, espera de silêncio e contagem mínima de picos.
 const VOZ_FIXOS: [u16; 6] = [500, 300, 50, 13, 6, 1];
-/// O primeiro byte, como o robô o recebe: a central da DJI mandou `0x00` à placa 2401 nas duas vezes gravadas
-/// (`bancada-150s`, `hdvt_uav.strace`); o script da DJI põe `0x3f` na mensagem que vai à central, que a refaz.
+/// O primeiro byte, como a placa o recebe: a central da DJI mandou `0x00` à placa 2401 nas duas vezes gravadas
+/// (`bancada-150s`, `hdvt_uav.strace`). Na mensagem que vai à central ele é a máscara das placas (`armor_mask` no registro do
+/// `dji_hdvt_uav`; o script da DJI põe `0x3f`, as seis), e a central manda a cada placa (`setArmorParam armorId %d`).
 const VOZ_TIPO: u8 = 0x00;
+
+/// O nó da placa `n`, de 1 a 6: hospedeiro 24, índice `n` (`2401` a `2406`), o mesmo de onde vem o golpe dela.
+pub const fn no_da_placa(n: u8) -> u8 {
+    byte_do_no(2400 + n as u16)
+}
 
 /// A sensibilidade da DJI, de 0 a 10: `k = 1,5 - nível/10` (`RobotArmor.set_hit_sensitivity`, `rm_ctrl.py:2554-2567`), e
 /// os picos `int(160k)`, `int(180k)` e `int(200k)` (`rm_module.py:774-776`). Maior nível, picos menores: mais sensível. O
-/// padrão da DJI é 5 (`reset_hit_sensitivity`). Fora de 0 a 10, a DJI limita, e aqui também.
-pub fn sensibilidade_das_placas(nivel: u8) -> Comando {
+/// padrão da DJI é 5 (`reset_hit_sensitivity`). Fora de 0 a 10, a DJI limita, e aqui também. Um comando por placa, às seis:
+/// a central da DJI ajusta placa por placa.
+pub fn sensibilidade_das_placas(nivel: u8) -> [Comando; 6] {
     let k = 1.5 - f64::from(nivel.min(10)) / 10.0;
-    Comando::ArmaduraVoz {
-        picos: [160.0, 180.0, 200.0].map(|base: f64| (base * k) as u16),
-    }
+    let picos = [160.0, 180.0, 200.0].map(|base: f64| (base * k) as u16);
+    std::array::from_fn(|i| Comando::ArmaduraVoz {
+        placa: i as u8 + 1,
+        picos,
+    })
 }
 
 /// `accel_contral_flag` da DJI, para a torre em movimento (`rm_module.py:376`).
@@ -227,12 +234,12 @@ impl Comando {
                 d.push(controle);
                 (nos.remetente, nos.torre, d)
             }
-            Self::ArmaduraVoz { picos } => {
+            Self::ArmaduraVoz { placa, picos } => {
                 let mut d = vec![VOZ_TIPO];
                 for v in VOZ_FIXOS.iter().chain(picos.iter()) {
                     d.extend_from_slice(&v.to_le_bytes());
                 }
-                (nos.remetente_alavanca, nos.armadura, d)
+                (nos.remetente_alavanca, no_da_placa(placa), d)
             }
         };
         let (cmd_set, cmd_id) = self.id();

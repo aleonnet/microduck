@@ -163,7 +163,7 @@ fn um_de_cada() -> Vec<Comando> {
             pitch_ddeg_s: 0,
             controle: 0,
         },
-        rms1_proto::comando::sensibilidade_das_placas(5),
+        rms1_proto::comando::sensibilidade_das_placas(5)[0],
     ]
 }
 
@@ -255,8 +255,24 @@ const ARMADURA_VOZ_NIVEL_5: [u8; 32] = [
 #[test]
 fn sensibilidade_padrao_e_o_quadro_gravado_da_central() {
     igual_ao_gravado(
-        rms1_proto::comando::sensibilidade_das_placas(5),
+        rms1_proto::comando::sensibilidade_das_placas(5)[0],
         &ARMADURA_VOZ_NIVEL_5,
+    );
+}
+
+/// As seis placas, cada uma no nó de onde vem o golpe dela (`placa * 32 + 24`), com os mesmos dados.
+#[test]
+fn a_sensibilidade_vai_as_seis_placas_cada_uma_no_seu_no() {
+    let c = rms1_proto::comando::sensibilidade_das_placas(10);
+    let quadros: Vec<_> = c.iter().map(|x| x.quadro(&Nos::default(), 0)).collect();
+    assert_eq!(
+        quadros.iter().map(|q| q.destino).collect::<Vec<_>>(),
+        vec![0x38, 0x58, 0x78, 0x98, 0xb8, 0xd8]
+    );
+    assert!(
+        quadros
+            .iter()
+            .all(|q| q.dados == quadros[0].dados && q.origem == 0x09)
     );
 }
 
@@ -279,14 +295,18 @@ fn os_picos_de_cada_nivel_sao_os_da_conta_da_dji() {
     ];
     for (nivel, e) in esperado.iter().enumerate() {
         assert_eq!(
-            rms1_proto::comando::sensibilidade_das_placas(nivel as u8),
-            Comando::ArmaduraVoz { picos: *e },
+            rms1_proto::comando::sensibilidade_das_placas(nivel as u8)[0],
+            Comando::ArmaduraVoz {
+                placa: 1,
+                picos: *e
+            },
             "nível {nivel}"
         );
     }
     assert_eq!(
-        rms1_proto::comando::sensibilidade_das_placas(200),
+        rms1_proto::comando::sensibilidade_das_placas(200)[5],
         Comando::ArmaduraVoz {
+            placa: 6,
             picos: esperado[10]
         },
         "acima de 10, o 10, como a DJI limita"

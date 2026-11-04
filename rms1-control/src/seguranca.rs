@@ -105,7 +105,6 @@ impl<C: Corpo> Seguranca<C> {
                 remetente_alavanca: byte_do_no(p.nos.remetente_alavanca),
                 chassi: byte_do_no(p.nos.chassi),
                 torre: byte_do_no(p.nos.torre),
-                armadura: byte_do_no(p.nos.armadura),
             },
             seq: SeqPorComando::default(),
             permissao: match p.corpo.permissao {
@@ -191,9 +190,12 @@ impl<C: Corpo> Seguranca<C> {
         }
     }
 
-    /// A sensibilidade das placas, `0x3f/0x07`, da central para a placa, como a DJI a mandou (`bancada-150s`). Não move nada.
+    /// A sensibilidade das placas, `0x3f/0x07`, da central para cada uma das seis, como a DJI faz (`bancada-150s`, `armor_mask`
+    /// no `dji_hdvt_uav`). Não move nada.
     pub fn ajustar_placas(&mut self, saude: &Saude) {
-        self.enviar(sensibilidade_das_placas(self.sensibilidade), saude);
+        for c in sensibilidade_das_placas(self.sensibilidade) {
+            self.enviar(c, saude);
+        }
         tracing::info!(
             nivel = self.sensibilidade,
             "sensibilidade das placas enviada"

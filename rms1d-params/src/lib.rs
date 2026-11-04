@@ -83,8 +83,6 @@ pub struct Nos {
     pub remetente_alavanca: u16,
     pub chassi: u16,
     pub torre: u16,
-    /// Quem recebe a sensibilidade das placas: a central da DJI a mandou à 2401 (`bancada-150s`).
-    pub armadura: u16,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
@@ -232,7 +230,6 @@ impl Default for Nos {
             remetente_alavanca: 900,
             chassi: 306,
             torre: 400,
-            armadura: 2401,
         }
     }
 }
