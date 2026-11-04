@@ -80,7 +80,13 @@ pub struct Intencoes {
     modo: AtomicU8,
     armado_pedido: AtomicBool,
     encerrar: AtomicBool,
+    /// A sensibilidade das placas pedida pelo cliente (`s1.armor`); `SEM_SENSIBILIDADE` até alguém pedir.
+    sensibilidade: AtomicU8,
+    /// Há uma sensibilidade pedida que o laço ainda não mandou às placas.
+    sensibilidade_nova: AtomicBool,
 }
+
+const SEM_SENSIBILIDADE: u8 = u8::MAX;
 
 /// O que o laço lê no começo do ciclo.
 #[derive(Debug, Clone, Copy)]
@@ -105,6 +111,8 @@ impl Default for Intencoes {
             modo: AtomicU8::new(Modo::Livre.codigo()),
             armado_pedido: AtomicBool::new(false),
             encerrar: AtomicBool::new(false),
+            sensibilidade: AtomicU8::new(SEM_SENSIBILIDADE),
+            sensibilidade_nova: AtomicBool::new(false),
         }
     }
 }
@@ -172,6 +180,27 @@ impl Intencoes {
 
     pub fn encerrando(&self) -> bool {
         self.encerrar.load(Ordering::Relaxed)
+    }
+
+    /// A sensibilidade das placas, de 0 a 10, como a DJI: o laço a manda às seis no próximo ciclo com o barramento vivo. Quem
+    /// chama valida a faixa.
+    pub fn pedir_sensibilidade(&self, nivel: u8) {
+        self.sensibilidade.store(nivel, Ordering::Relaxed);
+        self.sensibilidade_nova.store(true, Ordering::Relaxed);
+    }
+
+    /// A última sensibilidade pedida pelo cliente, se houve.
+    pub fn sensibilidade(&self) -> Option<u8> {
+        Some(self.sensibilidade.load(Ordering::Relaxed)).filter(|n| *n != SEM_SENSIBILIDADE)
+    }
+
+    /// A sensibilidade nova, uma vez: lida pelo laço.
+    pub fn tomar_sensibilidade(&self) -> Option<u8> {
+        if self.sensibilidade_nova.swap(false, Ordering::Relaxed) {
+            self.sensibilidade()
+        } else {
+            None
+        }
     }
 
     pub fn tomar_energia(&self) -> Option<PedidoEnergia> {

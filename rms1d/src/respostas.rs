@@ -97,6 +97,26 @@ pub fn aplicar_taxa_da_torre(
     Ok(())
 }
 
+/// `s1.armor`: a sensibilidade das placas, de 0 a 10, a faixa da DJI (`RobotArmor.set_hit_sensitivity`). Com `sensitivity`, o
+/// laço a manda às seis placas; sem, só responde a atual: a pedida, ou a do arquivo.
+pub fn sensibilidade_das_placas(
+    c: &Contexto,
+    params: Option<&serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    if let Some(v) = params.and_then(|p| p.get("sensitivity")) {
+        let n = v
+            .as_u64()
+            .filter(|n| *n <= 10)
+            .ok_or("sensitivity tem de ser um inteiro de 0 a 10, a faixa da DJI")?;
+        c.intencoes.pedir_sensibilidade(n as u8);
+    }
+    let atual = c
+        .intencoes
+        .sensibilidade()
+        .unwrap_or(c.params.armadura.sensibilidade);
+    Ok(serde_json::json!({ "sensitivity": atual }))
+}
+
 pub fn saude_do_contrato(c: &Contexto) -> proto::HealthResult {
     let mut v = c.saude.veredito(
         Instant::now(),

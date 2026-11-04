@@ -192,6 +192,21 @@ async fn atender(
             }
             continue;
         }
+        // `s1.armor`: a sensibilidade das placas, também do S1.
+        if pedido.method == "s1.armor" {
+            if let Some(id) = pedido.id.clone() {
+                let resposta = match respostas::sensibilidade_das_placas(&c, pedido.params.as_ref())
+                {
+                    Ok(v) => proto::Response::ok(Some(id), &v),
+                    Err(e) => proto::Response::err(
+                        Some(id),
+                        proto::Error::new(proto::code::INVALID_PARAMS, e),
+                    ),
+                };
+                escrever(&mut saida, &resposta).await?;
+            }
+            continue;
+        }
         // `s1.subscribe` e `s1.telemetry`: o que o S1 tem a mais, fora do contrato comum, sem esperar o laço.
         if pedido.method == "s1.subscribe" || pedido.method == "s1.telemetry" {
             let Some(id) = pedido.id.clone() else {

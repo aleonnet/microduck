@@ -4,7 +4,9 @@ use std::sync::Arc;
 
 use duck_ipc_proto as proto;
 use rms1_control::{Intencoes, Saude};
-use rms1d::respostas::{Contexto, aplicar_taxa_da_torre, olhar, responder, saude_do_contrato};
+use rms1d::respostas::{
+    Contexto, aplicar_taxa_da_torre, olhar, responder, saude_do_contrato, sensibilidade_das_placas,
+};
 use rms1d_params::Params;
 
 fn contexto() -> Contexto {
@@ -327,4 +329,34 @@ fn velocidade_da_torre_so_aceita_o_previsto() {
     assert!(pede(serde_json::json!({"action": "speed", "yaw": 30.0})).is_err());
     assert!(pede(serde_json::json!({"action": "girar"})).is_err());
     assert!(aplicar_taxa_da_torre(&c.intencoes, None).is_err());
+}
+
+/// `s1.armor`: nível inteiro de 0 a 10, a faixa da DJI; sem nível, responde o atual, o do arquivo até alguém pedir.
+#[test]
+fn sensibilidade_das_placas_so_aceita_de_0_a_10_e_responde_a_atual() {
+    let c = contexto();
+    let pede = |v: Option<serde_json::Value>| sensibilidade_das_placas(&c, v.as_ref());
+    assert_eq!(
+        pede(None).unwrap()["sensitivity"],
+        c.params.armadura.sensibilidade
+    );
+    assert_eq!(
+        pede(Some(serde_json::json!({"sensitivity": 4}))).unwrap()["sensitivity"],
+        4
+    );
+    assert_eq!(c.intencoes.tomar_sensibilidade(), Some(4));
+    assert_eq!(pede(Some(serde_json::json!({}))).unwrap()["sensitivity"], 4);
+    for ruim in [
+        serde_json::json!({"sensitivity": 11}),
+        serde_json::json!({"sensitivity": -1}),
+        serde_json::json!({"sensitivity": 2.5}),
+        serde_json::json!({"sensitivity": "alto"}),
+    ] {
+        assert!(pede(Some(ruim.clone())).is_err(), "{ruim}");
+    }
+    assert_eq!(
+        c.intencoes.tomar_sensibilidade(),
+        None,
+        "recusado não pede nada"
+    );
 }

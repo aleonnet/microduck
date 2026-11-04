@@ -570,3 +570,40 @@ fn bit_de_levantado_em_pacote_velho_nao_para() {
     let e = b.ciclo_com_estado(10);
     assert!(e.limitado_por.is_empty(), "{:?}", e.limitado_por);
 }
+
+/// A sensibilidade pedida pelo cliente (`s1.armor`) vai às seis placas no ciclo seguinte com pacote, com os picos do nível
+/// pedido; sem pedido novo, não se repete.
+#[test]
+fn a_sensibilidade_pedida_vai_as_seis_placas_pelo_laco() {
+    let mut p = Params::default();
+    p.corpo.tipo = TipoCorpo::Serial;
+    p.armadura.sensibilidade = 10;
+    let mut b = banca_com(&p);
+    b.ate_receber();
+    let voz = rms1_proto::comando::id::ARMADURA_VOZ;
+    let dados = |n: u8| -> Vec<Vec<u8>> {
+        rms1_proto::comando::sensibilidade_das_placas(n)
+            .iter()
+            .map(|c| c.quadro(&rms1_proto::Nos::default(), 0).dados)
+            .collect()
+    };
+    let saidos =
+        |b: &Banca| -> Vec<Vec<u8>> { b.saidos(voz).into_iter().map(|q| q.dados).collect() };
+    assert_eq!(
+        saidos(&b),
+        dados(10),
+        "no primeiro pacote, o nível do arquivo"
+    );
+    assert_ne!(dados(3), dados(10));
+    b.intencoes.pedir_sensibilidade(3);
+    b.corpo_manda(&pacote_nosso(1, 101, 1));
+    b.ciclo(10);
+    assert_eq!(
+        saidos(&b)[6..].to_vec(),
+        dados(3),
+        "o nível pedido, às seis"
+    );
+    b.corpo_manda(&pacote_nosso(1, 102, 1));
+    b.ciclo(10);
+    assert_eq!(saidos(&b).len(), 12, "sem pedido novo, não repete");
+}

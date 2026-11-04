@@ -190,6 +190,11 @@ impl<C: Corpo> Seguranca<C> {
         }
     }
 
+    /// A sensibilidade que vai às placas no próximo `ajustar_placas`.
+    pub fn definir_sensibilidade(&mut self, nivel: u8) {
+        self.sensibilidade = nivel;
+    }
+
     /// A sensibilidade das placas, `0x3f/0x07`, da central para cada uma das seis, como a DJI faz (`bancada-150s`, `armor_mask`
     /// no `dji_hdvt_uav`). Não move nada.
     pub fn ajustar_placas(&mut self, saude: &Saude) {

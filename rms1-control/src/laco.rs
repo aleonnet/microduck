@@ -48,7 +48,8 @@ pub struct Laco<C: Corpo> {
     periodo: Duration,
     janela_inicio: Option<Instant>,
     janela_ciclos: u32,
-    /// A sensibilidade das placas já foi: vai uma vez, quando chega o primeiro pacote, e o barramento está vivo.
+    /// A sensibilidade das placas já foi: vai quando chega o primeiro pacote, e o barramento está vivo, e de novo a cada
+    /// sensibilidade nova pedida pelo cliente.
     placas_ajustadas: bool,
 }
 
@@ -85,6 +86,11 @@ impl<C: Corpo> Laco<C> {
             .seguranca
             .aplicar(&leitura, levantado, agora, &self.saude);
         self.ler_corpo(agora);
+        // Uma sensibilidade nova do cliente vai às seis placas como a do arquivo: no primeiro ciclo com pacote.
+        if let Some(n) = self.intencoes.tomar_sensibilidade() {
+            self.seguranca.definir_sensibilidade(n);
+            self.placas_ajustadas = false;
+        }
         if !self.placas_ajustadas && self.saude.idade_do_pacote(agora).is_some() {
             self.seguranca.ajustar_placas(&self.saude);
             self.placas_ajustadas = true;
