@@ -69,6 +69,9 @@ pub struct Estimativa {
     acima_desde: Option<u64>,
     abaixo_desde: Option<u64>,
     levantado: bool,
+    /// Desde quando as rodas giram o robô sem o giroscópio ver o giro, e se isso já durou o bastante.
+    girando_desde: Option<u64>,
+    girando_no_ar: bool,
     /// O último passo: um pacote com o mesmo relógio é repetido, e devolve o mesmo, sem crescer a janela.
     ultimo: Option<Calculo>,
 }
@@ -102,6 +105,8 @@ impl Estimativa {
             acima_desde: None,
             abaixo_desde: None,
             levantado: false,
+            girando_desde: None,
+            girando_no_ar: false,
             ultimo: None,
         }
     }
@@ -159,7 +164,18 @@ impl Estimativa {
         self.rumo_giro += m.giro[2].to_degrees() * dt;
 
         let discordancia = m.velocidade_corpo[0].hypot(m.velocidade_corpo[1]) - v[0].hypot(v[1]);
-        self.levantado = self.levantar(discordancia);
+        let pela_velocidade = self.levantar(discordancia);
+        self.levantado = pela_velocidade;
+        // As rodas giram o robô e o giroscópio não vê o giro: no ar, o controlador gira as rodas para alinhar o chassi com a torre,
+        // e girando no lugar a velocidade em linha reta, que a regra acima usa, quase não aparece (2026-11-03, 252 a 256 s).
+        let giro_sem_corpo = (giro_rodas - m.giro[2]).abs();
+        self.girando_no_ar = if giro_sem_corpo > self.l.giro_levantado_rad_s {
+            let desde = *self.girando_desde.get_or_insert(self.relogio);
+            self.girando_no_ar || self.relogio - desde >= self.l.giro_levantado_tempo_ms
+        } else {
+            self.girando_desde = None;
+            false
+        };
 
         let gravidade = gravidade_do_quaternion(m.quaternion());
         let a = m.aceleracao;
@@ -186,7 +202,7 @@ impl Estimativa {
             posicao: self.posicao,
             rumo: m.rumo,
             rumo_pelo_giro: self.rumo_giro,
-            levantado: self.levantado,
+            levantado: self.levantado || self.girando_no_ar,
             discordancia,
             gravidade,
             divergencia,

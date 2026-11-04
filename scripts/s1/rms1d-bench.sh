@@ -62,20 +62,61 @@ confere() { # confere <palavra> <mensagem> <comando no robô>
     esac
 }
 
-# Uma gravação por processo: quem encerra o `rms1d` guarda a dele, ou o seguinte a sobrescreve. São duas: o que ele mandou
-# (`gravar`) e o que ele recebeu (`gravar_recebido`).
-guardar_gravacao() { # guardar_gravacao <prefixo em $OUT>
-    local g r guardou=""
-    { read -r g; read -r r; } < <(python3 -I -c 'import sys,tomllib; c=tomllib.load(open(sys.argv[1],"rb"))["corpo"]; print(c.get("gravar","")); print(c.get("gravar_recebido",""))' "$TOML")
-    if [ -n "$g" ] && "${A[@]}" pull "$CHROOT$g" "$OUT/$1.quadros" >/dev/null 2>&1; then guardou=1; fi
-    if [ -n "$r" ] && "${A[@]}" pull "$CHROOT$r" "$OUT/$1.recebido.txt" >/dev/null 2>&1; then guardou=1; fi
-    if [ -n "$guardou" ]; then diz "gravação anterior guardada em $OUT"; else diz "sem gravação anterior para guardar"; fi
+# Os caminhos das duas gravações no robô, em `rms1d.toml`: o que o `rms1d` mandou (`gravar`) e o que ele recebeu
+# (`gravar_recebido`). Uma por processo: o seguinte a sobrescreve.
+gravacoes() {
+    python3 -I -c 'import sys,tomllib; c=tomllib.load(open(sys.argv[1],"rb"))["corpo"]; print(c.get("gravar","")); print(c.get("gravar_recebido",""))' "$TOML"
 }
 
+# Volta: copia as gravações do `rms1d` que acabou de sair. É o fim da sessão, e quem espera é o reinício.
+guardar_gravacao() { # guardar_gravacao <prefixo em $OUT>
+    local g r
+    { read -r g; read -r r; } < <(gravacoes)
+    if [ -n "$g" ]; then "${A[@]}" pull "$CHROOT$g" "$OUT/$1.quadros" >/dev/null 2>&1 || true; fi
+    if [ -n "$r" ]; then "${A[@]}" pull "$CHROOT$r" "$OUT/$1.recebido.txt" >/dev/null 2>&1 || true; fi
+    echo "gravação anterior em $OUT"
+}
+
+# Ativação: no robô, só renomeia as gravações do `rms1d` anterior, o que é instantâneo; a cópia pelo Wi-Fi, que chegou a 18 s,
+# fica para depois do "Robô pronto" (`copiar_depois`).
+separar_gravacao() {
+    local g r
+    { read -r g; read -r r; } < <(gravacoes)
+    for f in $g $r; do "${A[@]}" shell "$BB test -f $CHROOT$f && $BB mv -f $CHROOT$f $CHROOT$f.anterior" >/dev/null 2>&1 || true; done
+}
+
+copiar_depois() { # copiar_depois <prefixo em $OUT>: ao fundo, sem segurar quem chamou
+    local g r
+    { read -r g; read -r r; } < <(gravacoes)
+    (
+        if [ -n "$g" ]; then "${A[@]}" pull "$CHROOT$g.anterior" "$OUT/$1.quadros" || true; fi
+        if [ -n "$r" ]; then "${A[@]}" pull "$CHROOT$r.anterior" "$OUT/$1.recebido.txt" || true; fi
+    ) >"$ESTADO/copia.log" 2>&1 </dev/null &
+    echo $! > "$ESTADO/copia.pid"
+}
+
+# A página até o `rms1d` do robô: a porta do `adb` e a ponte do socket.
+ligar_ponte() {
+    "${A[@]}" forward "tcp:$TCP" "localfilesystem:$CHROOT/run/robotd.sock" >/dev/null
+    if [ -f "$ESTADO/ponte.pid" ]; then kill "$(cat "$ESTADO/ponte.pid")" 2>/dev/null || true; fi
+    nohup python3 -I scripts/s1/rms1d-ponte.py "$SOCKET" "127.0.0.1:$TCP" >"$ESTADO/ponte.log" 2>&1 </dev/null &
+    echo $! > "$ESTADO/ponte.pid"
+    sleep 1
+}
+
+saude() { # saude: 0 saudável; 1 doente; o texto em $OUT/saude.txt
+    local rc=0
+    "$ROBOTCTL" --robot-socket "$SOCKET" --config-socket "$SOCKET" --socket "$SOCKET" health > "$OUT/saude.txt" 2>&1 || rc=$?
+    cat "$OUT/saude.txt"
+    return "$rc"
+}
+
+# Três caminhos, pelo que o robô tem: nada nosso (preparar), o mesmo `rms1d` no ar e saudável (só conectar, cerca de 1 s) e outro
+# `rms1d` (atualizar, sem parar de novo a DJI, que já está parada). Na tela, só os passos de quem usa; o resto vai ao registro.
 up() {
     mkdir -p "$ESTADO" "$OUT"
     if [ -z "${S1_SEM_COMPILAR:-}" ]; then
-        passo "compilando para o robô"
+        passo "Compilando o rms1d"
         cargo s1 -p rms1d
         cargo build -q -p rms1d -p robotctl
     fi
@@ -84,58 +125,60 @@ up() {
     parar="$(target/debug/rms1d --config "$TOML" --processos-a-parar)" || falha "$TOML recusado; nada foi tocado no robô"
     # Sem o binário, a soma vazia daria "igual" à do robô sem binário, e a DJI seria parada antes da falha.
     [ -s "$BIN" ] || falha "não achei $BIN; compile com cargo s1 -p rms1d. Nada foi tocado no robô"
-    passo "abrindo o acesso ao robô em $IP"
+    passo "Abrindo o acesso ao robô"
     python3 -I "$ACESSO" abrir --host "$IP"
     confere chroot_ok "sem chroot em $CHROOT; rode scripts/s1/bench.sh exec uma vez" "test -d $CHROOT/bin && echo chroot_ok"
     "${A[@]}" shell "$BB grep -q ' $CHROOT/dev ' /proc/mounts || mount -o bind /dev $CHROOT/dev; $BB grep -q ' $CHROOT/proc ' /proc/mounts || mount -t proc proc $CHROOT/proc; $BB grep -q ' $CHROOT/sys ' /proc/mounts || mount -t sysfs sys $CHROOT/sys"
     "${A[@]}" shell "mkdir -p $CHROOT/opt/robot/bin $CHROOT/etc/robot $CHROOT/run $CHROOT/var/lib/robot"
-    passo "parando o rms1d anterior e guardando a gravação dele"
+    # O que o robô tem. O busybox dele tem `sha256sum` (lido na cópia completa, `arvores/system/system/xbin/busybox`); o
+    # `adb shell` do Android 4.4 termina a linha com `\r`.
+    local estado soma_bin soma_toml vivo=""
+    estado="$("${A[@]}" shell "echo estado_do_robo; $BB pidof rms1d >/dev/null && echo RMS1D_VIVO; $BB sha256sum $CHROOT/opt/robot/bin/rms1d $CHROOT/etc/robot/rms1d.toml 2>/dev/null" | tr -d '\r' || true)"
+    echo "$estado"
+    case "$estado" in *RMS1D_VIVO*) vivo=1 ;; esac
+    soma_bin="$(printf '%s\n' "$estado" | grep '/opt/robot/bin/rms1d$' | cut -d' ' -f1 || true)"
+    soma_toml="$(printf '%s\n' "$estado" | grep '/etc/robot/rms1d.toml$' | cut -d' ' -f1 || true)"
+    local mesmo_bin="" mesmo_toml=""
+    if [ -n "$soma_bin" ] && [ "$soma_bin" = "$(shasum -a 256 "$BIN" | cut -d' ' -f1)" ]; then mesmo_bin=1; fi
+    if [ -n "$soma_toml" ] && [ "$soma_toml" = "$(shasum -a 256 "$TOML" | cut -d' ' -f1)" ]; then mesmo_toml=1; fi
+    if [ -n "$vivo" ] && [ -n "$mesmo_bin" ] && [ -n "$mesmo_toml" ]; then
+        passo "Conectando ao robô"
+        ligar_ponte
+        if saude; then
+            passo
+            diz "Robô pronto"
+            return
+        fi
+        echo "o rms1d no robô não respondeu bem: preparando de novo"
+    fi
+    if [ -n "$vivo" ]; then passo "Atualizando o robô"; else passo "Preparando o robô"; fi
     # Um `rms1d` de antes sai pelo caminho que para o robô, e antes do envio: binário em uso não se sobrescreve, e a trava
     # faria o novo morrer em silêncio, com o velho respondendo no lugar dele.
     confere sem_rms1d "o rms1d anterior não saiu; desligue o robô na chave" "$BB pkill -TERM rms1d; $BB sleep 1; $BB pidof rms1d >/dev/null && echo RMS1D_ANTIGO_VIVO || echo sem_rms1d"
-    guardar_gravacao "robo-$(date +%H%M%S)"
-    # O busybox do robô tem `sha256sum` (lido na cópia completa, `arvores/system/system/xbin/busybox`). O `adb shell` do
-    # Android 4.4 termina a linha com `\r`.
-    local no_robo
-    no_robo="$("${A[@]}" shell "$BB sha256sum $CHROOT/opt/robot/bin/rms1d 2>/dev/null" | tr -d '\r' | cut -d' ' -f1 || true)"
-    if [ -n "$no_robo" ] && [ "$no_robo" = "$(shasum -a 256 "$BIN" | cut -d' ' -f1)" ]; then
-        passo "o rms1d no robô já é este: nada a enviar"
-    else
-        passo "enviando o rms1d ao robô"
-        "${A[@]}" push "$BIN" "$CHROOT/opt/robot/bin/rms1d" >/dev/null
-    fi
+    separar_gravacao
+    if [ -z "$mesmo_bin" ]; then "${A[@]}" push "$BIN" "$CHROOT/opt/robot/bin/rms1d" >/dev/null; fi
     "${A[@]}" push "$TOML" "$CHROOT/etc/robot/rms1d.toml" >/dev/null
     "${A[@]}" shell "chmod 755 $CHROOT/opt/robot/bin/rms1d"
+    # Os processos da DJI que seguram a serial: parados só se estiverem no ar, e a serial conferida livre sempre.
     local lista="" vivos=""
     for p in $parar; do
-        lista="$lista stop $p; setprop ctl.stop $p; kill \$($BB pidof $p) 2>/dev/null;"
+        lista="$lista $BB pidof $p >/dev/null && { stop $p; setprop ctl.stop $p; kill \$($BB pidof $p) 2>/dev/null; $BB sleep 1; };"
         vivos="$vivos $BB pidof $p >/dev/null && echo AINDA_NO_AR_$p;"
     done
-    passo "parando: $parar. A telemetria da DJI segue."
     local saida
-    saida="$("${A[@]}" shell "$lista $BB sleep 1; $vivos for f in /proc/[0-9]*/fd/*; do $BB readlink \$f 2>/dev/null | $BB grep -q ttyS3 && echo SERIAL_PRESA \$f; done; echo parada_conferida" | tee "$OUT/parar.txt")"
+    saida="$("${A[@]}" shell "$lista $vivos for f in /proc/[0-9]*/fd/*; do $BB readlink \$f 2>/dev/null | $BB grep -q ttyS3 && echo SERIAL_PRESA \$f; done; echo parada_conferida" | tee "$OUT/parar.txt")"
     echo "$saida"
-    case "$saida" in *parada_conferida*) ;; *) falha "a parada dos processos não respondeu" ;; esac
-    case "$saida" in *AINDA_NO_AR*|*SERIAL_PRESA*) falha "a serial não ficou livre: dois escritores nela é o que este passo evita. Reinicie o robô" ;; esac
-    passo "subindo o rms1d no robô"
+    case "$saida" in *parada_conferida*) ;; *) falha "a parada dos processos da DJI não respondeu" ;; esac
+    case "$saida" in *AINDA_NO_AR*|*SERIAL_PRESA*) falha "a serial do controlador não ficou livre: dois programas nela é o que este passo evita. Reinicie o robô" ;; esac
     "${A[@]}" shell "($BB setsid $BB nohup $ENTRA /opt/robot/bin/rms1d --config /etc/robot/rms1d.toml --socket /run/robotd.sock </dev/null >/data/rms1d.log 2>&1 &); $BB sleep 1"
     sleep 2
     "${A[@]}" shell "$BB pidof rms1d >/dev/null && echo rms1d_no_ar || { echo RMS1D_MORTO; $BB tail -5 /data/rms1d.log; }" | tee "$OUT/up.txt"
-    grep -q rms1d_no_ar "$OUT/up.txt" || falha "o rms1d não subiu; o motivo está acima"
-    "${A[@]}" forward "tcp:$TCP" "localfilesystem:$CHROOT/run/robotd.sock" >/dev/null
-    if [ -f "$ESTADO/ponte.pid" ]; then kill "$(cat "$ESTADO/ponte.pid")" 2>/dev/null || true; fi
-    nohup python3 -I scripts/s1/rms1d-ponte.py "$SOCKET" "127.0.0.1:$TCP" >"$ESTADO/ponte.log" 2>&1 &
-    echo $! > "$ESTADO/ponte.pid"
-    sleep 1
-    passo "conferindo a saúde do rms1d"
-    local rc=0
-    "$ROBOTCTL" --robot-socket "$SOCKET" --config-socket "$SOCKET" --socket "$SOCKET" health > "$OUT/saude.txt" 2>&1 || rc=$?
-    cat "$OUT/saude.txt"
-    if [ "$rc" != 0 ]; then
-        # Serial muda e telemetria recusada são o que esta prova quer saber, e dá para pilotar sem elas: avisa e segue. Qualquer
-        # outra coisa para.
+    grep -q rms1d_no_ar "$OUT/up.txt" || falha "o rms1d não subiu no robô; o motivo está no registro do serviço"
+    ligar_ponte
+    if ! saude; then
+        # Serial muda e telemetria recusada não impedem pilotar: avisa e segue. Qualquer outra coisa para.
         if grep -q "mudo" "$OUT/saude.txt"; then
-            diz "AVISO: nada chegou do corpo pela serial. Se as rodas também não obedecerem, comece por aqui."
+            diz "AVISO: nada chegou do controlador. Se as rodas também não obedecerem, comece por aqui."
         elif grep -q "telemetria" "$OUT/saude.txt"; then
             diz "AVISO: sem telemetria ($(grep "robot " "$OUT/saude.txt" | head -1 | sed 's/^robot *//')). Dá para pilotar; o gêmeo e o painel ficam sem dados."
         else
@@ -143,7 +186,8 @@ up() {
         fi
     fi
     passo
-    diz "no ar, desarmado. Nada se moveu."
+    diz "Robô pronto"
+    copiar_depois "robo-$(date +%H%M%S)"
 }
 
 solta() {

@@ -21,12 +21,15 @@ tem() { grep -qx "$1" "$DEFEITO"; }
 # Conexão caída: o `adb` de verdade sai com 1 quando o aparelho não está conectado (medido), até `abrir` reconectar.
 if tem adb_caiu && [ ! -f "$DEFEITO.conectado" ]; then exit 1; fi
 case "$*" in
+  *estado_do_robo*)
+    # O que o robô tem: o `rms1d` no ar e as somas do programa e da configuração.
+    if tem ja_no_ar; then echo RMS1D_VIVO; printf '%s  /data/debian/opt/robot/bin/rms1d\r\n%s  /data/debian/etc/robot/rms1d.toml\r\n' "$SOMA_BIN" "$SOMA_TOML";
+    elif tem mesmo_binario; then printf '%s  /data/debian/opt/robot/bin/rms1d\r\n' "$SOMA_BIN"; fi ;;
   *"test -d"*) tem sem_chroot || echo chroot_ok ;;
   *"pkill -TERM rms1d"*sem_rms1d*) if tem rms1d_antigo; then echo RMS1D_ANTIGO_VIVO; else echo sem_rms1d; fi ;;
   *parada_conferida*) tem dji_vivo && echo AINDA_NO_AR_dji_hdvt_uav; tem serial_presa && echo SERIAL_PRESA /proc/9/fd/3; echo parada_conferida ;;
   *"pidof rms1d"*) if tem rms1d_morto; then echo RMS1D_MORTO; else echo rms1d_no_ar; fi ;;
   *"pidof dji_hdvt_uav"*) echo dji_voltou ;;
-  *sha256sum*) tem mesmo_binario && printf '%s  /data/debian/opt/robot/bin/rms1d\r\n' "$SOMA_BIN" ;;
   *marca_gravada*) if tem sem_marca; then exit 0; fi; touch "$DEFEITO.marca"; echo marca_gravada ;;
   *marca_viva*) if [ -f "$DEFEITO.uma_falha" ] && [ -f "$DEFEITO.reiniciou" ]; then rm -f "$DEFEITO.uma_falha"; exit 1; fi; if [ -f "$DEFEITO.marca" ]; then echo marca_viva; else echo marca_sumiu; fi ;;
   *"shell reboot"*) touch "$DEFEITO.reiniciou"; rm -f "$DEFEITO.conectado"; tem nao_reinicia || rm -f "$DEFEITO.marca" ;;
@@ -58,6 +61,8 @@ antes() { # antes <primeiro> <segundo>: as duas linhas existem, nessa ordem
     p="$(grep -nF -- "$1" "$ADB_LOG" | head -1 | cut -d: -f1 || true)"; s="$(grep -nF -- "$2" "$ADB_LOG" | head -1 | cut -d: -f1 || true)"
     if [ -n "$p" ] && [ -n "$s" ] && [ "$p" -lt "$s" ]; then echo "antes: $1, depois: $2"; else echo "FORA DE ORDEM: $1 ($p), $2 ($s)"; falhou=1; fi
 }
+# A cópia da gravação anterior roda ao fundo, depois do "Robô pronto": espera ela acabar antes de olhar ou zerar o registro.
+esperar_copia() { for f in "$T/e/copia.pid"; do [ -f "$f" ] && while kill -0 "$(cat "$f")" 2>/dev/null; do sleep 0.1; done; done; return 0; }
 # reprova <nome> <palavra na mensagem> <o que não pode ter sido pedido>: `up` tem de parar, com a mensagem.
 reprova() {
     : > "$ADB_LOG"
@@ -68,10 +73,11 @@ reprova() {
 
 cargo build -q -p rms1d -p robotctl
 export SOMA_BIN="$(shasum -a 256 target/armv7-unknown-linux-gnueabihf/release/rms1d | cut -d' ' -f1)"
+export SOMA_TOML="$(shasum -a 256 deploy/s1/rms1d.toml | cut -d' ' -f1)"
 
 echo "--- o caminho certo"
 scripts/s1/rms1d-bench.sh up > "$T/up.txt" 2>&1 || { echo "up falhou:"; tail -20 "$T/up.txt"; exit 1; }
-grep -q "no ar, desarmado" "$T/up.txt" || { echo "up não terminou:"; tail -20 "$T/up.txt"; exit 1; }
+grep -q "Robô pronto" "$T/up.txt" || { echo "up não terminou:"; tail -20 "$T/up.txt"; exit 1; }
 pediu "stop dji_hdvt_uav"
 pediu "stop dji_monitor"
 pediu "/opt/robot/bin/rms1d --config /etc/robot/rms1d.toml --socket /run/robotd.sock"
@@ -79,16 +85,19 @@ pediu "forward tcp:9010 localfilesystem:/data/debian/run/robotd.sock"
 pediu "push deploy/s1/rms1d.toml /data/debian/etc/robot/rms1d.toml"
 antes "pkill -TERM rms1d" "push target/armv7-unknown-linux-gnueabihf/release/rms1d"
 antes "stop dji_monitor" "/opt/robot/bin/rms1d --config"
-antes "pkill -TERM rms1d" "pull /data/debian/var/lib/robot/rms1d-quadros.ndjson"
-antes "pull /data/debian/var/lib/robot/rms1d-quadros.ndjson" "/opt/robot/bin/rms1d --config"
+antes "pkill -TERM rms1d" "mv -f /data/debian/var/lib/robot/rms1d-quadros.ndjson"
+antes "mv -f /data/debian/var/lib/robot/rms1d-quadros.ndjson" "/opt/robot/bin/rms1d --config"
 grep "stop dji_monitor" "$ADB_LOG" | grep -q "stop dji_monitor.*stop dji_hdvt_uav" || { echo "O MONITOR NÃO VEIO PRIMEIRO"; falhou=1; }
-pediu "pull /data/debian/var/lib/robot/rms1d-recebido.txt"
+# A cópia da gravação anterior vai ao fundo, depois do "Robô pronto".
+esperar_copia
+antes "/opt/robot/bin/rms1d --config" "pull /data/debian/var/lib/robot/rms1d-recebido.txt.anterior"
+grep -q "Robô pronto" "$T/up.txt" && echo "termina em Robô pronto" || { echo "NÃO DISSE ROBÔ PRONTO"; falhou=1; }
 pediu "push target/armv7-unknown-linux-gnueabihf/release/rms1d"
 # Cada passo termina com o tempo dele: tantas linhas de tempo quanto passos, e cada uma logo depois do seu passo.
 python3 -I - "$T/up.txt" <<'PY' || falhou=1
 import re, sys
 linhas = [l[len("[rms1d-bench] "):].rstrip("\n") for l in open(sys.argv[1], encoding="utf-8") if l.startswith("[rms1d-bench] ")]
-passos = [l for l in linhas if not l.startswith(("TEMPO ", "AVISO", "gravação anterior", "sem gravação", "no ar,"))]
+passos = [l for l in linhas if not l.startswith(("TEMPO ", "AVISO", "Robô pronto"))]
 tempos = [l for l in linhas if re.fullmatch(r"TEMPO \d+ .+", l)]
 # Cada passo tem o seu tempo, com o mesmo texto, antes do passo seguinte.
 fechados = [re.fullmatch(r"TEMPO \d+ (.+)", l).group(1) for l in tempos]
@@ -104,12 +113,24 @@ echo mesmo_binario > "$DEFEITO"
 scripts/s1/rms1d-bench.sh up > "$T/up.txt" 2>&1 || { echo "up com o mesmo binário falhou:"; tail -5 "$T/up.txt"; falhou=1; }
 if grep -qF "push target/armv7-unknown-linux-gnueabihf/release/rms1d" "$ADB_LOG"; then echo "ENVIOU O MESMO BINÁRIO"; falhou=1; else echo "mesmo binário: não enviou"; fi
 pediu "push deploy/s1/rms1d.toml /data/debian/etc/robot/rms1d.toml"
-grep -qF "nada a enviar" "$T/up.txt" && echo "mesmo binário: a tela diz" || { echo "MESMO BINÁRIO SEM DIZER"; falhou=1; }
+esperar_copia
+: > "$DEFEITO"
+
+echo "--- o mesmo rms1d no ar, saudável: só conecta"
+echo ja_no_ar > "$DEFEITO"
+: > "$ADB_LOG"
+scripts/s1/rms1d-bench.sh up > "$T/up.txt" 2>&1 || { echo "up com o rms1d no ar falhou:"; tail -5 "$T/up.txt"; falhou=1; }
+grep -q "Conectando ao robô" "$T/up.txt" && grep -q "Robô pronto" "$T/up.txt" && echo "no ar e igual: conecta" || { echo "NO AR E IGUAL, NÃO CONECTOU:"; tail -5 "$T/up.txt"; falhou=1; }
+for proibido in "pkill -TERM rms1d" "push target" "stop dji_monitor" "/opt/robot/bin/rms1d --config"; do
+    if grep -qF -- "$proibido" "$ADB_LOG"; then echo "NO AR E IGUAL, MAS PEDIU: $proibido"; falhou=1; fi
+done
+pediu "forward tcp:9010 localfilesystem:/data/debian/run/robotd.sock"
 : > "$DEFEITO"
 
 echo "--- as gravações ficam fora dos repositórios"
 rm -rf "$T/xdg"
 env -u S1_OUT XDG_STATE_HOME="$T/xdg" S1_LAB="$T/lab" scripts/s1/rms1d-bench.sh up > "$T/up.txt" 2>&1 || { echo "up sem S1_OUT falhou:"; tail -5 "$T/up.txt"; falhou=1; }
+esperar_copia
 if [ -f "$T/xdg/rms1/gravacoes/$(date +%Y-%m-%d)/up.txt" ] && [ ! -e "$T/lab/out" ]; then echo "gravações em \$XDG_STATE_HOME/rms1/gravacoes/<data>/, nada no laboratório"; else echo "GRAVAÇÕES FORA DO LUGAR:"; find "$T/xdg" "$T/lab" 2>/dev/null | head; falhou=1; fi
 
 echo "--- o que tem de parar a subida"
@@ -139,7 +160,7 @@ reprova "rms1d doente" "doente" ""
 echo serial_muda > "$DEFEITO"
 : > "$ADB_LOG"
 scripts/s1/rms1d-bench.sh up > "$T/up.txt" 2>&1 || { echo "SERIAL MUDA PAROU A SUBIDA:"; tail -5 "$T/up.txt"; falhou=1; }
-if grep -q "AVISO: nada chegou do corpo" "$T/up.txt"; then echo "serial muda: avisa e segue"; else echo "SERIAL MUDA SEM AVISO"; falhou=1; fi
+if grep -q "AVISO: nada chegou do controlador" "$T/up.txt"; then echo "serial muda: avisa e segue"; else echo "SERIAL MUDA SEM AVISO"; falhou=1; fi
 : > "$DEFEITO"
 
 echo "--- a volta"

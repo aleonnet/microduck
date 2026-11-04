@@ -184,6 +184,9 @@ pub struct Estimativa {
     pub divergencia_grau: f64,
     /// Entre dois pacotes, acima disto não se integra: o relógio do robô recomeçou, ou a gravação perdeu dados.
     pub lacuna_ms: u64,
+    /// Levantado também quando o giro pelas rodas passa o do giroscópio por mais disto, em rad/s, por `giro_levantado_tempo_ms`.
+    pub giro_levantado_rad_s: f64,
+    pub giro_levantado_tempo_ms: u64,
 }
 
 /// As placas de golpe.
@@ -310,6 +313,11 @@ impl Default for Estimativa {
             divergencia_grau: 10.0,
             // O ritmo é de 20 ms (`gravacoes_lab.rs`, `o_relogio_anda_20_ms_por_pacote`): 1 s são 50 pacotes perdidos.
             lacuna_ms: 1000,
+            // Medido em 2026-11-03, giro pelas rodas menos o do giroscópio: no chão, andando e seguindo a torre, acima de 3 rad/s
+            // por no máximo 0,93 s seguidos (gravação em sombra) e 0,04 s (gravação das 20:40); com o robô no ar e o controlador
+            // alinhando o chassi, 3,84 s seguidos. 1,5 s fica acima do pior caso no chão (`out/2026-11-03-firmware-controlador/`).
+            giro_levantado_rad_s: 3.0,
+            giro_levantado_tempo_ms: 1500,
         }
     }
 }
@@ -473,6 +481,11 @@ impl Params {
             ("estimativa.quieto_giro_rad_s", e.quieto_giro_rad_s, 10.0),
             ("estimativa.quieto_aceleracao_g", e.quieto_aceleracao_g, 1.0),
             ("estimativa.divergencia_grau", e.divergencia_grau, 90.0),
+            (
+                "estimativa.giro_levantado_rad_s",
+                e.giro_levantado_rad_s,
+                30.0,
+            ),
         ] {
             if !(v.is_finite() && v > 0.0 && v <= max) {
                 return ruim(format!("{nome} tem de estar entre 0 e {max}: {v}"));
@@ -493,6 +506,12 @@ impl Params {
                 10_000,
             ),
             ("estimativa.soltar_tempo_ms", e.soltar_tempo_ms, 1, 10_000),
+            (
+                "estimativa.giro_levantado_tempo_ms",
+                e.giro_levantado_tempo_ms,
+                1,
+                10_000,
+            ),
             // Abaixo de 100 ms, cinco pacotes a 50 por segundo, o ritmo normal já seria lacuna.
             ("estimativa.lacuna_ms", e.lacuna_ms, 100, 60_000),
         ] {
@@ -603,6 +622,14 @@ mod testes {
     #[test]
     fn limiar_absurdo_da_estimativa_e_recusado_pelo_nome() {
         for (t, nome) in [
+            (
+                "[estimativa]\ngiro_levantado_rad_s = 0.0\n",
+                "giro_levantado_rad_s",
+            ),
+            (
+                "[estimativa]\ngiro_levantado_tempo_ms = 0\n",
+                "giro_levantado_tempo_ms",
+            ),
             ("[estimativa]\njanela_ms = 0\n", "janela_ms"),
             ("[estimativa]\njanela_ms = 60000\n", "janela_ms"),
             ("[estimativa]\njanela_pacotes = 10\n", "janela_pacotes"),

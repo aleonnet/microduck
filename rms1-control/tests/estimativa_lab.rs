@@ -283,14 +283,13 @@ fn no_robo_levantado_seguindo_a_torre_as_rodas_param() {
         "rodas paradas por levantado de {de:.1} a {ate:.1} s, em {} ciclos",
         no_ar.len()
     );
-    // No tempo desta gravação, as rodas giraram de 205,5 a 216,5 s (`scripts/rodas.py`, no laboratório). O levantado vem da
-    // discordância entre a velocidade do controlador e a das rodas, que passa de 0,4 m/s perto de 207 s e precisa durar 2 s
-    // (`levantado_tempo_ms`, medido contra as freadas): a parada chega 3,5 s depois de as rodas dispararem. É a rede de
-    // proteção; o conserto da causa é o seguir a zero ir uma vez só, conferido acima. Ninguém desarmou: as rodas seguem paradas
-    // até o fim da gravação, mesmo de volta ao chão.
+    // No tempo desta gravação, as rodas giraram no ar sem comando duas vezes: de 124,6 a 130,3 s e de 205,5 a 216,5 s
+    // (`scripts/rodas.py`, no laboratório), com o giroscópio abaixo de 2,3 rad/s. A regra da velocidade só pegou a segunda, 3,5 s
+    // depois; a do giro pelas rodas sem o corpo girar pega a primeira em 1,5 s. Ninguém desarmou: as rodas seguem paradas até
+    // o fim da gravação, mesmo de volta ao chão.
     let fim = leituras.last().map_or(0, |(ms, _)| *ms) as f64 / 1000.0;
     assert!(
-        (205.5..209.5).contains(&de) && ate >= fim - 0.1,
+        (124.6..127.0).contains(&de) && ate >= fim - 0.1,
         "{de} a {ate}, gravação até {fim}"
     );
 }
