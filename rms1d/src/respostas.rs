@@ -117,8 +117,9 @@ pub fn sensibilidade_das_placas(
     Ok(serde_json::json!({ "sensitivity": atual }))
 }
 
-/// As quatro posições da mira, na ordem em que o `dji_hdvt_uav` as devolve em `0x3f/0x57` (o leitor em `0x1d670`): com zoom x e
-/// y, sem zoom x e y, em décimos de milésimo da tela. São as chaves de `/data/rm_user_setting.json`.
+/// As quatro posições da mira, com zoom x e y, sem zoom x e y, em décimos de milésimo da tela: as chaves de
+/// `/data/rm_user_setting.json`. A ordem é a das chaves no `dji_hdvt_uav` e dos quatro campos seguidos do leitor de `0x3f/0x57`
+/// (`0x1d670`), não conferida campo a campo.
 const CHAVES_DA_MIRA: [&str; 4] = [
     "front_sight_zoom_inx",
     "front_sight_zoom_iny",
@@ -166,10 +167,11 @@ fn ler_mira(arquivo: Option<&std::path::Path>) -> Result<[u64; 4], String> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(v),
         Err(e) => return Err(format!("{}: {e}", arquivo.display())),
     };
-    let doc: serde_json::Value =
+    // Um JSON que não é objeto está estragado: recusa, como a gravação, em vez de dizer o padrão.
+    let doc: serde_json::Map<String, serde_json::Value> =
         serde_json::from_str(&texto).map_err(|e| format!("{}: {e}", arquivo.display()))?;
     for (i, chave) in CHAVES_DA_MIRA.iter().enumerate() {
-        if let Some(n) = doc.get(chave) {
+        if let Some(n) = doc.get(*chave) {
             v[i] = n.as_u64().filter(|n| *n <= MIRA_MAXIMO).ok_or(format!(
                 "{}: {chave} fora de 0 a 10000: {n}",
                 arquivo.display()
@@ -179,9 +181,17 @@ fn ler_mira(arquivo: Option<&std::path::Path>) -> Result<[u64; 4], String> {
     Ok(v)
 }
 
+/// Uma gravação de cada vez: o servidor atende cada conexão numa tarefa, num executor de várias threads, e duas gravações com o
+/// mesmo temporário estragavam o arquivo da DJI (o leitor frio de 2026-11-05 mediu 14 em 3000 rodadas).
+static GRAVANDO_A_MIRA: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Grava as quatro posições mexendo só nos números: o resto do arquivo, que é da DJI, fica byte a byte (o `serde_json` daqui não
-/// guarda a ordem das chaves). O resultado é relido e conferido antes de trocar o arquivo, por um temporário e `rename`.
+/// guarda a ordem das chaves). O resultado é relido e conferido antes de trocar o arquivo, por um temporário e `rename`, com o
+/// dono e as permissões do original.
 fn gravar_mira(arquivo: &std::path::Path, v: [u64; 4]) -> Result<(), String> {
+    let _vez = GRAVANDO_A_MIRA
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let erro = |e: &dyn std::fmt::Display| format!("{}: {e}", arquivo.display());
     let texto = match std::fs::read_to_string(arquivo) {
         Ok(t) => t,
@@ -230,9 +240,15 @@ fn gravar_mira(arquivo: &std::path::Path, v: [u64; 4]) -> Result<(), String> {
         ));
     }
     let temporario = arquivo.with_extension("json.rms1d");
+    let original = std::fs::metadata(arquivo).ok();
     let gravar = || -> std::io::Result<()> {
         let mut f = std::fs::File::create(&temporario)?;
         std::io::Write::write_all(&mut f, novo.as_bytes())?;
+        if let Some(m) = &original {
+            use std::os::unix::fs::MetadataExt;
+            f.set_permissions(m.permissions())?;
+            std::os::unix::fs::fchown(&f, Some(m.uid()), Some(m.gid()))?;
+        }
         f.sync_all()?;
         std::fs::rename(&temporario, arquivo)
     };

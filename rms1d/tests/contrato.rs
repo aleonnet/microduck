@@ -533,3 +533,49 @@ fn a_mira_recusa_o_que_nao_e_da_faixa_sem_tocar_no_arquivo() {
     );
     assert_eq!(std::fs::read_to_string(&arquivo).unwrap(), estragado);
 }
+
+/// Duas conexões gravando ao mesmo tempo: o servidor atende cada uma numa tarefa, num executor de várias threads. O arquivo da
+/// DJI termina válido, com o resto byte a byte, e com um dos pares gravados, nunca com pedaços dos dois.
+#[test]
+fn gravacoes_simultaneas_da_mira_nao_estragam_o_arquivo() {
+    let (c, arquivo) = contexto_com_mira("simultaneas", Some(AJUSTES_DA_DJI));
+    let c = Arc::new(c);
+    for rodada in 0..300 {
+        let fios: Vec<_> = (0..4u64)
+            .map(|n| {
+                let c = Arc::clone(&c);
+                std::thread::spawn(move || {
+                    let v = 1000 + n * 1000;
+                    mira(
+                        &c,
+                        Some(&serde_json::json!({"zoom_in": [v, v], "zoom_out": [v, v]})),
+                    )
+                    .is_ok()
+                })
+            })
+            .collect();
+        let respostas: Vec<bool> = fios.into_iter().map(|f| f.join().unwrap()).collect();
+        let texto = std::fs::read_to_string(&arquivo).unwrap();
+        let doc: serde_json::Value = serde_json::from_str(&texto)
+            .unwrap_or_else(|e| panic!("rodada {rodada}: arquivo inválido ({e}): {texto:?}"));
+        let v = doc["front_sight_zoom_inx"].as_u64().unwrap();
+        assert!(
+            respostas.iter().all(|r| *r),
+            "rodada {rodada}: {respostas:?}"
+        );
+        assert_eq!(
+            texto,
+            AJUSTES_DA_DJI.replace(": 5000", &format!(": {v}")),
+            "rodada {rodada}"
+        );
+    }
+}
+
+/// Um arquivo que é JSON mas não é objeto está estragado: a leitura recusa, como a gravação, em vez de dizer o padrão.
+#[test]
+fn ler_a_mira_de_um_arquivo_que_nao_e_objeto_recusa() {
+    for ruim in ["[1, 2]", "7", "\"mira\""] {
+        let (c, _) = contexto_com_mira("nao-objeto", Some(ruim));
+        assert!(mira(&c, None).is_err(), "{ruim}");
+    }
+}
