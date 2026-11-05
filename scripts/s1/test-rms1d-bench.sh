@@ -85,6 +85,10 @@ scripts/s1/rms1d-bench.sh up > "$T/up.txt" 2>&1 || { echo "up falhou:"; tail -20
 grep -q "Robô pronto" "$T/up.txt" || { echo "up não terminou:"; tail -20 "$T/up.txt"; exit 1; }
 pediu "stop dji_hdvt_uav"
 pediu "stop dji_monitor"
+# A mira da DJI: o `/data` dela dentro do chroot, ligado só se ainda não estiver, antes de o `rms1d` subir.
+pediu "grep -q ' /data/debian/mnt/dji ' /proc/mounts || {"
+pediu "mkdir -p /data/debian/mnt/dji && mount -o bind /data /data/debian/mnt/dji; }"
+antes "mount -o bind /data /data/debian/mnt/dji" "/opt/robot/bin/rms1d --config /etc/robot/rms1d.toml"
 pediu "/opt/robot/bin/rms1d --config /etc/robot/rms1d.toml --socket /run/robotd.sock"
 pediu "forward tcp:9010 localfilesystem:/data/debian/run/robotd.sock"
 pediu "push deploy/s1/rms1d.toml /data/debian/etc/robot/rms1d.toml"

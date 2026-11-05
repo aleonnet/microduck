@@ -117,6 +117,152 @@ pub fn sensibilidade_das_placas(
     Ok(serde_json::json!({ "sensitivity": atual }))
 }
 
+/// As quatro posições da mira, na ordem em que o `dji_hdvt_uav` as devolve em `0x3f/0x57` (o leitor em `0x1d670`): com zoom x e
+/// y, sem zoom x e y, em décimos de milésimo da tela. São as chaves de `/data/rm_user_setting.json`.
+const CHAVES_DA_MIRA: [&str; 4] = [
+    "front_sight_zoom_inx",
+    "front_sight_zoom_iny",
+    "front_sight_zoom_outx",
+    "front_sight_zoom_outy",
+];
+/// O padrão de fábrica: o `dji_hdvt_uav` grava 5000 nos quatro campos antes de ler o arquivo (`0x1d2f8`), o centro da tela.
+const MIRA_PADRAO: u64 = 5000;
+/// A tela inteira, nas unidades da DJI: o firmware divide por 10000 (`get_sight_bead_position`, `rm_ctrl.py`).
+const MIRA_MAXIMO: u64 = 10000;
+
+/// `s1.sight`: a mira da DJI. Sem valores, responde as quatro posições do arquivo de `[mira] arquivo` (o padrão onde faltar o
+/// arquivo ou a chave); com `zoom_in` e `zoom_out`, cada um `[x, y]` de 0 a 10000, grava e responde o que ficou.
+pub fn mira(c: &Contexto, params: Option<&serde_json::Value>) -> Result<serde_json::Value, String> {
+    let arquivo = c.params.mira.arquivo.as_deref().map(std::path::Path::new);
+    let pedido = params.filter(|p| p.get("zoom_in").is_some() || p.get("zoom_out").is_some());
+    if let Some(p) = pedido {
+        let par = |nome: &str| -> Result<[u64; 2], String> {
+            let v = p
+                .get(nome)
+                .and_then(|v| v.as_array())
+                .filter(|a| a.len() == 2)
+                .ok_or(format!("{nome} tem de ser [x, y]"))?;
+            let n = |i: usize| {
+                v[i].as_u64().filter(|n| *n <= MIRA_MAXIMO).ok_or(format!(
+                    "{nome} tem de ter inteiros de 0 a 10000, a tela inteira da DJI"
+                ))
+            };
+            Ok([n(0)?, n(1)?])
+        };
+        let (zi, zo) = (par("zoom_in")?, par("zoom_out")?);
+        let arquivo =
+            arquivo.ok_or("sem [mira] arquivo em rms1d.toml: não há onde gravar a mira")?;
+        gravar_mira(arquivo, [zi[0], zi[1], zo[0], zo[1]])?;
+    }
+    let v = ler_mira(arquivo)?;
+    Ok(serde_json::json!({ "zoom_in": [v[0], v[1]], "zoom_out": [v[2], v[3]] }))
+}
+
+fn ler_mira(arquivo: Option<&std::path::Path>) -> Result<[u64; 4], String> {
+    let mut v = [MIRA_PADRAO; 4];
+    let Some(arquivo) = arquivo else { return Ok(v) };
+    let texto = match std::fs::read_to_string(arquivo) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(v),
+        Err(e) => return Err(format!("{}: {e}", arquivo.display())),
+    };
+    let doc: serde_json::Value =
+        serde_json::from_str(&texto).map_err(|e| format!("{}: {e}", arquivo.display()))?;
+    for (i, chave) in CHAVES_DA_MIRA.iter().enumerate() {
+        if let Some(n) = doc.get(chave) {
+            v[i] = n.as_u64().filter(|n| *n <= MIRA_MAXIMO).ok_or(format!(
+                "{}: {chave} fora de 0 a 10000: {n}",
+                arquivo.display()
+            ))?;
+        }
+    }
+    Ok(v)
+}
+
+/// Grava as quatro posições mexendo só nos números: o resto do arquivo, que é da DJI, fica byte a byte (o `serde_json` daqui não
+/// guarda a ordem das chaves). O resultado é relido e conferido antes de trocar o arquivo, por um temporário e `rename`.
+fn gravar_mira(arquivo: &std::path::Path, v: [u64; 4]) -> Result<(), String> {
+    let erro = |e: &dyn std::fmt::Display| format!("{}: {e}", arquivo.display());
+    let texto = match std::fs::read_to_string(arquivo) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => "{\n}\n".to_owned(),
+        Err(e) => return Err(erro(&e)),
+    };
+    let antes: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_str(&texto).map_err(|e| erro(&e))?;
+    let mut novo = texto.clone();
+    let mut faltam = Vec::new();
+    for (chave, valor) in CHAVES_DA_MIRA.iter().zip(v) {
+        match numero_da_chave(&novo, chave) {
+            Some((ini, fim)) => novo.replace_range(ini..fim, &valor.to_string()),
+            None => faltam.push(format!("   \"{chave}\" : {valor}")),
+        }
+    }
+    if !faltam.is_empty() {
+        let abre = novo
+            .find('{')
+            .ok_or_else(|| erro(&"o arquivo não é um objeto"))?
+            + 1;
+        let resto = if antes.is_empty() { "\n" } else { ",\n" };
+        novo.insert_str(abre, &format!("\n{}{resto}", faltam.join(",\n")));
+        if antes.is_empty() {
+            // O objeto vazio fecha logo depois: tira o que sobrou entre as chaves novas e o fecho.
+            let fecho = novo
+                .rfind('}')
+                .ok_or_else(|| erro(&"o arquivo não é um objeto"))?;
+            let ultimo = novo[..fecho].trim_end().len();
+            novo.replace_range(ultimo..fecho, "\n");
+        }
+    }
+    let depois: serde_json::Map<String, serde_json::Value> = serde_json::from_str(&novo)
+        .map_err(|e| erro(&format!("a gravação daria um arquivo inválido: {e}")))?;
+    let iguais = antes
+        .iter()
+        .filter(|(k, _)| !CHAVES_DA_MIRA.contains(&k.as_str()))
+        .all(|(k, x)| depois.get(k) == Some(x));
+    let certas = CHAVES_DA_MIRA
+        .iter()
+        .zip(v)
+        .all(|(k, n)| depois.get(*k).and_then(|x| x.as_u64()) == Some(n));
+    if !iguais || !certas || depois.len() != antes.len() + faltam.len() {
+        return Err(erro(
+            &"a gravação mudaria outra parte do arquivo da DJI; nada foi gravado",
+        ));
+    }
+    let temporario = arquivo.with_extension("json.rms1d");
+    let gravar = || -> std::io::Result<()> {
+        let mut f = std::fs::File::create(&temporario)?;
+        std::io::Write::write_all(&mut f, novo.as_bytes())?;
+        f.sync_all()?;
+        std::fs::rename(&temporario, arquivo)
+    };
+    gravar().map_err(|e| {
+        let _ = std::fs::remove_file(&temporario);
+        erro(&e)
+    })
+}
+
+/// Onde está o número de `"chave" : n` no texto, do primeiro dígito ao último.
+fn numero_da_chave(texto: &str, chave: &str) -> Option<(usize, usize)> {
+    let aspas = format!("\"{chave}\"");
+    let depois = texto.find(&aspas)? + aspas.len();
+    let resto = &texto[depois..];
+    let dois_pontos = resto.find(|c: char| !c.is_whitespace())?;
+    if !resto[dois_pontos..].starts_with(':') {
+        return None;
+    }
+    let apos = &resto[dois_pontos + 1..];
+    let ini = apos.find(|c: char| !c.is_whitespace())?;
+    let fim = apos[ini..]
+        .find(|c: char| !c.is_ascii_digit())
+        .map_or(apos.len(), |f| ini + f);
+    if fim == ini {
+        return None;
+    }
+    let base = depois + dois_pontos + 1;
+    Some((base + ini, base + fim))
+}
+
 pub fn saude_do_contrato(c: &Contexto) -> proto::HealthResult {
     let mut v = c.saude.veredito(
         Instant::now(),

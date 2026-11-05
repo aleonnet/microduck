@@ -207,6 +207,20 @@ async fn atender(
             }
             continue;
         }
+        // `s1.sight`: a mira da DJI, que o robô guarda.
+        if pedido.method == "s1.sight" {
+            if let Some(id) = pedido.id.clone() {
+                let resposta = match respostas::mira(&c, pedido.params.as_ref()) {
+                    Ok(v) => proto::Response::ok(Some(id), &v),
+                    Err(e) => proto::Response::err(
+                        Some(id),
+                        proto::Error::new(proto::code::INVALID_PARAMS, e),
+                    ),
+                };
+                escrever(&mut saida, &resposta).await?;
+            }
+            continue;
+        }
         // `s1.subscribe` e `s1.telemetry`: o que o S1 tem a mais, fora do contrato comum, sem esperar o laço.
         if pedido.method == "s1.subscribe" || pedido.method == "s1.telemetry" {
             let Some(id) = pedido.id.clone() else {

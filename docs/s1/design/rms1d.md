@@ -119,6 +119,14 @@ Nas gravações de 2026-11-03:
 
 As gravações do `rms1d` que sai (`corpo.gravar` e `corpo.gravar_recebido`) mudam de nome no robô para `<arquivo>.robo-<data>-<hora>`, um nome por ativação, e são copiadas ao fundo, logo, para `$XDG_STATE_HOME/rms1/gravacoes/<data>/`; só são apagadas no robô depois de a cópia chegar. A ativação seguinte e a volta à DJI esperam a cópia em curso, com prazo. Prova: `scripts/s1/test-rms1d-bench.sh`, com contraprova de cada caso.
 
+## A mira da DJI
+
+O app desenha a mira numa posição fixa da tela, que o usuário ajusta e o robô guarda: `DJIRobomasterSystemSightBeadPosition`, com `0x3f/0x56` para gravar e `0x3f/0x57` para ler, os dois no `dji_hdvt_uav`. Ele guarda quatro números em `/data/rm_user_setting.json`: com zoom x e y, sem zoom x e y (`front_sight_zoom_inx`, `_iny`, `_outx`, `_outy`), em décimos de milésimo da tela. O padrão de fábrica é 5000 nos quatro, o centro: o `dji_hdvt_uav` os grava antes de ler o arquivo (`0x1d2f8`). Não há correção pela distância; o cano fica abaixo da câmera, e o tiro cai abaixo da mira de perto.
+
+No modo do `rms1d` o `dji_hdvt_uav` está parado, e quem lê e grava o mesmo arquivo é o `rms1d`, por `s1.sight`: sem valores, responde `{"zoom_in": [x, y], "zoom_out": [x, y]}`; com os dois pares, inteiros de 0 a 10000, grava e responde o que ficou. A gravação muda só os quatro números, confere o resultado e troca o arquivo por um temporário e `rename`. O ajuste feito na página vale no app, e o contrário. O caminho vem de `[mira] arquivo`, em `rms1d.toml`; no robô, `/mnt/dji/rm_user_setting.json`, porque a bancada liga o `/data` da DJI dentro do chroot. Sem `[mira] arquivo`, `s1.sight` responde o padrão e recusa gravar.
+
+**Não verificado:** qual dos dois pares o app usa sem o zoom digital, e se y conta do alto da tela. A prova é ajustar no app e ler aqui.
+
 ## Limitação conhecida
 
 Com telemetria, ainda não há malha fechada: `rms1d` manda rpm às rodas, e a velocidade medida não volta ao comando. No simulador, pelo mesmo caminho, a 1,2 m/s por 3 s o desvio é de até 0,006 m, em 8 fases de início. A 3,5 m/s varia de 0,013 a 0,768 m, sem tendência: compatível com o contato dos roletes, mas a causa não está provada. A malha fechada pede plano próprio. Fonte: `tools/simulador/test_quadros.mjs`, no laboratório.

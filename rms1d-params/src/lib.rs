@@ -33,6 +33,7 @@ pub struct Params {
     pub telemetria: Telemetria,
     pub estimativa: Estimativa,
     pub armadura: Armadura,
+    pub mira: Mira,
     pub dji: Dji,
 }
 
@@ -195,6 +196,15 @@ pub struct Estimativa {
 pub struct Armadura {
     /// A sensibilidade da DJI, de 0 a 10: maior, golpe mais leve conta (`RobotArmor.set_hit_sensitivity`, `rm_ctrl.py`).
     pub sensibilidade: u8,
+}
+
+/// A mira da DJI: a posição em que o app a desenha, que o usuário ajusta e o robô guarda.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct Mira {
+    /// O arquivo em que o `dji_hdvt_uav` guarda as quatro posições (`/data/rm_user_setting.json`, visto de dentro do chroot).
+    /// Sem ele, `s1.sight` responde o padrão de fábrica e recusa gravar.
+    pub arquivo: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -541,6 +551,11 @@ impl Params {
         if self.seguranca.pitch_min_grau >= self.seguranca.pitch_max_grau {
             return ruim("seguranca.pitch_min_grau tem de ser menor que pitch_max_grau".to_owned());
         }
+        if let Some(a) = &self.mira.arquivo
+            && !a.starts_with('/')
+        {
+            return ruim(format!("mira.arquivo tem de ser um caminho absoluto: {a}"));
+        }
         if self.armadura.sensibilidade > 10 {
             return ruim(format!(
                 "armadura.sensibilidade fora de 0 a 10, a faixa da DJI: {}",
@@ -613,6 +628,7 @@ mod testes {
             "[telemetria]\njanela_ms = 500\n",
             "[telemetria]\ntentativas = 0\n",
             "[armadura]\nsensibilidade = 11\n",
+            "[mira]\narquivo = \"rm_user_setting.json\"\n",
         ] {
             assert!(de(t).is_err(), "{t}");
         }

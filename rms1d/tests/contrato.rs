@@ -5,7 +5,8 @@ use std::sync::Arc;
 use duck_ipc_proto as proto;
 use rms1_control::{Intencoes, Saude};
 use rms1d::respostas::{
-    Contexto, aplicar_taxa_da_torre, olhar, responder, saude_do_contrato, sensibilidade_das_placas,
+    Contexto, aplicar_taxa_da_torre, mira, olhar, responder, saude_do_contrato,
+    sensibilidade_das_placas,
 };
 use rms1d_params::Params;
 
@@ -359,4 +360,176 @@ fn sensibilidade_das_placas_so_aceita_de_0_a_10_e_responde_a_atual() {
         None,
         "recusado não pede nada"
     );
+}
+
+/// O começo de `/data/rm_user_setting.json` do robô do dono, na forma em que o `dji_hdvt_uav` o escreve (cópia de 2026-11-01,
+/// `out/2026-11-01-copia-completa/arvores/data_soltos/rm_user_setting.json`, no laboratório), com as chaves que vêm depois.
+const AJUSTES_DA_DJI: &str = "{\n   \"front_sight_zoom_inx\" : 5000,\n   \"front_sight_zoom_iny\" : 5000,\n   \"front_sight_zoom_outx\" : 5000,\n   \"front_sight_zoom_outy\" : 5000,\n   \"func_enable\" : {\n      \"game_scene\" : [ true, true, true, true, true, false, true ]\n   },\n   \"goback_enable\" : 0,\n   \"low_power_time\" : 60,\n   \"speaker_volume\" : 15\n}\n";
+
+fn contexto_com_mira(nome: &str, conteudo: Option<&str>) -> (Contexto, std::path::PathBuf) {
+    let pasta = std::env::temp_dir().join(format!("rms1d-mira-{}-{nome}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&pasta);
+    std::fs::create_dir_all(&pasta).unwrap();
+    let arquivo = pasta.join("rm_user_setting.json");
+    if let Some(c) = conteudo {
+        std::fs::write(&arquivo, c).unwrap();
+    }
+    let mut c = contexto();
+    c.params.mira.arquivo = Some(arquivo.to_string_lossy().into_owned());
+    (c, arquivo)
+}
+
+/// `s1.sight` sem valores: as quatro do arquivo; sem `[mira] arquivo`, sem o arquivo ou sem a chave, o padrão de fábrica, 5000.
+#[test]
+fn a_mira_le_o_arquivo_da_dji_e_o_padrao_e_o_centro() {
+    let r = mira(&contexto(), None).unwrap();
+    assert_eq!(
+        r,
+        serde_json::json!({"zoom_in": [5000, 5000], "zoom_out": [5000, 5000]})
+    );
+    let (c, _) = contexto_com_mira("ausente", None);
+    assert_eq!(
+        mira(&c, None).unwrap()["zoom_out"],
+        serde_json::json!([5000, 5000])
+    );
+    let (c, _) = contexto_com_mira(
+        "le",
+        Some(&AJUSTES_DA_DJI.replace(
+            "\"front_sight_zoom_outy\" : 5000",
+            "\"front_sight_zoom_outy\" : 6200",
+        )),
+    );
+    assert_eq!(
+        mira(&c, None).unwrap(),
+        serde_json::json!({"zoom_in": [5000, 5000], "zoom_out": [5000, 6200]})
+    );
+    let (c, _) = contexto_com_mira("sem-chave", Some("{\n   \"speaker_volume\" : 15\n}\n"));
+    assert_eq!(
+        mira(&c, Some(&serde_json::json!({}))).unwrap()["zoom_in"],
+        serde_json::json!([5000, 5000])
+    );
+}
+
+/// Gravar muda só os quatro números: o resto do arquivo da DJI fica byte a byte, e a leitura devolve o gravado.
+#[test]
+fn gravar_a_mira_muda_so_os_quatro_numeros() {
+    let (c, arquivo) = contexto_com_mira("grava", Some(AJUSTES_DA_DJI));
+    let r = mira(
+        &c,
+        Some(&serde_json::json!({"zoom_in": [1234, 4321], "zoom_out": [600, 9000]})),
+    )
+    .unwrap();
+    assert_eq!(
+        r,
+        serde_json::json!({"zoom_in": [1234, 4321], "zoom_out": [600, 9000]})
+    );
+    let esperado = AJUSTES_DA_DJI
+        .replace(
+            "\"front_sight_zoom_inx\" : 5000",
+            "\"front_sight_zoom_inx\" : 1234",
+        )
+        .replace(
+            "\"front_sight_zoom_iny\" : 5000",
+            "\"front_sight_zoom_iny\" : 4321",
+        )
+        .replace(
+            "\"front_sight_zoom_outx\" : 5000",
+            "\"front_sight_zoom_outx\" : 600",
+        )
+        .replace(
+            "\"front_sight_zoom_outy\" : 5000",
+            "\"front_sight_zoom_outy\" : 9000",
+        );
+    assert_eq!(std::fs::read_to_string(&arquivo).unwrap(), esperado);
+    // O padrão volta ao centro, e o arquivo volta ao que era.
+    mira(
+        &c,
+        Some(&serde_json::json!({"zoom_in": [5000, 5000], "zoom_out": [5000, 5000]})),
+    )
+    .unwrap();
+    assert_eq!(std::fs::read_to_string(&arquivo).unwrap(), AJUSTES_DA_DJI);
+    assert!(
+        !arquivo.with_extension("json.rms1d").exists(),
+        "o temporário não fica"
+    );
+}
+
+/// Chave ausente entra no arquivo, e o resto fica; num objeto vazio, o arquivo continua válido.
+#[test]
+fn gravar_a_mira_sem_as_chaves_as_acrescenta() {
+    let outro = "{\n   \"speaker_volume\" : 15\n}\n";
+    let (c, arquivo) = contexto_com_mira("acrescenta", Some(outro));
+    mira(
+        &c,
+        Some(&serde_json::json!({"zoom_in": [1, 2], "zoom_out": [3, 4]})),
+    )
+    .unwrap();
+    let doc: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&arquivo).unwrap()).unwrap();
+    assert_eq!(doc["speaker_volume"], 15);
+    assert_eq!(doc["front_sight_zoom_outy"], 4);
+    assert!(
+        std::fs::read_to_string(&arquivo)
+            .unwrap()
+            .ends_with("   \"speaker_volume\" : 15\n}\n")
+    );
+    for vazio in ["{}", "{\n}\n"] {
+        let (c, arquivo) = contexto_com_mira("vazio", Some(vazio));
+        mira(
+            &c,
+            Some(&serde_json::json!({"zoom_in": [1, 2], "zoom_out": [3, 4]})),
+        )
+        .unwrap();
+        let doc: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&arquivo).unwrap()).unwrap();
+        assert_eq!(doc.as_object().unwrap().len(), 4, "{vazio}");
+    }
+    let (c, arquivo) = contexto_com_mira("cria", None);
+    mira(
+        &c,
+        Some(&serde_json::json!({"zoom_in": [7, 8], "zoom_out": [9, 10]})),
+    )
+    .unwrap();
+    assert_eq!(
+        mira(&c, None).unwrap()["zoom_out"],
+        serde_json::json!([9, 10])
+    );
+    assert!(arquivo.exists());
+}
+
+/// Fora da faixa, não inteiro, incompleto, sem `[mira] arquivo` ou com o arquivo estragado: recusa, e o arquivo não muda.
+#[test]
+fn a_mira_recusa_o_que_nao_e_da_faixa_sem_tocar_no_arquivo() {
+    let (c, arquivo) = contexto_com_mira("recusa", Some(AJUSTES_DA_DJI));
+    for ruim in [
+        serde_json::json!({"zoom_in": [10001, 0], "zoom_out": [0, 0]}),
+        serde_json::json!({"zoom_in": [-1, 0], "zoom_out": [0, 0]}),
+        serde_json::json!({"zoom_in": [2.5, 0], "zoom_out": [0, 0]}),
+        serde_json::json!({"zoom_in": [0, 0]}),
+        serde_json::json!({"zoom_in": [0], "zoom_out": [0, 0]}),
+        serde_json::json!({"zoom_in": "centro", "zoom_out": [0, 0]}),
+    ] {
+        assert!(mira(&c, Some(&ruim)).is_err(), "{ruim}");
+        assert_eq!(
+            std::fs::read_to_string(&arquivo).unwrap(),
+            AJUSTES_DA_DJI,
+            "{ruim}"
+        );
+    }
+    let e = mira(
+        &contexto(),
+        Some(&serde_json::json!({"zoom_in": [1, 1], "zoom_out": [1, 1]})),
+    )
+    .unwrap_err();
+    assert!(e.contains("[mira] arquivo"), "{e}");
+    let estragado = "{\n   \"front_sight_zoom_inx\" : 5000,\n";
+    let (c, arquivo) = contexto_com_mira("estragado", Some(estragado));
+    assert!(
+        mira(
+            &c,
+            Some(&serde_json::json!({"zoom_in": [1, 1], "zoom_out": [1, 1]}))
+        )
+        .is_err()
+    );
+    assert_eq!(std::fs::read_to_string(&arquivo).unwrap(), estragado);
 }

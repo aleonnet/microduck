@@ -146,7 +146,7 @@ up() {
     passo "Abrindo o acesso ao robô"
     python3 -I "$ACESSO" abrir --host "$IP"
     confere chroot_ok "sem chroot em $CHROOT; rode scripts/s1/bench.sh exec uma vez" "test -d $CHROOT/bin && echo chroot_ok"
-    "${A[@]}" shell "$BB grep -q ' $CHROOT/dev ' /proc/mounts || mount -o bind /dev $CHROOT/dev; $BB grep -q ' $CHROOT/proc ' /proc/mounts || mount -t proc proc $CHROOT/proc; $BB grep -q ' $CHROOT/sys ' /proc/mounts || mount -t sysfs sys $CHROOT/sys"
+    "${A[@]}" shell "$BB grep -q ' $CHROOT/dev ' /proc/mounts || mount -o bind /dev $CHROOT/dev; $BB grep -q ' $CHROOT/proc ' /proc/mounts || mount -t proc proc $CHROOT/proc; $BB grep -q ' $CHROOT/sys ' /proc/mounts || mount -t sysfs sys $CHROOT/sys; $BB grep -q ' $CHROOT/mnt/dji ' /proc/mounts || { $BB mkdir -p $CHROOT/mnt/dji && mount -o bind /data $CHROOT/mnt/dji; }"
     "${A[@]}" shell "mkdir -p $CHROOT/opt/robot/bin $CHROOT/etc/robot $CHROOT/run $CHROOT/var/lib/robot"
     # O que o robô tem. O busybox dele tem `sha256sum` (lido na cópia completa, `arvores/system/system/xbin/busybox`); o
     # `adb shell` do Android 4.4 termina a linha com `\r`.

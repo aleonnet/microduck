@@ -24,6 +24,11 @@ coordenada = 4
 # "Deixe as placas sensíveis ao toque". O padrão da DJI é 5.
 sensibilidade = 10
 
+[mira]
+# Onde o `dji_hdvt_uav` guarda a mira que o app ajusta, `/data/rm_user_setting.json`, visto de dentro do chroot: a bancada liga o
+# `/data` da DJI em `/mnt/dji`. Com ele parado, quem lê e grava é o `rms1d` (`s1.sight`).
+arquivo = "/mnt/dji/rm_user_setting.json"
+
 [dji]
 # O monitor primeiro: ele religa quem cair.
 parar = ["dji_monitor", "dji_hdvt_uav"]
