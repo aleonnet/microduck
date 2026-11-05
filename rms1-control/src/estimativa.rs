@@ -130,8 +130,13 @@ impl Estimativa {
                     return c;
                 }
                 if d > self.l.lacuna_ms {
-                    // Depois da lacuna, nada do que veio antes vale para a média.
+                    // Depois da lacuna, nada do que veio antes vale para a média; e o relógio que recomeçou é o controlador que
+                    // religou, com a posição e o rumo dele de volta ao início (no simulador, a cada recarga da página ou
+                    // "Recomeçar"). Como no primeiro pacote, o cálculo parte de onde o controlador diz: sem isto, ele seguia com o
+                    // acumulado de antes, e a tela mostrava 0,00 e 0,00 ao lado de -6,69 e 11,40 (o dono, 2026-11-05).
                     self.janela.clear();
+                    self.posicao = [m.posicao[0], m.posicao[1]];
+                    self.rumo_giro = m.rumo;
                     0
                 } else {
                     d

@@ -305,3 +305,38 @@ fn reprocessar_ignora_outra_mensagem_e_outro_no() {
         1
     );
 }
+
+/// O controlador religou (relógio que recomeça) ou sumiu por mais que a lacuna: o cálculo parte de novo da posição e do rumo dele,
+/// como no primeiro pacote, e não segue com o acumulado de antes.
+#[test]
+fn depois_que_o_controlador_religa_a_posicao_parte_da_dele() {
+    let (mut e, p) = nova();
+    let r = rpm_de(0.4, &p);
+    let andando = Medidas {
+        rodas_rpm: [r; 4],
+        velocidade_corpo: [0.4, 0.0, 0.0],
+        ..parado_em_pe()
+    };
+    let c = pacotes(&mut e, &andando, 51, 0, |_, _| {});
+    assert!(
+        (c.last().unwrap().posicao[0] - 0.4).abs() < 1e-6,
+        "andou 0,4 m"
+    );
+    // Religou: o relógio volta ao começo e a posição dele, a zero.
+    let religado = Medidas {
+        relogio_ms: 40,
+        ..parado_em_pe()
+    };
+    let c = e.passo(&religado, BIT_PARADO);
+    assert_eq!(c.posicao, [0.0, 0.0], "{c:?}");
+    // Sumiu por 5 s e voltou noutro lugar: parte de lá.
+    let longe = Medidas {
+        relogio_ms: 5040,
+        posicao: [1.5, -2.0, 0.0],
+        rumo: 30.0,
+        ..parado_em_pe()
+    };
+    let c = e.passo(&longe, BIT_PARADO);
+    assert_eq!(c.posicao, [1.5, -2.0], "{c:?}");
+    assert_eq!(c.rumo_pelo_giro, 30.0, "{c:?}");
+}
