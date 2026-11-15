@@ -61,7 +61,7 @@ Um socket unix, `[midia] socket`, em JSON-RPC, uma linha por mensagem.
 | `robot.sound` | O do contrato do pato (`tag` e `hold`), como requisição ou notificação |
 | `s1.media.subscribe` | `{"heard": true, "detections": true}`. A conexão passa a receber `s1.audio.heard {"kind"}`, já com a trava aplicada, e `media.detections`. Cada pedido diz as duas assinaturas: a que não vem é desligada |
 | `s1.media.status` | O que o serviço está fazendo: quadros copiados, se há som tocando (`playing`), se o microfone está surdo pela trava (`deaf`: o som e a janela depois dele), e a percepção (`perception`) |
-| `s1.media.preview` | `{"width": 640}`. O quadro reduzido a RGB, para quem só quer olhar (a tela "Sentidos" do simulador): o cabeçalho de `media.frame`, com `format: "RGB"`, e os bytes. A redução é feita aqui (`reducao.rs`), e o Wi-Fi do robô leva a imagem pequena. A conexão fica aberta e serve o pedido seguinte |
+| `s1.media.preview` | `{"width": 640, "format": "jpeg", "quality": 70}`. O quadro reduzido, para quem só quer olhar (a mídia do Pilotar, no simulador): o cabeçalho de `media.frame` e os bytes. Sem `format`, vem em RGB (`format: "RGB"`); com `"jpeg"`, em JPEG (`format: "JPEG"`, qualidade de 30 a 90), pelo codificador do `mediad` do pato. A redução e o JPEG são feitos aqui. A conexão fica aberta e serve o pedido seguinte |
 
 **O som passa pelo `rms1d`.** Quem pede som fala com o `rms1d`, como no pato fala com o `robotd`: ele repassa `robot.sound` a este serviço como notificação, sem esperar, e responde aceito. Sem `[midia]` em `rms1d.toml`, ou com este serviço fora do ar, recusa com o motivo. `rms1d/tests/midia.rs`.
 
@@ -78,6 +78,10 @@ O S1 captura, a estação pensa, e o S1 publica o que ela achou. O formato do an
 - **Conexão caída reconecta, com espera crescente.** `s1.media.status` diz por que nada está sendo mandado, quando não está.
 
 Os testes: `rms1-mediad/tests/percepcao.rs`, com uma estação de mentira em 127.0.0.1.
+
+## A porta do vídeo
+
+Com `[midia] porta_video` diferente de zero (47010 no arquivo do robô), o serviço atende também uma porta TCP, em todas as interfaces, por onde só passam `hello`, `s1.media.preview` e `s1.media.status`: nada que mude o robô (`servidor.rs`, `servir_tcp`; teste `a_porta_do_video_entrega_jpeg_pela_rede_e_so_deixa_olhar`). É por ela que a tela busca a imagem, direto pela rede: pela ponte do `adb` um quadro RGB de 691 KB levava mais de 4 s (medido em 2026-11-15, `out/2026-11-14-s1-midia/medida-tela-no-robo.txt`, no laboratório). Não tem senha: quem está na rede do robô vê a câmera dele. O custo do JPEG no processador do robô e no laço não está medido (etapa `video` de `tools/simulador/prova_midia_s1.sh`, no laboratório).
 
 ## O som do robô simulado
 
