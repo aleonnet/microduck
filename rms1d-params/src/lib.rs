@@ -235,12 +235,16 @@ pub struct Midia {
 pub enum FonteCamera {
     /// Um padrão que se move, de 256 por 144: para máquina sem câmera.
     Teste,
+    /// A câmera do robô simulado: a página desenha o quadro, 1280 por 720, só quando alguém o pede.
+    Simulador,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct MidiaCamera {
     pub fonte: FonteCamera,
+    /// Onde o serviço local do simulador entrega a câmera simulada (`endereço:porta`).
+    pub endereco: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -305,6 +309,7 @@ impl Default for MidiaCamera {
     fn default() -> Self {
         Self {
             fonte: FonteCamera::Teste,
+            endereco: "127.0.0.1:19210".to_owned(),
         }
     }
 }
@@ -724,6 +729,14 @@ impl Params {
             if m.percepcao.porta_anuncio == 0 {
                 return ruim("midia.percepcao.porta_anuncio não pode ser 0".to_owned());
             }
+            if m.camera.fonte == FonteCamera::Simulador
+                && m.camera.endereco.parse::<std::net::SocketAddr>().is_err()
+            {
+                return ruim(format!(
+                    "midia.camera.endereco tem de ser endereço:porta: {}",
+                    m.camera.endereco
+                ));
+            }
             if m.microfone.fonte == FonteMicrofone::Arquivo && m.microfone.arquivo.is_none() {
                 return ruim(
                     "midia.microfone.arquivo falta: a fonte de arquivo precisa do `.wav`"
@@ -970,6 +983,10 @@ mod testes {
             ("[midia.percepcao]\nritmo_max = 23\n", "ritmo_max"),
             ("[midia.percepcao]\nporta_anuncio = 0\n", "porta_anuncio"),
             ("[midia.camera]\nfonte = \"webcam\"\n", "webcam"),
+            (
+                "[midia.camera]\nfonte = \"simulador\"\nendereco = \"aqui\"\n",
+                "midia.camera.endereco",
+            ),
             (
                 "[midia.microfone]\nfonte = \"arquivo\"\n",
                 "midia.microfone.arquivo",

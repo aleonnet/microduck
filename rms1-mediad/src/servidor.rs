@@ -41,6 +41,8 @@ pub struct Servico {
     pub deteccoes: broadcast::Sender<Arc<str>>,
     /// O que a percepção pela estação está fazendo: quem escreve é [`crate::percepcao::rodar`].
     pub percepcao: Arc<Mutex<Estado>>,
+    /// Por que a câmera não entrega quadro, se não entrega: quem escreve é a fonte da câmera.
+    pub camera: Arc<Mutex<Option<String>>>,
 }
 
 impl Servico {
@@ -53,6 +55,7 @@ impl Servico {
             ouvidos,
             deteccoes,
             percepcao: Arc::default(),
+            camera: Arc::default(),
         })
     }
 
@@ -247,6 +250,7 @@ pub async fn atender(conexao: UnixStream, s: Arc<Servico>) -> Result<()> {
             let estado = serde_json::json!({
                 "frames_copied": s.quadros.copias(),
                 "playing": s.tocador.lock().expect("trava do tocador").tocando(),
+                "camera_problem": *s.camera.lock().expect("estado da câmera"),
                 "perception": *s.percepcao.lock().expect("estado da percepção"),
             });
             if pedido.id.is_some() {

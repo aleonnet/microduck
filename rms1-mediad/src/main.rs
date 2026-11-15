@@ -33,6 +33,8 @@ const PERIODO_DE_TESTE: Duration = Duration::from_millis(33);
 /// De quanto em quanto o tocador recolhe o som que terminou e confere o `wheee`: o tique do pato, 20 ms.
 const TIQUE: Duration = Duration::from_millis(20);
 const HZ_DO_MICROFONE: usize = 16_000;
+/// De quanto em quanto a câmera do simulador tenta de novo, com o serviço local fora do ar: o do pato, 1 s.
+const RECONECTAR_AO_SIMULADOR: Duration = Duration::from_secs(1);
 
 fn subir_microfone(
     m: &Midia,
@@ -124,6 +126,14 @@ fn main() -> ExitCode {
             FonteCamera::Teste => {
                 let (q, p) = (quadros.clone(), parar.clone());
                 std::thread::spawn(move || camera::rodar_teste(q, PERIODO_DE_TESTE, p));
+            }
+            FonteCamera::Simulador => {
+                let (q, p, s) = (quadros.clone(), parar.clone(), servico.clone());
+                let endereco = midia.camera.endereco.clone();
+                std::thread::spawn(move || {
+                    let dizer = move |motivo| *s.camera.lock().expect("estado da câmera") = motivo;
+                    camera::rodar_simulador(q, &endereco, RECONECTAR_AO_SIMULADOR, dizer, p)
+                });
             }
         }
         if let Err(e) = subir_microfone(&midia, trava, servico.clone(), parar.clone()) {
