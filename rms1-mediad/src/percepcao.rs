@@ -4,7 +4,7 @@
 //! quer e em que ritmo, e o que cada função ligada entrega. Para cada entrada que este S1 sabe mandar, manda; para cada
 //! entrega que sabe ler, lê e, se a função pede, publica.
 //!
-//! Nesta frente o S1 sabe mandar o quadro contínuo (`quadro_continuo`, RGB 320 por 180, sem moldura) e ler as caixas do
+//! Nesta frente o S1 sabe mandar o quadro contínuo (`quadro_continuo`, RGB 640 por 360, sem moldura: `QUADRO_LARGURA` e `QUADRO_ALTURA`, abaixo) e ler as caixas do
 //! detector de patos (`caixas`, do leitor `nanodet_v8`), que publica em `media.detections`, no formato do pato.
 //!
 //! **O ritmo é o da estação**, até o teto de `[midia] percepcao.ritmo_max`. Os 2 por segundo do detector do pato são calor

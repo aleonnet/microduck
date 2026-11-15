@@ -4,7 +4,8 @@
 //! vizinho mais próximo, e BT.601 de faixa limitada (o que o driver da câmera declara), em inteiros. A moldura de cada
 //! modelo é posta na estação. `scripts/test-rms1-mediad-lab.sh` prova que as duas contas, juntas, dão os mesmos bytes.
 //!
-//! Para o quadro do robô, 1280 por 720 reduzido a 320 por 180: 172.800 bytes, contra os 307.200 do quadro com moldura.
+//! O quadro do robô, 1280 por 720, vai à estação reduzido a 640 por 360 (`percepcao.rs`, `QUADRO_LARGURA` e
+//! `QUADRO_ALTURA`): 691.200 bytes. A medição de 2026-11-13 usava 320 por 180, e é esse o tamanho que os testes daqui conferem.
 
 fn saturar(v: i32) -> u8 {
     v.clamp(0, 255) as u8
