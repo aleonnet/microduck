@@ -126,6 +126,11 @@ impl Tocador {
         }
     }
 
+    /// O serviço vai sair: nenhum som fica tocando.
+    pub fn parar(&mut self, agora: Instant) {
+        self.cortar(agora);
+    }
+
     /// Para o que estiver na saída, agora.
     fn cortar(&mut self, agora: Instant) {
         self.seguro.store(false, Ordering::Relaxed);

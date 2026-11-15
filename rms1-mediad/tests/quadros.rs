@@ -5,9 +5,11 @@ use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use duck_ipc_proto as proto;
+use rms1_mediad::alto_falante::{Nula, Tocador};
 use rms1_mediad::camera::{self, NV12, TESTE_ALTURA, TESTE_LARGURA};
 use rms1_mediad::quadros::Quadros;
-use rms1_mediad::servidor;
+use rms1_mediad::servidor::{self, Servico};
+use rms1_mediad::trava::Trava;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 
@@ -36,7 +38,15 @@ fn esperar_pedido(quadros: &Quadros) {
 /// Um pedido de `media.frame` pelo socket: o cabeçalho e os bytes que vieram depois dele.
 async fn pedir(quadros: Quadros) -> (proto::Response, Vec<u8>) {
     let (mut cliente, servidor_) = UnixStream::pair().unwrap();
-    let tarefa = tokio::spawn(servidor::atender(servidor_, quadros));
+    let tocador = Tocador::novo(
+        std::path::PathBuf::from("/nao-existe"),
+        Box::new(Nula),
+        Trava::nova(Duration::from_millis(800)),
+    );
+    let tarefa = tokio::spawn(servidor::atender(
+        servidor_,
+        Servico::novo(quadros, tocador),
+    ));
     cliente.write_all(PEDIDO).await.unwrap();
     let mut leitor = BufReader::new(cliente);
     let mut linha = String::new();

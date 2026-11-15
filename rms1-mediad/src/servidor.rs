@@ -1,75 +1,248 @@
-//! O socket local do `rms1-mediad`: `hello` e `media.frame`, no formato do pato (`mediad/src/frame.rs`): uma linha JSON-RPC
-//! com o cabeçalho do contrato e, em seguida, exatamente `bytes` bytes crus. O quadro nunca passa por JSON.
+//! O socket local do `rms1-mediad`.
+//!
+//! - `hello` e `media.frame`, no formato do pato (`mediad/src/frame.rs`): uma linha JSON-RPC com o cabeçalho do contrato e,
+//!   em seguida, exatamente `bytes` bytes crus. O quadro nunca passa por JSON, e a conexão fecha depois dele.
+//! - `robot.sound`, o do contrato, como requisição ou como notificação: é o que o `rms1d` repassa.
+//! - `s1.media.subscribe {"heard": true}`: a conexão passa a receber `s1.audio.heard {"kind"}`, já com a trava aplicada.
+//! - `s1.media.status`: o que o serviço está fazendo.
 
-use std::time::UNIX_EPOCH;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use anyhow::Result;
 use duck_ipc_proto as proto;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::net::UnixStream;
 use tokio::net::unix::OwnedWriteHalf;
+use tokio::net::{UnixListener, UnixStream};
+use tokio::sync::broadcast;
 
+use crate::alto_falante::Tocador;
+use crate::microfone::Ouvido;
 use crate::quadros::Quadros;
 
-/// O maior pedido que o socket lê. `media.frame` não leva parâmetro que valha um nome.
+/// O maior pedido que o socket lê.
 const PEDIDO_MAXIMO: usize = 4096;
+const MODO_SOCKET: u32 = 0o660;
+/// Quantos eventos de som ficam guardados para um assinante lento. Quem fica para trás perde os mais velhos.
+const OUVIDOS_NA_FILA: usize = 32;
+
+/// O que as conexões partilham.
+pub struct Servico {
+    pub quadros: Quadros,
+    pub tocador: Mutex<Tocador>,
+    pub ouvidos: broadcast::Sender<Ouvido>,
+}
+
+impl Servico {
+    pub fn novo(quadros: Quadros, tocador: Tocador) -> Arc<Self> {
+        let (ouvidos, _) = broadcast::channel(OUVIDOS_NA_FILA);
+        Arc::new(Self {
+            quadros,
+            tocador: Mutex::new(tocador),
+            ouvidos,
+        })
+    }
+
+    /// Toca o que um `robot.sound` pede.
+    fn som(&self, p: proto::SoundParams) {
+        let agora = Instant::now();
+        let mut tocador = self.tocador.lock().expect("trava do tocador");
+        match (p.tag, p.hold) {
+            (proto::SoundTag::Wheee, Some(segurar)) => tocador.wheee(segurar, agora),
+            (tag, _) => tocador.tocar(tag.as_str(), agora),
+        }
+    }
+}
+
+/// Trava `<socket>.lock` e abre o socket. Arquivo comum no caminho é recusado; socket morto só sai depois de recusar conexão.
+/// O mesmo cuidado do `rms1d` (`rms1d/src/servidor.rs`): dois serviços não podem ser donos da câmera e do som.
+pub async fn abrir(socket: &Path) -> std::io::Result<(std::fs::File, UnixListener)> {
+    use std::fs::{OpenOptions, TryLockError};
+    use std::io::ErrorKind;
+    use std::os::unix::fs::{FileTypeExt, PermissionsExt};
+    if let Some(pai) = socket.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(pai)?;
+    }
+    let mut caminho = socket.as_os_str().to_os_string();
+    caminho.push(".lock");
+    let trava = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(caminho)?;
+    match trava.try_lock() {
+        Ok(()) => {}
+        Err(TryLockError::WouldBlock) => {
+            return Err(std::io::Error::new(
+                ErrorKind::AddrInUse,
+                "outro rms1-mediad é dono deste socket",
+            ));
+        }
+        Err(TryLockError::Error(e)) => return Err(e),
+    }
+    if let Ok(m) = std::fs::symlink_metadata(socket)
+        && !m.file_type().is_socket()
+    {
+        return Err(std::io::Error::new(
+            ErrorKind::AddrInUse,
+            "o caminho do socket existe e não é um socket",
+        ));
+    }
+    let ouvinte = match UnixListener::bind(socket) {
+        Ok(o) => o,
+        Err(e) if e.kind() == ErrorKind::AddrInUse => {
+            match tokio::time::timeout(Duration::from_secs(1), UnixStream::connect(socket)).await {
+                Ok(Err(p)) if p.kind() == ErrorKind::ConnectionRefused => {
+                    std::fs::remove_file(socket)?;
+                    UnixListener::bind(socket)?
+                }
+                _ => return Err(e),
+            }
+        }
+        Err(e) => return Err(e),
+    };
+    std::fs::set_permissions(socket, std::fs::Permissions::from_mode(MODO_SOCKET))?;
+    Ok((trava, ouvinte))
+}
+
+pub async fn servir(ouvinte: UnixListener, servico: Arc<Servico>) {
+    loop {
+        match ouvinte.accept().await {
+            Ok((conexao, _)) => {
+                let s = servico.clone();
+                tokio::spawn(async move {
+                    if let Err(erro) = atender(conexao, s).await {
+                        tracing::debug!(%erro, "conexão terminou");
+                    }
+                });
+            }
+            Err(erro) => tracing::warn!(%erro, "accept falhou"),
+        }
+    }
+}
 
 /// Atende uma conexão até ela fechar, até um erro de leitura do pedido, ou até um quadro ser entregue.
-pub async fn atender(conexao: UnixStream, quadros: Quadros) -> Result<()> {
+pub async fn atender(conexao: UnixStream, s: Arc<Servico>) -> Result<()> {
     let (leitura, mut escrita) = conexao.into_split();
     let mut leitor = BufReader::new(leitura);
+    let mut ouvindo: Option<broadcast::Receiver<Ouvido>> = None;
+    // A linha em leitura fica fora do laço: se um evento de som chega no meio dela, o que já foi lido não se perde.
+    let mut em_leitura = Vec::new();
     loop {
         // O limite vale antes de a linha ser guardada: um cliente não faz este processo segurar uma linha sem fim.
-        let mut linha = Vec::new();
-        let lidos = (&mut leitor)
-            .take(PEDIDO_MAXIMO as u64 + 1)
-            .read_until(b'\n', &mut linha)
-            .await?;
+        let resto = (PEDIDO_MAXIMO + 1).saturating_sub(em_leitura.len()) as u64;
+        let mut limitado = (&mut leitor).take(resto);
+        let ler = limitado.read_until(b'\n', &mut em_leitura);
+        let lidos = match ouvindo.as_mut() {
+            None => ler.await?,
+            Some(rx) => tokio::select! {
+                l = ler => l?,
+                o = rx.recv() => {
+                    match o {
+                        Ok(o) => {
+                            let n = serde_json::json!({"jsonrpc": "2.0", "method": "s1.audio.heard", "params": {"kind": o.nome()}});
+                            escrever(&mut escrita, &n).await?;
+                        }
+                        Err(broadcast::error::RecvError::Lagged(n)) => tracing::debug!(perdidos = n, "assinante ficou para trás"),
+                        Err(broadcast::error::RecvError::Closed) => return Ok(()),
+                    }
+                    continue;
+                }
+            },
+        };
+        let linha = std::mem::take(&mut em_leitura);
         if lidos == 0 {
             return Ok(());
         }
         if linha.len() > PEDIDO_MAXIMO {
-            return responder(
+            return escrever(
                 &mut escrita,
-                erro(None, proto::code::INVALID_PARAMS, "request is too large"),
+                &erro(None, proto::code::INVALID_PARAMS, "request is too large"),
             )
             .await;
         }
         let pedido: proto::Request = match serde_json::from_slice(&linha) {
             Ok(p) => p,
             Err(e) => {
-                return responder(
+                return escrever(
                     &mut escrita,
-                    erro(None, proto::code::PARSE_ERROR, &e.to_string()),
+                    &erro(None, proto::code::PARSE_ERROR, &e.to_string()),
                 )
                 .await;
             }
         };
-        if pedido.method == proto::method::HELLO {
+        let metodo = pedido.method.as_str();
+        if metodo == proto::method::HELLO {
             let ola = proto::HelloResult {
                 api_version: proto::API_VERSION,
                 daemon_version: proto::semver::Version::parse(env!("CARGO_PKG_VERSION")).ok(),
                 revision: proto::build_info!().revision.map(str::to_owned),
             };
-            responder(&mut escrita, proto::Response::ok(pedido.id, &ola)).await?;
+            escrever(&mut escrita, &proto::Response::ok(pedido.id, &ola)).await?;
             continue;
         }
-        if pedido.method != proto::method::MEDIA_FRAME {
-            let texto = format!("{} is not served by rms1-mediad", pedido.method);
-            responder(
+        if metodo == proto::method::ROBOT_SOUND {
+            let params = pedido.params.clone().unwrap_or(serde_json::Value::Null);
+            let resposta = match serde_json::from_value::<proto::SoundParams>(params) {
+                Ok(p) => {
+                    s.som(p);
+                    proto::Response::ok(pedido.id.clone(), &proto::IntentResult::accepted())
+                }
+                Err(e) => erro(
+                    pedido.id.clone(),
+                    proto::code::INVALID_PARAMS,
+                    &e.to_string(),
+                ),
+            };
+            // Notificação não tem resposta.
+            if pedido.id.is_some() {
+                escrever(&mut escrita, &resposta).await?;
+            }
+            continue;
+        }
+        if metodo == "s1.media.subscribe" {
+            let quer = pedido
+                .params
+                .as_ref()
+                .is_some_and(|p| p["heard"].as_bool() == Some(true));
+            ouvindo = quer.then(|| s.ouvidos.subscribe());
+            if pedido.id.is_some() {
+                escrever(
+                    &mut escrita,
+                    &proto::Response::ok(pedido.id, &proto::IntentResult::accepted()),
+                )
+                .await?;
+            }
+            continue;
+        }
+        if metodo == "s1.media.status" {
+            let estado = serde_json::json!({
+                "frames_copied": s.quadros.copias(),
+                "playing": s.tocador.lock().expect("trava do tocador").tocando(),
+            });
+            if pedido.id.is_some() {
+                escrever(&mut escrita, &proto::Response::ok(pedido.id, &estado)).await?;
+            }
+            continue;
+        }
+        if metodo != proto::method::MEDIA_FRAME {
+            let texto = format!("{metodo} is not served by rms1-mediad");
+            escrever(
                 &mut escrita,
-                erro(pedido.id, proto::code::METHOD_NOT_FOUND, &texto),
+                &erro(pedido.id, proto::code::METHOD_NOT_FOUND, &texto),
             )
             .await?;
             continue;
         }
         // `proximo` marca o pedido e espera numa condvar: não pode rodar na thread do runtime.
-        let q = quadros.clone();
+        let q = s.quadros.clone();
         let Some(quadro) = tokio::task::spawn_blocking(move || q.proximo()).await? else {
             let texto = "no frame arrived within the capture timeout";
-            return responder(
+            return escrever(
                 &mut escrita,
-                erro(pedido.id, proto::code::INTERNAL_ERROR, texto),
+                &erro(pedido.id, proto::code::INTERNAL_ERROR, texto),
             )
             .await;
         };
@@ -86,7 +259,7 @@ pub async fn atender(conexao: UnixStream, quadros: Quadros) -> Result<()> {
             // A câmera do S1 é montada de pé.
             rotate: 0,
         };
-        responder(&mut escrita, proto::Response::ok(pedido.id, &cabecalho)).await?;
+        escrever(&mut escrita, &proto::Response::ok(pedido.id, &cabecalho)).await?;
         escrita.write_all(&quadro.dados).await?;
         escrita.flush().await?;
         return Ok(());
@@ -97,8 +270,8 @@ fn erro(id: Option<proto::Id>, codigo: i32, texto: &str) -> proto::Response {
     proto::Response::err(id, proto::Error::new(codigo, texto))
 }
 
-async fn responder(escrita: &mut OwnedWriteHalf, resposta: proto::Response) -> Result<()> {
-    let mut linha = serde_json::to_vec(&resposta)?;
+async fn escrever<T: serde::Serialize>(escrita: &mut OwnedWriteHalf, mensagem: &T) -> Result<()> {
+    let mut linha = serde_json::to_vec(mensagem)?;
     linha.push(b'\n');
     escrita.write_all(&linha).await?;
     escrita.flush().await?;

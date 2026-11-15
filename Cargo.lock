@@ -4042,6 +4042,7 @@ dependencies = [
  "duck-ipc-proto",
  "hound",
  "pet-detect",
+ "rms1d-params",
  "serde",
  "serde_json",
  "tempfile",

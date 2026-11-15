@@ -20,6 +20,7 @@ anyhow = "1"
 clap = { workspace = true, features = ["derive"] }
 duck-ipc-proto = { path = "../duck-ipc-proto" }
 pet-detect = { path = "../pet-detect" }
+rms1d-params = { path = "../rms1d-params" }
 serde.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "time", "io-util", "signal", "sync"] }
