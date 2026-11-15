@@ -1,0 +1,29 @@
+# `rms1-mediad`: o dono único da câmera, do microfone e do alto-falante do S1, fora do `rms1d`: uma falha de mídia não
+# pode derrubar quem move o robô. A mesma interface para o teste, o simulador e o robô. Desenho: docs/s1/design/rms1-mediad.md.
+[package]
+name = "rms1-mediad"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "O serviço de mídia do RoboMaster S1: câmera, microfone e alto-falante, com um dono só"
+
+[lib]
+name = "rms1_mediad"
+
+[[bin]]
+name = "rms1-mediad"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { workspace = true, features = ["derive"] }
+duck-ipc-proto = { path = "../duck-ipc-proto" }
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "time", "io-util", "signal", "sync"] }
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+
+[dev-dependencies]
+tempfile = "3"

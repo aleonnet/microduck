@@ -4034,6 +4034,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "rms1-mediad"
+version = "0.18.3"
+dependencies = [
+ "anyhow",
+ "clap",
+ "duck-ipc-proto",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "rms1-proto"
 version = "0.18.3"
 dependencies = [
