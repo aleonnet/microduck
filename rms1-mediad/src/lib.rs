@@ -12,5 +12,6 @@ pub mod camera;
 pub mod estacao;
 pub mod microfone;
 pub mod quadros;
+pub mod reducao;
 pub mod servidor;
 pub mod trava;

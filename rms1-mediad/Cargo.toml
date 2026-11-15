@@ -15,6 +15,10 @@ name = "rms1_mediad"
 name = "rms1-mediad"
 path = "src/main.rs"
 
+[[bin]]
+name = "rms1-mediad-prova"
+path = "src/bin/rms1-mediad-prova.rs"
+
 [dependencies]
 anyhow = "1"
 clap = { workspace = true, features = ["derive"] }
