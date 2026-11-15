@@ -165,3 +165,76 @@ async fn quem_assina_recebe_as_deteccoes_e_o_estado_mostra_a_percepcao() {
         "{r}"
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_previa_entrega_o_quadro_reduzido_em_rgb_e_a_conexao_fica() {
+    use rms1_mediad::quadros::Quadro;
+    use tokio::io::AsyncReadExt;
+    let (_pasta, _anota, servico) = montar();
+    // Uma câmera de mentira: a cada pedido, um quadro NV12 de 1280 por 720, branco em cima e preto embaixo.
+    let q = servico.quadros.clone();
+    std::thread::spawn(move || {
+        loop {
+            if q.levar_pedido() {
+                let (l, a) = (1280usize, 720usize);
+                let mut dados = vec![128u8; l * a * 3 / 2];
+                dados[..l * a / 2].fill(235);
+                dados[l * a / 2..l * a].fill(16);
+                q.entregar(Quadro {
+                    largura: l as u32,
+                    altura: a as u32,
+                    formato: "NV12",
+                    capturado_em: std::time::SystemTime::now(),
+                    dados,
+                });
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    });
+    let (cliente, servidor_) = UnixStream::pair().unwrap();
+    tokio::spawn(servidor::atender(servidor_, servico));
+    let mut c = BufReader::new(cliente);
+    // Dois pedidos pela mesma conexão: o padrão, e uma largura pedida.
+    for (id, pedido, l, a) in [
+        (
+            1u64,
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"s1.media.preview\"}\n",
+            640usize,
+            360usize,
+        ),
+        (
+            2,
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"s1.media.preview\",\"params\":{\"width\":320}}\n",
+            320,
+            180,
+        ),
+    ] {
+        c.get_mut().write_all(pedido.as_bytes()).await.unwrap();
+        let r = linha(&mut c).await;
+        let h = &r["result"];
+        assert_eq!(
+            (
+                r["id"].as_u64(),
+                h["width"].as_u64(),
+                h["height"].as_u64(),
+                h["format"].as_str(),
+                h["bytes"].as_u64()
+            ),
+            (
+                Some(id),
+                Some(l as u64),
+                Some(a as u64),
+                Some("RGB"),
+                Some((l * a * 3) as u64)
+            ),
+            "{r}"
+        );
+        let mut rgb = vec![0u8; l * a * 3];
+        tokio::time::timeout(Duration::from_secs(5), c.read_exact(&mut rgb))
+            .await
+            .expect("os bytes do quadro em 5 s")
+            .unwrap();
+        assert_eq!(&rgb[..3], [255, 255, 255], "o de cima é branco");
+        assert_eq!(&rgb[rgb.len() - 3..], [0, 0, 0], "o de baixo é preto");
+    }
+}

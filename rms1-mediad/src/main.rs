@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use clap::Parser;
-use rms1_mediad::alto_falante::{Aplay, Nula, Saida, Tocador};
+use rms1_mediad::alto_falante::{Aplay, Nula, Saida, Simulador, Tocador};
 use rms1_mediad::camera;
 use rms1_mediad::microfone::{self, BLOCO, Ouvinte};
 use rms1_mediad::mixer;
@@ -88,6 +88,27 @@ fn subir_microfone(
     servico: Arc<Servico>,
     parar: Arc<AtomicBool>,
 ) -> anyhow::Result<()> {
+    if m.microfone.fonte == FonteMicrofone::Simulador {
+        let (s, d) = (servico.clone(), servico.clone());
+        let saidas = microfone::Saidas {
+            // Sem assinante, o evento não tem para quem ir.
+            ouvido: Box::new(move |o| drop(s.ouvidos.send(o))),
+            nivel: servico.nivel_do_microfone.clone(),
+            dizer: Box::new(move |motivo| {
+                if let Some(m) = &motivo {
+                    tracing::warn!(motivo = m, "o microfone do simulador");
+                }
+                *d.microfone.lock().expect("estado do microfone") = motivo;
+            }),
+        };
+        let endereco = m.microfone.endereco.clone();
+        std::thread::Builder::new()
+            .name("microfone".into())
+            .spawn(move || {
+                microfone::rodar_simulador(&endereco, trava, saidas, RELIGAR_O_MICROFONE, parar)
+            })?;
+        return Ok(());
+    }
     if m.microfone.fonte == FonteMicrofone::Arecord {
         // O mesmo pedido do trabalhador do pato: PCM cru, 16 bits, 16 kHz, um canal.
         let args: Vec<String> = [
@@ -206,6 +227,7 @@ fn main() -> ExitCode {
         let saida: Box<dyn Saida> = match midia.alto_falante.saida {
             SaidaDeSom::Aplay => Box::new(Aplay { dispositivo: midia.alto_falante.dispositivo.clone() }),
             SaidaDeSom::Nula => Box::new(Nula),
+            SaidaDeSom::Simulador => Box::new(Simulador { endereco: midia.alto_falante.endereco.clone() }),
         };
         let tocador = Tocador::novo(PathBuf::from(&midia.alto_falante.banco), saida, trava.clone());
         let quadros = Quadros::default();

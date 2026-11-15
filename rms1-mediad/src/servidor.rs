@@ -8,6 +8,8 @@
 //!   duas assinaturas: a que não vem é desligada.
 //! - `s1.media.volume {"volume": 0..100}`: o volume do alto-falante, na conta da DJI, pelo mixer do robô.
 //! - `s1.media.status`: o que o serviço está fazendo.
+//! - `s1.media.preview {"width": 640}`: o quadro reduzido a RGB, para quem só quer olhar (a tela "Sentidos"): o cabeçalho de
+//!   `media.frame`, com `format: "RGB"`, e os bytes. A conexão fica aberta, e serve o pedido seguinte.
 
 use std::path::Path;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -32,6 +34,9 @@ const PEDIDO_MAXIMO: usize = 4096;
 const MODO_SOCKET: u32 = 0o660;
 /// Quantos eventos de som ficam guardados para um assinante lento. Quem fica para trás perde os mais velhos.
 const OUVIDOS_NA_FILA: usize = 32;
+/// A largura do quadro reduzido de `s1.media.preview`, sem pedido de outra, e a menor que se aceita.
+const PREVIA_LARGURA: usize = 640;
+const PREVIA_MINIMA: usize = 64;
 /// Das detecções só a mais nova interessa: a fila do pato (`mediad/src/detect.rs`), 8.
 const DETECCOES_NA_FILA: usize = 8;
 
@@ -309,7 +314,8 @@ pub async fn atender(conexao: UnixStream, s: Arc<Servico>) -> Result<()> {
             }
             continue;
         }
-        if metodo != proto::method::MEDIA_FRAME {
+        let previa = metodo == "s1.media.preview";
+        if metodo != proto::method::MEDIA_FRAME && !previa {
             let texto = format!("{metodo} is not served by rms1-mediad");
             escrever(
                 &mut escrita,
@@ -328,6 +334,53 @@ pub async fn atender(conexao: UnixStream, s: Arc<Servico>) -> Result<()> {
             )
             .await;
         };
+        if previa {
+            // O quadro reduzido, para quem só quer olhar: a conta é feita aqui, e o Wi-Fi do robô leva a imagem pequena.
+            let pedida = pedido
+                .params
+                .as_ref()
+                .and_then(|p| p["width"].as_u64())
+                .unwrap_or(PREVIA_LARGURA as u64) as usize;
+            let (l, a) = (quadro.largura as usize, quadro.altura as usize);
+            let ls = pedida.clamp(PREVIA_MINIMA, l.max(PREVIA_MINIMA)) & !1;
+            let as_ = ((ls * a / l.max(1)) & !1).max(2);
+            let q = quadro.clone();
+            let rgb = match q.formato {
+                "NV12" => {
+                    tokio::task::spawn_blocking(move || {
+                        crate::reducao::nv12_para_rgb(&q.dados, l, a, ls, as_)
+                    })
+                    .await?
+                }
+                _ => None,
+            };
+            let Some(rgb) = rgb else {
+                let texto = "the frame is not NV12 of the size it claims";
+                escrever(
+                    &mut escrita,
+                    &erro(pedido.id, proto::code::INTERNAL_ERROR, texto),
+                )
+                .await?;
+                continue;
+            };
+            let cabecalho = proto::MediaFrameHeader {
+                width: ls as u32,
+                height: as_ as u32,
+                format: "RGB".to_owned(),
+                bytes: rgb.len(),
+                captured_at_unix_us: quadro
+                    .capturado_em
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_micros(),
+                rotate: 0,
+            };
+            escrever(&mut escrita, &proto::Response::ok(pedido.id, &cabecalho)).await?;
+            escrita.write_all(&rgb).await?;
+            escrita.flush().await?;
+            // A conexão fica: quem olha pede o próximo por ela.
+            continue;
+        }
         let cabecalho = proto::MediaFrameHeader {
             width: quadro.largura,
             height: quadro.altura,

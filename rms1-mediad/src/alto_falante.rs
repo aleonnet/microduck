@@ -373,3 +373,171 @@ impl Saida for Nula {
         Ok((Box::new(std::io::sink()), Box::new(Terminado)))
     }
 }
+
+/// Os recados do alto-falante simulado ao serviço local: um byte com o tipo, quatro com o tamanho, e o conteúdo.
+pub mod recado {
+    /// A primeira coisa que vai pela conexão: quem liga é o alto-falante.
+    pub const FALA: u8 = b'F';
+    /// Um `.wav` inteiro, para tocar agora.
+    pub const ARQUIVO: u8 = 1;
+    /// Um fluxo começa: a taxa, em 4 bytes.
+    pub const FLUXO: u8 = 2;
+    /// Um pedaço do fluxo: PCM cru, S16LE, mono.
+    pub const PEDACO: u8 = 3;
+    /// O som para agora.
+    pub const CORTE: u8 = 4;
+}
+
+/// A saída do robô simulado: cada som vai ao serviço local do simulador, que o entrega à página, e ela o toca. O som dura
+/// aqui o que dura lá: é isso que mantém a trava contra a própria voz valendo no simulador.
+pub struct Simulador {
+    pub endereco: String,
+}
+
+fn mandar(conexao: &mut std::net::TcpStream, tipo: u8, conteudo: &[u8]) -> std::io::Result<()> {
+    conexao.write_all(&[tipo])?;
+    conexao.write_all(&(conteudo.len() as u32).to_le_bytes())?;
+    conexao.write_all(conteudo)
+}
+
+/// Quanto dura um `.wav` de PCM: o tamanho dos dados sobre os bytes por segundo que o cabeçalho declara.
+pub fn duracao_wav(b: &[u8]) -> Option<Duration> {
+    if b.len() < 12 || &b[..4] != b"RIFF" || &b[8..12] != b"WAVE" {
+        return None;
+    }
+    let mut por_segundo = 0u32;
+    let mut pos = 12usize;
+    while pos + 8 <= b.len() {
+        let tamanho = u32::from_le_bytes(b[pos + 4..pos + 8].try_into().ok()?) as usize;
+        let corpo = pos + 8;
+        match &b[pos..pos + 4] {
+            b"fmt " if corpo + 12 <= b.len() => {
+                por_segundo = u32::from_le_bytes(b[corpo + 8..corpo + 12].try_into().ok()?)
+            }
+            b"data" if por_segundo > 0 => {
+                let dados = tamanho.min(b.len() - corpo);
+                return Some(Duration::from_secs_f64(
+                    dados as f64 / f64::from(por_segundo),
+                ));
+            }
+            _ => {}
+        }
+        pos = corpo + tamanho + (tamanho & 1);
+    }
+    None
+}
+
+impl Simulador {
+    fn ligar(&self) -> std::io::Result<std::net::TcpStream> {
+        let mut conexao = std::net::TcpStream::connect(&self.endereco)?;
+        let _ = conexao.set_nodelay(true);
+        conexao.write_all(&[recado::FALA])?;
+        Ok(conexao)
+    }
+}
+
+/// Um arquivo tocando na página: termina quando a duração dele passa.
+struct NaPagina {
+    conexao: std::net::TcpStream,
+    fim: Instant,
+}
+
+impl Tocando for NaPagina {
+    fn terminou(&mut self) -> bool {
+        Instant::now() >= self.fim
+    }
+    fn cortar(&mut self) {
+        let _ = mandar(&mut self.conexao, recado::CORTE, &[]);
+    }
+}
+
+/// O que quem escreve o fluxo e quem o vigia partilham.
+struct Fluxo {
+    hz: u32,
+    comecou: Instant,
+    bytes: std::sync::atomic::AtomicUsize,
+    fechado: AtomicBool,
+    cortado: AtomicBool,
+}
+
+struct EscritaDoFluxo {
+    conexao: std::net::TcpStream,
+    fluxo: Arc<Fluxo>,
+}
+
+impl Write for EscritaDoFluxo {
+    fn write(&mut self, pedaco: &[u8]) -> std::io::Result<usize> {
+        if self.fluxo.cortado.load(Ordering::Relaxed) {
+            return Err(std::io::ErrorKind::BrokenPipe.into());
+        }
+        mandar(&mut self.conexao, recado::PEDACO, pedaco)?;
+        self.fluxo.bytes.fetch_add(pedaco.len(), Ordering::Relaxed);
+        Ok(pedaco.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.conexao.flush()
+    }
+}
+
+impl Drop for EscritaDoFluxo {
+    fn drop(&mut self) {
+        self.fluxo.fechado.store(true, Ordering::Relaxed);
+    }
+}
+
+struct FluxoNaPagina {
+    conexao: std::net::TcpStream,
+    fluxo: Arc<Fluxo>,
+}
+
+impl Tocando for FluxoNaPagina {
+    fn terminou(&mut self) -> bool {
+        // Quem escreve já saiu, e o que foi mandado já tocou.
+        let tocado = Duration::from_secs_f64(
+            self.fluxo.bytes.load(Ordering::Relaxed) as f64 / (f64::from(self.fluxo.hz) * 2.0),
+        );
+        self.fluxo.fechado.load(Ordering::Relaxed) && self.fluxo.comecou.elapsed() >= tocado
+    }
+    fn cortar(&mut self) {
+        self.fluxo.cortado.store(true, Ordering::Relaxed);
+        let _ = mandar(&mut self.conexao, recado::CORTE, &[]);
+    }
+}
+
+impl Saida for Simulador {
+    fn tocar_arquivo(&mut self, wav: &Path) -> std::io::Result<Box<dyn Tocando>> {
+        let bytes = std::fs::read(wav)?;
+        let dura = duracao_wav(&bytes).ok_or_else(|| {
+            std::io::Error::other(format!("{} não é um wav de PCM", wav.display()))
+        })?;
+        let mut conexao = self.ligar()?;
+        mandar(&mut conexao, recado::ARQUIVO, &bytes)?;
+        Ok(Box::new(NaPagina {
+            conexao,
+            fim: Instant::now() + dura,
+        }))
+    }
+
+    fn abrir_fluxo(
+        &mut self,
+        hz: u32,
+    ) -> std::io::Result<(Box<dyn Write + Send>, Box<dyn Tocando>)> {
+        let mut conexao = self.ligar()?;
+        mandar(&mut conexao, recado::FLUXO, &hz.to_le_bytes())?;
+        let fluxo = Arc::new(Fluxo {
+            hz: hz.max(1),
+            comecou: Instant::now(),
+            bytes: std::sync::atomic::AtomicUsize::new(0),
+            fechado: AtomicBool::new(false),
+            cortado: AtomicBool::new(false),
+        });
+        let escrita = EscritaDoFluxo {
+            conexao: conexao.try_clone()?,
+            fluxo: fluxo.clone(),
+        };
+        Ok((
+            Box::new(escrita),
+            Box::new(FluxoNaPagina { conexao, fluxo }),
+        ))
+    }
+}

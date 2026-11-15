@@ -86,6 +86,55 @@ pub struct Saidas {
     pub dizer: Box<dyn Fn(Option<String>) + Send>,
 }
 
+/// Passa pelo ouvinte os blocos lidos de `saida`, até ela acabar ou `parar` valer. Devolve quantos blocos ouviu. Uma fonte
+/// calada por mais que o prazo de leitura dela não é fim: o nível vai a zero e a espera segue.
+fn ouvir_fluxo(
+    saida: &mut impl Read,
+    ouvinte: &mut Ouvinte,
+    saidas: &Saidas,
+    parar: &AtomicBool,
+) -> u64 {
+    let mut bytes = vec![0u8; BLOCO * 2];
+    let mut amostras = vec![0f32; BLOCO];
+    let mut blocos = 0u64;
+    let mut cheio = 0usize;
+    while !parar.load(Ordering::Relaxed) {
+        match saida.read(&mut bytes[cheio..]) {
+            Ok(0) => break,
+            Ok(n) => cheio += n,
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                saidas.nivel.store(0f32.to_bits(), Ordering::Relaxed);
+                continue;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        }
+        if cheio < bytes.len() {
+            continue;
+        }
+        cheio = 0;
+        for (a, b) in amostras.iter_mut().zip(bytes.as_chunks::<2>().0) {
+            *a = f32::from(i16::from_le_bytes(*b)) / 32768.0;
+        }
+        if blocos == 0 {
+            (saidas.dizer)(None);
+        }
+        blocos += 1;
+        saidas
+            .nivel
+            .store(nivel(&amostras).to_bits(), Ordering::Relaxed);
+        for o in ouvinte.empurrar(&amostras, Instant::now()) {
+            (saidas.ouvido)(o);
+        }
+    }
+    blocos
+}
+
 /// O microfone do robô, até `parar` ficar verdadeiro: um programa que escreve na saída PCM cru, S16LE, mono, a 16 kHz
 /// (no robô, `arecord -D micleft -f S16_LE -r 16000 -c 1 -t raw`, como o trabalhador do pato). A captura é de um cliente
 /// só, e por isso é um processo só, daqui. Se ele cai, sobe de novo depois de `espera`, e o motivo vai a `dizer`.
@@ -98,8 +147,6 @@ pub fn rodar_comando(
     parar: Arc<AtomicBool>,
 ) {
     let mut ouvinte = Ouvinte::novo(trava);
-    let mut bytes = vec![0u8; BLOCO * 2];
-    let mut amostras = vec![0f32; BLOCO];
     while !parar.load(Ordering::Relaxed) {
         let filho = Command::new(programa)
             .args(args)
@@ -119,28 +166,58 @@ pub fn rodar_comando(
             .stdout
             .take()
             .expect("a saída do programa do microfone");
-        let mut blocos = 0u64;
-        while !parar.load(Ordering::Relaxed) && saida.read_exact(&mut bytes).is_ok() {
-            for (a, b) in amostras.iter_mut().zip(bytes.as_chunks::<2>().0) {
-                *a = f32::from(i16::from_le_bytes(*b)) / 32768.0;
-            }
-            if blocos == 0 {
-                (saidas.dizer)(None);
-            }
-            blocos += 1;
-            saidas
-                .nivel
-                .store(nivel(&amostras).to_bits(), Ordering::Relaxed);
-            for o in ouvinte.empurrar(&amostras, Instant::now()) {
-                (saidas.ouvido)(o);
-            }
-        }
+        let blocos = ouvir_fluxo(&mut saida, &mut ouvinte, &saidas, &parar);
         let _ = filho.kill();
         let _ = filho.wait();
         if !parar.load(Ordering::Relaxed) {
             saidas.nivel.store(0f32.to_bits(), Ordering::Relaxed);
             (saidas.dizer)(Some(format!(
                 "o microfone parou depois de {blocos} blocos ({programa}); tentando de novo"
+            )));
+            std::thread::sleep(espera);
+        }
+    }
+}
+
+/// A primeira coisa que o microfone simulado manda ao serviço local: quem liga quer ouvir.
+pub const OUVE: u8 = b'O';
+/// Quanto o microfone simulado espera por som antes de dizer que a sala está calada.
+const SILENCIO: Duration = Duration::from_millis(400);
+
+/// O microfone do robô simulado, até `parar` ficar verdadeiro: o serviço local do simulador manda o som da página (o que
+/// ela mesma toca e, se o dono ligar, o microfone do Mac) em PCM cru, S16LE, mono, a 16 kHz. Sem o serviço, tenta de novo
+/// depois de `espera`, e o motivo vai a `dizer`. Página calada não é defeito: o nível fica em zero.
+pub fn rodar_simulador(
+    endereco: &str,
+    trava: Trava,
+    saidas: Saidas,
+    espera: Duration,
+    parar: Arc<AtomicBool>,
+) {
+    use std::io::Write;
+    let mut ouvinte = Ouvinte::novo(trava);
+    while !parar.load(Ordering::Relaxed) {
+        let ligada = std::net::TcpStream::connect(endereco).and_then(|mut c| {
+            c.set_read_timeout(Some(SILENCIO))?;
+            c.write_all(&[OUVE])?;
+            Ok(c)
+        });
+        let mut conexao = match ligada {
+            Ok(c) => c,
+            Err(e) => {
+                (saidas.dizer)(Some(format!(
+                    "sem o microfone do simulador em {endereco}: {e}"
+                )));
+                std::thread::sleep(espera);
+                continue;
+            }
+        };
+        (saidas.dizer)(None);
+        ouvir_fluxo(&mut conexao, &mut ouvinte, &saidas, &parar);
+        saidas.nivel.store(0f32.to_bits(), Ordering::Relaxed);
+        if !parar.load(Ordering::Relaxed) {
+            (saidas.dizer)(Some(format!(
+                "o microfone do simulador em {endereco} caiu; tentando de novo"
             )));
             std::thread::sleep(espera);
         }

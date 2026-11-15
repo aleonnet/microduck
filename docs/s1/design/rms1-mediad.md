@@ -61,6 +61,7 @@ Um socket unix, `[midia] socket`, em JSON-RPC, uma linha por mensagem.
 | `robot.sound` | O do contrato do pato (`tag` e `hold`), como requisição ou notificação |
 | `s1.media.subscribe` | `{"heard": true, "detections": true}`. A conexão passa a receber `s1.audio.heard {"kind"}`, já com a trava aplicada, e `media.detections`. Cada pedido diz as duas assinaturas: a que não vem é desligada |
 | `s1.media.status` | O que o serviço está fazendo: quadros copiados, se há som tocando, e a percepção (`perception`) |
+| `s1.media.preview` | `{"width": 640}`. O quadro reduzido a RGB, para quem só quer olhar (a tela "Sentidos" do simulador): o cabeçalho de `media.frame`, com `format: "RGB"`, e os bytes. A redução é feita aqui (`reducao.rs`), e o Wi-Fi do robô leva a imagem pequena. A conexão fica aberta e serve o pedido seguinte |
 
 **O som passa pelo `rms1d`.** Quem pede som fala com o `rms1d`, como no pato fala com o `robotd`: ele repassa `robot.sound` a este serviço como notificação, sem esperar, e responde aceito. Sem `[midia]` em `rms1d.toml`, ou com este serviço fora do ar, recusa com o motivo. `rms1d/tests/midia.rs`.
 
@@ -78,8 +79,16 @@ O S1 captura, a estação pensa, e o S1 publica o que ela achou. O formato do an
 
 Os testes: `rms1-mediad/tests/percepcao.rs`, com uma estação de mentira em 127.0.0.1.
 
+## O som do robô simulado
+
+Com `[midia.alto_falante] saida = "simulador"` e `[midia.microfone] fonte = "simulador"`, o som passa pelo serviço local do simulador (`tools/simulador/s1_servico.py`, no laboratório, porta `--som`), em duas conexões que o `rms1-mediad` abre:
+
+- **O alto-falante** (`alto_falante.rs`, `Simulador`): o primeiro byte é `F`; depois, recados de um byte de tipo, quatro de tamanho e o conteúdo: `1` um `.wav` inteiro, `2` o começo de um fluxo (a taxa), `3` um pedaço do fluxo (PCM S16LE mono), `4` o corte. A página toca o que chega. O som dura aqui o que o cabeçalho do `.wav` diz, e é isso que mantém a trava contra a própria voz valendo no simulador.
+- **O microfone** (`microfone.rs`, `rodar_simulador`): o primeiro byte é `O`; depois o serviço manda PCM cru, S16LE, mono, a 16 kHz: o que a página toca e, se o dono ligar, o microfone do Mac. Página calada não é defeito: o nível vai a zero.
+
+Testes: `cargo test -p rms1-mediad --test som_simulado`.
+
 ## O que falta nesta frente
 
-- A câmera, o microfone e o alto-falante do simulador, e a interface de mídia na página.
 - A câmera do robô (a sequência da DJI, passo a passo), o microfone e o alto-falante dele, o mixer, e o volume (`s1.media.volume`).
 - As medições com o robô ligado, que fixam a janela da trava no S1.

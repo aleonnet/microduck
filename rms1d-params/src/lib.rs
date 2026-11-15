@@ -266,6 +266,8 @@ pub enum FonteMicrofone {
     Arquivo,
     /// O microfone do robô, por um `arecord` no dispositivo dado.
     Arecord,
+    /// O microfone do robô simulado: o som que a página manda pelo serviço local (PCM cru, S16LE, mono, 16 kHz).
+    Simulador,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -276,6 +278,8 @@ pub struct MidiaMicrofone {
     pub arquivo: Option<String>,
     /// O dispositivo do `arecord`: o `micleft` de `deploy/s1/asound.conf`, o canal esquerdo a 16 kHz.
     pub dispositivo: String,
+    /// Onde o serviço local do simulador entrega o som do microfone simulado (`endereço:porta`).
+    pub endereco: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -285,6 +289,8 @@ pub enum SaidaDeSom {
     Aplay,
     /// Nada toca.
     Nula,
+    /// O alto-falante do robô simulado: o som vai à página, pelo serviço local, e ela o toca.
+    Simulador,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -294,6 +300,8 @@ pub struct MidiaAltoFalante {
     pub dispositivo: String,
     /// Onde fica o banco de voz deste robô (`sounds ensure-bank`).
     pub banco: String,
+    /// Onde o serviço local do simulador recebe o som do alto-falante simulado (`endereço:porta`).
+    pub endereco: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -337,6 +345,8 @@ impl Default for MidiaMicrofone {
             fonte: FonteMicrofone::Nenhuma,
             arquivo: None,
             dispositivo: "micleft".to_owned(),
+            // A porta do som no serviço local do simulador (`tools/simulador/s1_servico.py`, `--som`, no laboratório).
+            endereco: "127.0.0.1:9211".to_owned(),
         }
     }
 }
@@ -349,6 +359,7 @@ impl Default for MidiaAltoFalante {
             dispositivo: "plughw:0,0".to_owned(),
             // O lugar do banco no pato (`robotd-params`, `bank`).
             banco: "/var/lib/robot/sounds".to_owned(),
+            endereco: "127.0.0.1:9211".to_owned(),
         }
     }
 }
@@ -765,6 +776,28 @@ impl Params {
                     m.camera.endereco
                 ));
             }
+            if m.microfone.fonte == FonteMicrofone::Simulador
+                && m.microfone
+                    .endereco
+                    .parse::<std::net::SocketAddr>()
+                    .is_err()
+            {
+                return ruim(format!(
+                    "midia.microfone.endereco tem de ser endereço:porta: {}",
+                    m.microfone.endereco
+                ));
+            }
+            if m.alto_falante.saida == SaidaDeSom::Simulador
+                && m.alto_falante
+                    .endereco
+                    .parse::<std::net::SocketAddr>()
+                    .is_err()
+            {
+                return ruim(format!(
+                    "midia.alto_falante.endereco tem de ser endereço:porta: {}",
+                    m.alto_falante.endereco
+                ));
+            }
             if m.microfone.fonte == FonteMicrofone::Arquivo && m.microfone.arquivo.is_none() {
                 return ruim(
                     "midia.microfone.arquivo falta: a fonte de arquivo precisa do `.wav`"
@@ -1042,6 +1075,14 @@ mod testes {
             (
                 "[midia.alto_falante]\nbanco = \"sons\"\n",
                 "midia.alto_falante.banco",
+            ),
+            (
+                "[midia.microfone]\nfonte = \"simulador\"\nendereco = \"aqui\"\n",
+                "midia.microfone.endereco",
+            ),
+            (
+                "[midia.alto_falante]\nsaida = \"simulador\"\nendereco = \"aqui\"\n",
+                "midia.alto_falante.endereco",
             ),
             ("[midia.alto_falante]\nvolume = 5\n", "volume"),
         ] {
