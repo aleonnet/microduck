@@ -459,3 +459,51 @@ fn com_duas_estacoes_fica_com_a_que_ja_usa() {
         "não foi para a estação que ficou"
     );
 }
+
+/// A estação que recusa o robô (ele não está entre os permitidos) responde com erro e fecha. O S1 volta a tentar, e cada
+/// vez espera mais: no robô de verdade, em 2026-11-15, ele religava várias vezes por segundo até ser permitido no painel.
+#[test]
+fn estacao_que_recusa_nao_e_martelada() {
+    let porta = porta_livre();
+    let tcp = TcpListener::bind("127.0.0.1:0").unwrap();
+    let anuncio = format!(
+        r#"{{"rms1_hailo":2,"quadros":{},"painel":8080,"entradas":{DUAS_ENTRADAS},"funcoes":{DUAS_FUNCOES}}}"#,
+        tcp.local_addr().unwrap().port()
+    );
+    std::thread::spawn(move || {
+        let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+        loop {
+            let _ = udp.send_to(anuncio.as_bytes(), ("127.0.0.1", porta));
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    });
+    let ligacoes = Arc::new(Mutex::new(Vec::new()));
+    let l = ligacoes.clone();
+    std::thread::spawn(move || {
+        for c in tcp.incoming() {
+            let Ok(mut c) = c else { return };
+            l.lock().unwrap().push(Instant::now());
+            // Lê a primeira mensagem, recusa e fecha, como o serviço da estação faz com um robô não permitido.
+            let mut cab = [0u8; Cabecalho::BYTES];
+            if c.read_exact(&mut cab).is_ok() {
+                let lido = Cabecalho::ler(&cab).expect("cabeçalho válido");
+                let mut carga = vec![0u8; lido.tamanho as usize];
+                let _ = c.read_exact(&mut carga);
+                let motivo = "o robô 127.0.0.1 não está entre os permitidos".as_bytes();
+                let erro = Cabecalho {
+                    tipo: Tipo::Erro,
+                    canal: 0,
+                    tamanho: motivo.len() as u32,
+                };
+                let _ = c.write_all(&erro.bytes());
+                let _ = c.write_all(motivo);
+            }
+        }
+    });
+    let p = subir_percepcao(porta, 22.0, Duration::from_millis(600));
+    std::thread::sleep(Duration::from_secs(4));
+    let n = ligacoes.lock().unwrap().len();
+    // Com a espera dobrando de 100 ms até 2 s, cabem umas seis ligações em 4 s; sem ela, dezenas.
+    assert!((2..=9).contains(&n), "{n} ligações em 4 s");
+    assert!(p.estado.lock().unwrap().errors >= 1, "a recusa é contada");
+}

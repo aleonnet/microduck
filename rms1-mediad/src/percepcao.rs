@@ -35,6 +35,8 @@ const CAIXAS_MAXIMO: usize = 50;
 const CAIXAS_BYTES: usize = 8 + CAIXAS_MAXIMO * 5 * 4;
 const ESPERA_MIN: Duration = Duration::from_millis(100);
 const ESPERA_MAX: Duration = Duration::from_secs(2);
+/// Quantos quadros uma conexão tem de levar para a espera de religar voltar ao mínimo.
+const QUADROS_DE_PROVA: u32 = 30;
 
 pub struct Config {
     /// A porta UDP do anúncio.
@@ -174,6 +176,7 @@ pub fn rodar(
     let mut vista: Option<(SocketAddr, Instant)> = None;
     let mut conexao: Option<(TcpStream, SocketAddr)> = None;
     let mut espera = ESPERA_MIN;
+    let mut na_conexao = 0u32;
     let mut tentar_em = Instant::now();
     let mut proximo = Instant::now();
     let mut medida_em = Instant::now();
@@ -240,7 +243,9 @@ pub fn rodar(
             match TcpStream::connect_timeout(&alvo, Duration::from_secs(1)) {
                 Ok(c) => {
                     let _ = c.set_nodelay(true);
-                    espera = ESPERA_MIN;
+                    // A espera só volta ao mínimo depois de a conexão provar que serve ([`QUADROS_DE_PROVA`]): a estação
+                    // que recusa o robô aceita a conexão, responde com erro e fecha.
+                    na_conexao = 0;
                     if let Ok(leitura) = c.try_clone() {
                         let (p, e, pub_) = (partilha.clone(), estado.clone(), publicar.clone());
                         std::thread::spawn(move || ler_entregas(leitura, p, e, pub_));
@@ -303,7 +308,12 @@ pub fn rodar(
         {
             fechar(&mut conexao);
             tentar_em = Instant::now() + espera;
+            espera = (espera * 2).min(ESPERA_MAX);
             continue;
+        }
+        na_conexao += 1;
+        if na_conexao == QUADROS_DE_PROVA {
+            espera = ESPERA_MIN;
         }
         dizer(None, Some(ip), Some(ritmo));
         estado.lock().expect("estado da percepção").frames_sent += 1;
