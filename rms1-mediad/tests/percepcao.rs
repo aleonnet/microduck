@@ -240,7 +240,7 @@ fn subir_percepcao(porta_anuncio: u16, ritmo_max: f64, anuncio_vale: Duration) -
     }
 }
 
-const DUAS_ENTRADAS: &str = r#"[{"n":1,"id":"quadro_continuo","formato":"rgb_320x180","ritmo":10},{"n":2,"id":"audio","formato":"pcm16_16k","ritmo":50}]"#;
+const DUAS_ENTRADAS: &str = r#"[{"n":1,"id":"quadro_continuo","formato":"rgb_640x360","ritmo":10},{"n":2,"id":"audio","formato":"pcm16_16k","ritmo":50}]"#;
 const DUAS_FUNCOES: &str = r#"[{"n":1,"id":"detector","entrega":"caixas","leitor":"nanodet_v8","publica":"media.detections","nota":0.35,"iou":0.5},{"n":2,"id":"vigia","entrega":"caixas","leitor":"nanodet_v8","nota":0.35,"iou":0.5}]"#;
 
 #[test]
@@ -278,10 +278,10 @@ fn segue_o_anuncio_da_estacao() {
     assert!(
         quadros
             .iter()
-            .all(|r| r.cab.canal == 1 && r.carga.len() == 172_800),
-        "só o quadro contínuo, RGB 320 por 180"
+            .all(|r| r.cab.canal == 1 && r.carga.len() == 691_200),
+        "só o quadro contínuo, RGB 640 por 360"
     );
-    assert_eq!(primeira.carga.len(), 172_800);
+    assert_eq!(primeira.carga.len(), 691_200);
     // No ritmo anunciado, 10 por segundo, e não no teto de 22 nem no da câmera: em 2 s, de 18 a 21 quadros.
     assert!(
         (18..=21).contains(&quadros.len()),

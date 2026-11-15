@@ -22,7 +22,7 @@ fn le_o_formato_gravado_da_estacao() {
     let e = &a.entradas[0];
     assert_eq!(
         (e.n, e.id.as_str(), e.formato.as_str(), e.ritmo),
-        (1, "quadro_continuo", "rgb_320x180", Some(15.0))
+        (1, "quadro_continuo", "rgb_640x360", Some(15.0))
     );
     assert_eq!(a.funcoes.len(), 1);
     let f = &a.funcoes[0];

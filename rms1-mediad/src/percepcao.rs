@@ -25,7 +25,11 @@ use crate::estacao::{self, Anuncio, Cabecalho, Tipo};
 use crate::quadros::Quadros;
 use crate::reducao;
 
-/// O quadro que vai à estação, e a moldura que ela põe para o detector: 320 por 180 no meio de 320 por 320.
+/// O quadro que vai à estação: 640 por 360, o tamanho que o pipeline fixa para a percepção (e o que a DJI entrega à dela).
+pub const QUADRO_LARGURA: usize = 640;
+pub const QUADRO_ALTURA: usize = 360;
+/// A moldura em que a estação devolve as caixas, seja qual for o lado do modelo: o quadro como 320 por 180 no meio de
+/// 320 por 320.
 pub const LARGURA: usize = 320;
 pub const ALTURA: usize = 180;
 const LADO: usize = 320;
@@ -378,7 +382,7 @@ pub fn rodar(
         let Some(entrada) = anuncio
             .entradas
             .iter()
-            .find(|e| e.id == "quadro_continuo" && e.formato == "rgb_320x180")
+            .find(|e| e.id == "quadro_continuo" && e.formato == "rgb_640x360")
         else {
             dizer(
                 Some("a estação não pede nenhuma entrada que este S1 manda"),
@@ -441,8 +445,8 @@ pub fn rodar(
             &quadro.dados,
             quadro.largura as usize,
             quadro.altura as usize,
-            LARGURA,
-            ALTURA,
+            QUADRO_LARGURA,
+            QUADRO_ALTURA,
         ) else {
             dizer(
                 Some("o quadro da câmera não é NV12 do tamanho que diz"),
