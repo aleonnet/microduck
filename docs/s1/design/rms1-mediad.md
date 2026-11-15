@@ -60,7 +60,7 @@ Um socket unix, `[midia] socket`, em JSON-RPC, uma linha por mensagem.
 | `media.frame` | O próximo quadro: uma linha com o cabeçalho do contrato do pato (`MediaFrameHeader`) e, em seguida, exatamente `bytes` bytes crus. A conexão fecha depois dele |
 | `robot.sound` | O do contrato do pato (`tag` e `hold`), como requisição ou notificação |
 | `s1.media.subscribe` | `{"heard": true, "detections": true}`. A conexão passa a receber `s1.audio.heard {"kind"}`, já com a trava aplicada, e `media.detections`. Cada pedido diz as duas assinaturas: a que não vem é desligada |
-| `s1.media.status` | O que o serviço está fazendo: quadros copiados, se há som tocando, e a percepção (`perception`) |
+| `s1.media.status` | O que o serviço está fazendo: quadros copiados, se há som tocando (`playing`), se o microfone está surdo pela trava (`deaf`: o som e a janela depois dele), e a percepção (`perception`) |
 | `s1.media.preview` | `{"width": 640}`. O quadro reduzido a RGB, para quem só quer olhar (a tela "Sentidos" do simulador): o cabeçalho de `media.frame`, com `format: "RGB"`, e os bytes. A redução é feita aqui (`reducao.rs`), e o Wi-Fi do robô leva a imagem pequena. A conexão fica aberta e serve o pedido seguinte |
 
 **O som passa pelo `rms1d`.** Quem pede som fala com o `rms1d`, como no pato fala com o `robotd`: ele repassa `robot.sound` a este serviço como notificação, sem esperar, e responde aceito. Sem `[midia]` em `rms1d.toml`, ou com este serviço fora do ar, recusa com o motivo. `rms1d/tests/midia.rs`.

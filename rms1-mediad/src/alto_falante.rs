@@ -239,6 +239,11 @@ impl Tocador {
     pub fn tocando(&self) -> bool {
         self.atual.is_some()
     }
+
+    /// Se o microfone está surdo agora: o robô fala, ou parou de falar há menos que a janela da trava.
+    pub fn surdo(&self, agora: Instant) -> bool {
+        self.trava.vale(agora)
+    }
 }
 
 /// Um número qualquer de 0 a `n - 1`: os nanossegundos do relógio, como o pato faz, que é o sorteio de que um som precisa.

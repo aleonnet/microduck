@@ -77,11 +77,22 @@ fn o_alto_falante_do_simulador_manda_o_arquivo_e_dura_o_que_ele_dura() {
     tocador.tique(Instant::now());
     assert!(tocador.tocando(), "o som acabou antes da hora");
     assert!(trava.vale(Instant::now()));
+    assert!(tocador.surdo(Instant::now()));
     std::thread::sleep(Duration::from_millis(350));
     tocador.tique(Instant::now());
     assert!(
         !tocador.tocando(),
         "o som não terminou depois da duração dele"
+    );
+    // O som acabou, e a janela da trava (200 ms) ainda vale: o microfone segue surdo, e depois volta a ouvir.
+    assert!(
+        tocador.surdo(Instant::now()),
+        "a janela depois do som não valeu"
+    );
+    std::thread::sleep(Duration::from_millis(250));
+    assert!(
+        !tocador.surdo(Instant::now()),
+        "o microfone não voltou a ouvir"
     );
 }
 

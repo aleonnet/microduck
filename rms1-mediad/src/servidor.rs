@@ -301,6 +301,8 @@ pub async fn atender(conexao: UnixStream, s: Arc<Servico>) -> Result<()> {
             let estado = serde_json::json!({
                 "frames_copied": s.quadros.copias(),
                 "playing": s.tocador.lock().expect("trava do tocador").tocando(),
+                // O trecho em que o que o microfone ouve é descartado: o som e a janela depois dele.
+                "deaf": s.tocador.lock().expect("trava do tocador").surdo(Instant::now()),
                 "camera_problem": *s.camera.lock().expect("estado da câmera"),
                 "camera_frames": s.contagem_da_camera.quadros.load(Ordering::Relaxed),
                 "camera_dropped": s.contagem_da_camera.perdidos.load(Ordering::Relaxed),
