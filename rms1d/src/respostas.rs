@@ -642,7 +642,8 @@ pub fn responder(c: &Contexto, id: proto::Id, call: &proto::Call) -> proto::Resp
         ),
 
         // Do corpo, em etapas seguintes da lista do dono.
-        RobotSound(_) => recusado(id, "som entra na etapa 4"),
+        // Com `[midia]`, o servidor repassa ao `rms1-mediad` antes de chegar aqui (`servidor.rs`).
+        RobotSound(_) => recusado(id, "sem [midia] em rms1d.toml: quem toca é o rms1-mediad"),
         RobotFlashlight(_) => recusado(id, "luzes entram na etapa 4"),
         // Do pato, sem equivalente neste corpo.
         RobotPose(_) => recusado(id, "este corpo não tem pernas"),

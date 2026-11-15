@@ -9,15 +9,84 @@ use std::time::{Duration, Instant};
 
 use duck_ipc_proto as proto;
 use rms1_control::Estado;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc};
 
 use crate::respostas::{self, Contexto};
 
 /// Maior linha aceita de um cliente.
 const LINHA_MAX: usize = 64 * 1024;
 const MODO_SOCKET: u32 = 0o660;
+
+/// Quantos sons esperam para sair. Um som atrasado já passou: mais que isto é um serviço que não está dando conta.
+const SONS_NA_FILA: usize = 16;
+const ESPERA_MIDIA_MIN: Duration = Duration::from_millis(100);
+const ESPERA_MIDIA_MAX: Duration = Duration::from_secs(2);
+
+/// O caminho até o `rms1-mediad`, o dono do alto-falante: o `rms1d` não toca, repassa `robot.sound`.
+///
+/// Sem espera: quem pede um som nunca fica preso num serviço de mídia lento ou caído, e o laço do corpo nem sabe que isto
+/// existe. A fila é curta, e som que não cabe é recusado na hora.
+pub struct Midia {
+    fila: mpsc::Sender<String>,
+    ligado: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Midia {
+    /// Liga ao socket do `rms1-mediad`, e religa sozinho, com espera crescente, para sempre.
+    pub fn ligar(socket: std::path::PathBuf) -> Arc<Self> {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let (fila, mut sons) = mpsc::channel::<String>(SONS_NA_FILA);
+        let ligado = Arc::new(AtomicBool::new(false));
+        let l = ligado.clone();
+        tokio::spawn(async move {
+            let mut espera = ESPERA_MIDIA_MIN;
+            loop {
+                let Ok(mut conexao) = UnixStream::connect(&socket).await else {
+                    tokio::time::sleep(espera).await;
+                    espera = (espera * 2).min(ESPERA_MIDIA_MAX);
+                    continue;
+                };
+                espera = ESPERA_MIDIA_MIN;
+                // O que ficou na fila de antes de ligar é som velho.
+                while sons.try_recv().is_ok() {}
+                l.store(true, Ordering::Relaxed);
+                tracing::info!(socket = %socket.display(), "ligado ao rms1-mediad");
+                let mut lixo = [0u8; 256];
+                loop {
+                    tokio::select! {
+                        som = sons.recv() => {
+                            let Some(linha) = som else { return };
+                            if conexao.write_all(linha.as_bytes()).await.is_err() || conexao.write_all(b"\n").await.is_err() {
+                                break;
+                            }
+                        }
+                        // Nada do que ele responde interessa: o que se lê aqui é o fim da conexão.
+                        lido = conexao.read(&mut lixo) => {
+                            if matches!(lido, Ok(0) | Err(_)) {
+                                break;
+                            }
+                        }
+                    }
+                }
+                l.store(false, Ordering::Relaxed);
+                tracing::warn!("o rms1-mediad saiu");
+            }
+        });
+        Arc::new(Self { fila, ligado })
+    }
+
+    /// Manda uma linha ao `rms1-mediad`, sem esperar. O erro é o motivo da recusa.
+    pub fn repassar(&self, linha: String) -> Result<(), &'static str> {
+        if !self.ligado.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err("o rms1-mediad não está no ar");
+        }
+        self.fila
+            .try_send(linha)
+            .map_err(|_| "o rms1-mediad não está dando conta dos sons")
+    }
+}
 
 /// A trava ao lado do socket.
 pub fn travar(socket: &Path) -> std::io::Result<std::fs::File> {
@@ -78,14 +147,16 @@ pub async fn servir(
     ouvinte: UnixListener,
     contexto: Arc<Contexto>,
     estados: broadcast::Sender<Arc<Estado>>,
+    midia: Option<Arc<Midia>>,
 ) {
     loop {
         match ouvinte.accept().await {
             Ok((conexao, _)) => {
                 let c = contexto.clone();
                 let e = estados.clone();
+                let m = midia.clone();
                 tokio::spawn(async move {
-                    if let Err(erro) = atender(conexao, c, e).await {
+                    if let Err(erro) = atender(conexao, c, e, m).await {
                         tracing::debug!(%erro, "conexão terminou");
                     }
                 });
@@ -112,6 +183,7 @@ async fn atender(
     conexao: UnixStream,
     c: Arc<Contexto>,
     estados: broadcast::Sender<Arc<Estado>>,
+    midia: Option<Arc<Midia>>,
 ) -> std::io::Result<()> {
     let (leitura, mut saida) = conexao.into_split();
     let mut linhas = BufReader::new(leitura).lines();
@@ -256,6 +328,34 @@ async fn atender(
                 )
             };
             escrever(&mut saida, &resposta).await?;
+            continue;
+        }
+        // `robot.sound`: quem toca é o `rms1-mediad`. Vai a ele como notificação, sem esperar, e a resposta daqui diz só se
+        // foi. Sem `[midia]`, a recusa de `responder` diz por quê.
+        if pedido.method == proto::method::ROBOT_SOUND
+            && let Some(m) = &midia
+        {
+            let params = pedido.params.clone().unwrap_or(serde_json::Value::Null);
+            let resposta = match serde_json::from_value::<proto::SoundParams>(params.clone()) {
+                Err(e) => Err(proto::Error::new(
+                    proto::code::INVALID_PARAMS,
+                    e.to_string(),
+                )),
+                Ok(_) => {
+                    let n = serde_json::json!({"jsonrpc": "2.0", "method": proto::method::ROBOT_SOUND, "params": params});
+                    Ok(match m.repassar(n.to_string()) {
+                        Ok(()) => proto::IntentResult::accepted(),
+                        Err(por) => proto::IntentResult::refused(por),
+                    })
+                }
+            };
+            if let Some(id) = pedido.id.clone() {
+                let r = match resposta {
+                    Ok(v) => proto::Response::ok(Some(id), &v),
+                    Err(e) => proto::Response::err(Some(id), e),
+                };
+                escrever(&mut saida, &r).await?;
+            }
             continue;
         }
         let call = pedido.as_call();

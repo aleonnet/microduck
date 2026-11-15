@@ -162,9 +162,15 @@ fn main() -> ExitCode {
             intencoes: intencoes.clone(),
             saude,
         });
+        // Com `[midia]`, o som vai ao `rms1-mediad`; sem, `robot.sound` é recusado dizendo isso.
+        let midia = contexto
+            .params
+            .midia
+            .as_ref()
+            .map(|m| rms1d::servidor::Midia::ligar(PathBuf::from(&m.socket)));
         let socket = args.socket.clone();
         tokio::select! {
-            () = rms1d::servidor::servir(ouvinte, contexto, estados) => {}
+            () = rms1d::servidor::servir(ouvinte, contexto, estados, midia) => {}
             _ = tokio::signal::ctrl_c() => {}
             () = termino() => {}
         }
