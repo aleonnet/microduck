@@ -424,3 +424,38 @@ fn manda_a_medida_a_cada_segundo() {
         "{ultima}"
     );
 }
+
+#[test]
+fn com_duas_estacoes_fica_com_a_que_ja_usa() {
+    let porta = porta_livre();
+    let _p = subir_percepcao(porta, 22.0, Duration::from_millis(600));
+    let primeira = Estacao::subir(porta, DUAS_ENTRADAS, DUAS_FUNCOES);
+    primeira
+        .recebidas
+        .recv_timeout(Duration::from_secs(3))
+        .expect("o primeiro quadro, na primeira");
+    // Chega outra estação à rede: o S1 não troca, nem divide os quadros.
+    let segunda = Estacao::subir(porta, DUAS_ENTRADAS, DUAS_FUNCOES);
+    let na_primeira = primeira
+        .colher(Duration::from_millis(1500))
+        .iter()
+        .filter(|r| r.cab.tipo == Tipo::Entrada)
+        .count();
+    assert!(
+        (13..=16).contains(&na_primeira),
+        "{na_primeira} quadros na primeira em 1,5 s: o S1 largou a estação que usava"
+    );
+    assert!(
+        segunda.colher(Duration::from_millis(1)).is_empty(),
+        "a segunda estação recebeu quadro"
+    );
+    // A primeira sai da rede: passado o prazo, o S1 vai para a que ficou.
+    primeira.anunciando.store(false, Ordering::Relaxed);
+    assert!(
+        segunda
+            .recebidas
+            .recv_timeout(Duration::from_secs(4))
+            .is_ok(),
+        "não foi para a estação que ficou"
+    );
+}

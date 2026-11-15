@@ -171,7 +171,7 @@ pub fn rodar(
     let udp = ouvir(cfg.porta_anuncio)?;
     let publicar = Arc::new(publicar);
     let partilha = Arc::new(Mutex::new(Partilha::default()));
-    let mut vista: Option<(IpAddr, Instant)> = None;
+    let mut vista: Option<(SocketAddr, Instant)> = None;
     let mut conexao: Option<(TcpStream, SocketAddr)> = None;
     let mut espera = ESPERA_MIN;
     let mut tentar_em = Instant::now();
@@ -190,8 +190,13 @@ pub fn rodar(
         let agora = Instant::now();
         while let Ok((n, de)) = udp.recv_from(&mut pacote) {
             if let Some(a) = estacao::ler_anuncio(&pacote[..n], de.ip()) {
-                partilha.lock().expect("partilha").anuncio = Some(a);
-                vista = Some((de.ip(), agora));
+                // Com duas estações na rede, o S1 fica com a que já usa enquanto ela se anuncia: trocar a cada pacote
+                // seria reconectar duas vezes por segundo. Uma estação é o endereço e a porta dos quadros.
+                let esta = SocketAddr::new(de.ip(), a.quadros);
+                if vista.is_none_or(|(em_uso, _)| em_uso == esta) {
+                    partilha.lock().expect("partilha").anuncio = Some(a);
+                    vista = Some((esta, agora));
+                }
             }
         }
         if vista.is_some_and(|(_, quando)| agora.duration_since(quando) >= cfg.anuncio_vale) {
@@ -199,11 +204,12 @@ pub fn rodar(
             fechar(&mut conexao);
             partilha.lock().expect("partilha").anuncio = None;
         }
-        let Some((ip, _)) = vista else {
+        let Some((alvo, _)) = vista else {
             dizer(Some("nenhuma estação se anunciou na rede"), None, None);
             std::thread::sleep(Duration::from_millis(20));
             continue;
         };
+        let ip = alvo.ip();
         let anuncio = partilha.lock().expect("partilha").anuncio.clone();
         let Some(anuncio) = anuncio else { continue };
         let Some(entrada) = anuncio
@@ -225,7 +231,6 @@ pub fn rodar(
             std::thread::sleep(Duration::from_millis(20));
             continue;
         }
-        let alvo = SocketAddr::new(ip, anuncio.quadros);
         if conexao.as_ref().is_none_or(|(_, a)| *a != alvo) {
             fechar(&mut conexao);
             if agora < tentar_em {
