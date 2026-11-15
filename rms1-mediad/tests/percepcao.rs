@@ -507,3 +507,62 @@ fn estacao_que_recusa_nao_e_martelada() {
     assert!((2..=9).contains(&n), "{n} ligações em 4 s");
     assert!(p.estado.lock().unwrap().errors >= 1, "a recusa é contada");
 }
+
+/// A entrega do leitor `caixas_padrao_hailo` (um detector do catálogo, com o filtro de caixas feito no Hailo): seis números
+/// por caixa, com a classe. O S1 filtra pela nota da função, volta ao quadro da câmera e publica com o nome da classe.
+#[test]
+fn caixas_com_classe_viram_media_detections_com_o_nome() {
+    // As três caixas que o Hailo de mentira do laboratório devolve (`hailo_tubo_falso.py`, `CAIXAS_COM_CLASSE`).
+    let caixas: [[f32; 6]; 3] = [
+        [160.0, 160.0, 80.0, 120.0, 0.91, 0.0],
+        [64.0, 200.0, 32.0, 32.0, 0.55, 32.0],
+        [250.0, 150.0, 40.0, 60.0, 0.12, 56.0],
+    ];
+    let mut entrega = vec![0u8; 1208];
+    entrega[..4].copy_from_slice(&3i32.to_le_bytes());
+    entrega[4..8].copy_from_slice(&3i32.to_le_bytes());
+    for (i, c) in caixas.iter().enumerate() {
+        for (j, v) in c.iter().enumerate() {
+            let em = 8 + (i * 6 + j) * 4;
+            entrega[em..em + 4].copy_from_slice(&v.to_le_bytes());
+        }
+    }
+    // No quadro da câmera do robô, 1280 por 720: a moldura tira 70 linhas, e o quadro é quatro vezes o de 320 por 180.
+    let achadas = percepcao::deteccoes_com_classe(&entrega, 1280, 720, 0.35).unwrap();
+    assert_eq!(
+        achadas.len(),
+        2,
+        "a cadeira, de nota 0,12, fica abaixo da nota"
+    );
+    assert_eq!(achadas[0].0.box_, [480.0, 120.0, 800.0, 600.0]);
+    assert_eq!((achadas[0].1, achadas[1].1), (0, 32));
+    assert_eq!(achadas[1].0.box_, [192.0, 456.0, 320.0, 584.0]);
+    let v: serde_json::Value = serde_json::from_str(&percepcao::notificacao_com_classe(
+        &achadas, 1280, 720, 31.0,
+    ))
+    .unwrap();
+    assert_eq!(v["method"], "media.detections");
+    assert_eq!(
+        v["params"]["boxes"],
+        serde_json::json!([
+            {"x0": 480.0, "y0": 120.0, "x1": 800.0, "y1": 600.0, "score": 0.91, "class": 0, "label": "person"},
+            {"x0": 192.0, "y0": 456.0, "x1": 320.0, "y1": 584.0, "score": 0.55, "class": 32, "label": "sports ball"}
+        ])
+    );
+    assert_eq!(
+        (percepcao::CLASSES_COCO[56], percepcao::CLASSES_COCO[79]),
+        ("chair", "toothbrush")
+    );
+    // Tamanho errado e contagem absurda são recusados com o motivo.
+    assert!(
+        percepcao::deteccoes_com_classe(&entrega[..1008], 1280, 720, 0.35)
+            .unwrap_err()
+            .contains("1008")
+    );
+    entrega[4..8].copy_from_slice(&51i32.to_le_bytes());
+    assert!(
+        percepcao::deteccoes_com_classe(&entrega, 1280, 720, 0.35)
+            .unwrap_err()
+            .contains("51")
+    );
+}

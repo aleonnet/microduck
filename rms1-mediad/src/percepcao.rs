@@ -33,6 +33,92 @@ const BORDA_Y: f32 = ((LADO - ALTURA) / 2) as f32;
 /// A resposta do detector: dois inteiros e até 50 caixas de cinco números (`tools/hailo/hailo_srv.cpp`, no laboratório).
 const CAIXAS_MAXIMO: usize = 50;
 const CAIXAS_BYTES: usize = 8 + CAIXAS_MAXIMO * 5 * 4;
+/// A entrega do leitor `caixas_padrao_hailo`: o mesmo, com a classe a mais em cada caixa, já suprimida no Hailo
+/// (`tools/hailo/servico/leitor_caixas_padrao.cpp`, no laboratório).
+const CAIXAS_COM_CLASSE_BYTES: usize = 8 + CAIXAS_MAXIMO * 6 * 4;
+/// Os nomes das 80 classes do COCO, na ordem em que os detectores do catálogo da Hailo as numeram.
+pub const CLASSES_COCO: [&str; 80] = [
+    "person",
+    "bicycle",
+    "car",
+    "motorcycle",
+    "airplane",
+    "bus",
+    "train",
+    "truck",
+    "boat",
+    "traffic light",
+    "fire hydrant",
+    "stop sign",
+    "parking meter",
+    "bench",
+    "bird",
+    "cat",
+    "dog",
+    "horse",
+    "sheep",
+    "cow",
+    "elephant",
+    "bear",
+    "zebra",
+    "giraffe",
+    "backpack",
+    "umbrella",
+    "handbag",
+    "tie",
+    "suitcase",
+    "frisbee",
+    "skis",
+    "snowboard",
+    "sports ball",
+    "kite",
+    "baseball bat",
+    "baseball glove",
+    "skateboard",
+    "surfboard",
+    "tennis racket",
+    "bottle",
+    "wine glass",
+    "cup",
+    "fork",
+    "knife",
+    "spoon",
+    "bowl",
+    "banana",
+    "apple",
+    "sandwich",
+    "orange",
+    "broccoli",
+    "carrot",
+    "hot dog",
+    "pizza",
+    "donut",
+    "cake",
+    "chair",
+    "couch",
+    "potted plant",
+    "bed",
+    "dining table",
+    "toilet",
+    "tv",
+    "laptop",
+    "mouse",
+    "remote",
+    "keyboard",
+    "cell phone",
+    "microwave",
+    "oven",
+    "toaster",
+    "sink",
+    "refrigerator",
+    "book",
+    "clock",
+    "vase",
+    "scissors",
+    "teddy bear",
+    "hair drier",
+    "toothbrush",
+];
 const ESPERA_MIN: Duration = Duration::from_millis(100);
 const ESPERA_MAX: Duration = Duration::from_secs(2);
 /// Quantos quadros uma conexão tem de levar para a espera de religar voltar ao mínimo.
@@ -132,6 +218,80 @@ pub fn deteccoes(
             ],
         })
         .collect())
+}
+
+/// As detecções de uma entrega do leitor `caixas_padrao_hailo`, cada uma com a classe, nos pixels do quadro que a câmera
+/// tirou. A supressão já foi feita no Hailo, e as caixas vêm da maior nota para a menor: aqui só entram o filtro da nota
+/// da função e a volta ao quadro, pela mesma conta de [`deteccoes`].
+pub fn deteccoes_com_classe(
+    carga: &[u8],
+    largura: u32,
+    altura: u32,
+    nota: f32,
+) -> Result<Vec<(Detection, u32)>, String> {
+    if carga.len() != CAIXAS_COM_CLASSE_BYTES {
+        return Err(format!(
+            "resposta do detector com {} bytes, e não {CAIXAS_COM_CLASSE_BYTES}",
+            carga.len()
+        ));
+    }
+    let vao = i32::from_le_bytes([carga[4], carga[5], carga[6], carga[7]]);
+    if !(0..=CAIXAS_MAXIMO as i32).contains(&vao) {
+        return Err(format!(
+            "resposta do detector diz {vao} caixas, e o máximo é {CAIXAS_MAXIMO}"
+        ));
+    }
+    let numero = |k: usize| {
+        let i = 8 + k * 4;
+        f32::from_le_bytes([carga[i], carga[i + 1], carga[i + 2], carga[i + 3]])
+    };
+    let (ex, ey) = (
+        LARGURA as f32 / largura as f32,
+        ALTURA as f32 / altura as f32,
+    );
+    let mut achadas = Vec::new();
+    for caixa in 0..vao as usize {
+        let [cx, cy, w, h, n, classe] = std::array::from_fn(|campo| numero(caixa * 6 + campo));
+        if n < nota || !(0.0..65536.0).contains(&classe) {
+            continue;
+        }
+        achadas.push((
+            Detection {
+                score: n,
+                box_: [
+                    (cx - w / 2.0) / ex,
+                    (cy - h / 2.0 - BORDA_Y) / ey,
+                    (cx + w / 2.0) / ex,
+                    (cy + h / 2.0 - BORDA_Y) / ey,
+                ],
+            },
+            classe as u32,
+        ));
+    }
+    Ok(achadas)
+}
+
+/// `media.detections` com a classe: o formato do pato, e em cada caixa o número e o nome da classe do COCO.
+pub fn notificacao_com_classe(
+    achadas: &[(Detection, u32)],
+    largura: u32,
+    altura: u32,
+    levou_ms: f64,
+) -> String {
+    let caixas: Vec<String> = achadas
+        .iter()
+        .map(|(d, classe)| {
+            let nome = CLASSES_COCO.get(*classe as usize).copied().unwrap_or("");
+            format!(
+                r#"{{"x0":{:.1},"y0":{:.1},"x1":{:.1},"y1":{:.1},"score":{:.3},"class":{classe},"label":"{nome}"}}"#,
+                d.box_[0], d.box_[1], d.box_[2], d.box_[3], d.score
+            )
+        })
+        .collect();
+    format!(
+        r#"{{"jsonrpc":"2.0","method":"media.detections","params":{{"width":{largura},"height":{altura},"took_ms":{levou_ms:.1},"boxes":[{}]}}}}"#,
+        caixas.join(",")
+    )
 }
 
 /// `media.detections`, no formato do pato (`mediad/src/detect.rs`, `notification`): as caixas nos pixels do quadro, e o
@@ -417,6 +577,20 @@ fn ler_entregas(
                         // Só a função que pede é publicada; as outras são só contadas.
                         Ok(achadas) if funcao.publica.as_deref() == Some("media.detections") => {
                             publicar(notificacao(&achadas, l, a, levou))
+                        }
+                        Ok(_) => {}
+                        Err(erro) => {
+                            tracing::warn!(erro, funcao = funcao.id, "entrega que este S1 não leu");
+                            estado.lock().expect("estado da percepção").errors += 1;
+                        }
+                    }
+                } else if funcao.entrega == "caixas"
+                    && funcao.leitor.as_deref() == Some("caixas_padrao_hailo")
+                {
+                    let nota = funcao.nota.unwrap_or(0.35) as f32;
+                    match deteccoes_com_classe(&carga, l, a, nota) {
+                        Ok(achadas) if funcao.publica.as_deref() == Some("media.detections") => {
+                            publicar(notificacao_com_classe(&achadas, l, a, levou))
                         }
                         Ok(_) => {}
                         Err(erro) => {
