@@ -7,6 +7,7 @@
 //! Nada aqui depende do `mediad` do pato, que só existe com GStreamer. O que é igual ao pato é a interface: `media.frame`
 //! com o cabeçalho do contrato, e o encontro de quadros, refeito em [`quadros`].
 
+pub mod alto_falante;
 pub mod camera;
 pub mod microfone;
 pub mod quadros;
