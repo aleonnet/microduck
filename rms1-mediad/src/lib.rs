@@ -11,6 +11,7 @@ pub mod alto_falante;
 pub mod camera;
 pub mod estacao;
 pub mod microfone;
+pub mod percepcao;
 pub mod quadros;
 pub mod reducao;
 pub mod servidor;

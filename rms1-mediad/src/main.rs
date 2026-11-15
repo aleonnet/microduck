@@ -11,6 +11,7 @@ use clap::Parser;
 use rms1_mediad::alto_falante::{Aplay, Nula, Saida, Tocador};
 use rms1_mediad::camera;
 use rms1_mediad::microfone::{self, BLOCO, Ouvinte};
+use rms1_mediad::percepcao;
 use rms1_mediad::quadros::Quadros;
 use rms1_mediad::servidor::{self, Servico};
 use rms1_mediad::trava::Trava;
@@ -129,6 +130,27 @@ fn main() -> ExitCode {
             eprintln!("rms1-mediad: microfone: {e}");
             return ExitCode::FAILURE;
         }
+        // A percepção pela estação: sem estação na rede, só ouve a porta do anúncio. Se nem isso consegue, o serviço
+        // segue de pé sem ela, e `s1.media.status` diz por quê.
+        let (q, s, p) = (quadros.clone(), servico.clone(), parar.clone());
+        std::thread::Builder::new()
+            .name("percepcao".into())
+            .spawn(move || {
+                let cfg = percepcao::Config {
+                    porta_anuncio: midia.percepcao.porta_anuncio,
+                    ritmo_max: f64::from(midia.percepcao.ritmo_max),
+                    anuncio_vale: rms1_mediad::estacao::ANUNCIO_VALE,
+                };
+                let (estado, deteccoes) = (s.percepcao.clone(), s.deteccoes.clone());
+                // Sem assinante, a detecção não tem para quem ir.
+                let publicar = move |linha: String| drop(deteccoes.send(linha.into()));
+                if let Err(e) = percepcao::rodar(cfg, q, publicar, estado, p) {
+                    tracing::error!(erro = %e, porta = midia.percepcao.porta_anuncio, "a percepção não subiu");
+                    s.percepcao.lock().expect("estado da percepção").idle_reason =
+                        Some(format!("a porta do anúncio não abriu: {e}"));
+                }
+            })
+            .expect("thread da percepção");
         let (s, p) = (servico.clone(), parar.clone());
         std::thread::spawn(move || {
             while !p.load(Ordering::Relaxed) {

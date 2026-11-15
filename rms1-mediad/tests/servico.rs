@@ -121,3 +121,47 @@ async fn quem_assina_recebe_o_que_o_robo_ouviu() {
     let (_p2, _a2, outro) = montar();
     assert!(outro.ouvidos.send(Ouvido::Voz).is_err());
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn quem_assina_recebe_as_deteccoes_e_o_estado_mostra_a_percepcao() {
+    let (_pasta, _anota, servico) = montar();
+    let (cliente, servidor_) = UnixStream::pair().unwrap();
+    tokio::spawn(servidor::atender(servidor_, servico.clone()));
+    let mut c = BufReader::new(cliente);
+    // Sem assinatura, a detecção não tem para quem ir.
+    let deteccao = rms1_mediad::percepcao::notificacao(&[], 1280, 720, 45.0);
+    assert!(servico.deteccoes.send(deteccao.as_str().into()).is_err());
+    c.get_mut()
+        .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"s1.media.subscribe\",\"params\":{\"detections\":true}}\n")
+        .await
+        .unwrap();
+    assert_eq!(linha(&mut c).await["result"]["accepted"], true);
+    servico.deteccoes.send(deteccao.as_str().into()).unwrap();
+    let n = linha(&mut c).await;
+    assert_eq!(
+        (n["method"].as_str(), n["params"]["width"].as_u64()),
+        (Some("media.detections"), Some(1280)),
+        "{n}"
+    );
+    // Quem assinou só as detecções não recebe o que o robô ouviu.
+    assert!(servico.ouvidos.send(Ouvido::Voz).is_err());
+
+    // O estado mostra a percepção: sem estação, diz por quê.
+    servico.percepcao.lock().unwrap().idle_reason =
+        Some("nenhuma estação se anunciou na rede".to_owned());
+    c.get_mut()
+        .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"s1.media.status\"}\n")
+        .await
+        .unwrap();
+    let r = linha(&mut c).await;
+    let p = &r["result"]["perception"];
+    assert_eq!(
+        p["idle_reason"], "nenhuma estação se anunciou na rede",
+        "{r}"
+    );
+    assert_eq!(
+        (p["frames_sent"].as_u64(), p["station"].is_null()),
+        (Some(0), true),
+        "{r}"
+    );
+}

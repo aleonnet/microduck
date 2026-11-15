@@ -3,7 +3,9 @@
 //! - `hello` e `media.frame`, no formato do pato (`mediad/src/frame.rs`): uma linha JSON-RPC com o cabeçalho do contrato e,
 //!   em seguida, exatamente `bytes` bytes crus. O quadro nunca passa por JSON, e a conexão fecha depois dele.
 //! - `robot.sound`, o do contrato, como requisição ou como notificação: é o que o `rms1d` repassa.
-//! - `s1.media.subscribe {"heard": true}`: a conexão passa a receber `s1.audio.heard {"kind"}`, já com a trava aplicada.
+//! - `s1.media.subscribe {"heard": true, "detections": true}`: a conexão passa a receber `s1.audio.heard {"kind"}`, já com
+//!   a trava aplicada, e `media.detections`, no formato do pato, a cada entrega do detector da estação. Cada pedido diz as
+//!   duas assinaturas: a que não vem é desligada.
 //! - `s1.media.status`: o que o serviço está fazendo.
 
 use std::path::Path;
@@ -19,6 +21,7 @@ use tokio::sync::broadcast;
 
 use crate::alto_falante::Tocador;
 use crate::microfone::Ouvido;
+use crate::percepcao::Estado;
 use crate::quadros::Quadros;
 
 /// O maior pedido que o socket lê.
@@ -26,21 +29,30 @@ const PEDIDO_MAXIMO: usize = 4096;
 const MODO_SOCKET: u32 = 0o660;
 /// Quantos eventos de som ficam guardados para um assinante lento. Quem fica para trás perde os mais velhos.
 const OUVIDOS_NA_FILA: usize = 32;
+/// Das detecções só a mais nova interessa: a fila do pato (`mediad/src/detect.rs`), 8.
+const DETECCOES_NA_FILA: usize = 8;
 
 /// O que as conexões partilham.
 pub struct Servico {
     pub quadros: Quadros,
     pub tocador: Mutex<Tocador>,
     pub ouvidos: broadcast::Sender<Ouvido>,
+    /// As notificações `media.detections`, prontas, uma linha JSON cada.
+    pub deteccoes: broadcast::Sender<Arc<str>>,
+    /// O que a percepção pela estação está fazendo: quem escreve é [`crate::percepcao::rodar`].
+    pub percepcao: Arc<Mutex<Estado>>,
 }
 
 impl Servico {
     pub fn novo(quadros: Quadros, tocador: Tocador) -> Arc<Self> {
         let (ouvidos, _) = broadcast::channel(OUVIDOS_NA_FILA);
+        let (deteccoes, _) = broadcast::channel(DETECCOES_NA_FILA);
         Arc::new(Self {
             quadros,
             tocador: Mutex::new(tocador),
             ouvidos,
+            deteccoes,
+            percepcao: Arc::default(),
         })
     }
 
@@ -128,6 +140,7 @@ pub async fn atender(conexao: UnixStream, s: Arc<Servico>) -> Result<()> {
     let (leitura, mut escrita) = conexao.into_split();
     let mut leitor = BufReader::new(leitura);
     let mut ouvindo: Option<broadcast::Receiver<Ouvido>> = None;
+    let mut vendo: Option<broadcast::Receiver<Arc<str>>> = None;
     // A linha em leitura fica fora do laço: se um evento de som chega no meio dela, o que já foi lido não se perde.
     let mut em_leitura = Vec::new();
     loop {
@@ -135,22 +148,32 @@ pub async fn atender(conexao: UnixStream, s: Arc<Servico>) -> Result<()> {
         let resto = (PEDIDO_MAXIMO + 1).saturating_sub(em_leitura.len()) as u64;
         let mut limitado = (&mut leitor).take(resto);
         let ler = limitado.read_until(b'\n', &mut em_leitura);
-        let lidos = match ouvindo.as_mut() {
-            None => ler.await?,
-            Some(rx) => tokio::select! {
-                l = ler => l?,
-                o = rx.recv() => {
-                    match o {
-                        Ok(o) => {
-                            let n = serde_json::json!({"jsonrpc": "2.0", "method": "s1.audio.heard", "params": {"kind": o.nome()}});
-                            escrever(&mut escrita, &n).await?;
-                        }
-                        Err(broadcast::error::RecvError::Lagged(n)) => tracing::debug!(perdidos = n, "assinante ficou para trás"),
-                        Err(broadcast::error::RecvError::Closed) => return Ok(()),
+        let lidos = tokio::select! {
+            l = ler => l?,
+            o = receber(&mut ouvindo) => {
+                match o {
+                    Ok(o) => {
+                        let n = serde_json::json!({"jsonrpc": "2.0", "method": "s1.audio.heard", "params": {"kind": o.nome()}});
+                        escrever(&mut escrita, &n).await?;
                     }
-                    continue;
+                    Err(broadcast::error::RecvError::Lagged(n)) => tracing::debug!(perdidos = n, "assinante ficou para trás"),
+                    Err(broadcast::error::RecvError::Closed) => return Ok(()),
                 }
-            },
+                continue;
+            }
+            d = receber(&mut vendo) => {
+                match d {
+                    Ok(deteccao) => {
+                        escrita.write_all(deteccao.as_bytes()).await?;
+                        escrita.write_all(b"\n").await?;
+                        escrita.flush().await?;
+                    }
+                    // Quem ficou para trás perde as velhas, que já não dizem onde o pato está.
+                    Err(broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(broadcast::error::RecvError::Closed) => return Ok(()),
+                }
+                continue;
+            }
         };
         let linha = std::mem::take(&mut em_leitura);
         if lidos == 0 {
@@ -203,11 +226,14 @@ pub async fn atender(conexao: UnixStream, s: Arc<Servico>) -> Result<()> {
             continue;
         }
         if metodo == "s1.media.subscribe" {
-            let quer = pedido
-                .params
-                .as_ref()
-                .is_some_and(|p| p["heard"].as_bool() == Some(true));
-            ouvindo = quer.then(|| s.ouvidos.subscribe());
+            let quer = |o: &str| {
+                pedido
+                    .params
+                    .as_ref()
+                    .is_some_and(|p| p[o].as_bool() == Some(true))
+            };
+            ouvindo = quer("heard").then(|| s.ouvidos.subscribe());
+            vendo = quer("detections").then(|| s.deteccoes.subscribe());
             if pedido.id.is_some() {
                 escrever(
                     &mut escrita,
@@ -221,6 +247,7 @@ pub async fn atender(conexao: UnixStream, s: Arc<Servico>) -> Result<()> {
             let estado = serde_json::json!({
                 "frames_copied": s.quadros.copias(),
                 "playing": s.tocador.lock().expect("trava do tocador").tocando(),
+                "perception": *s.percepcao.lock().expect("estado da percepção"),
             });
             if pedido.id.is_some() {
                 escrever(&mut escrita, &proto::Response::ok(pedido.id, &estado)).await?;
@@ -263,6 +290,16 @@ pub async fn atender(conexao: UnixStream, s: Arc<Servico>) -> Result<()> {
         escrita.write_all(&quadro.dados).await?;
         escrita.flush().await?;
         return Ok(());
+    }
+}
+
+/// O próximo de uma assinatura; sem assinatura, nunca.
+async fn receber<T: Clone>(
+    rx: &mut Option<broadcast::Receiver<T>>,
+) -> Result<T, broadcast::error::RecvError> {
+    match rx {
+        Some(rx) => rx.recv().await,
+        None => std::future::pending().await,
     }
 }
 
