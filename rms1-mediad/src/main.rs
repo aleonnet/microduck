@@ -57,7 +57,15 @@ fn subir_camera_do_robo(
         .spawn(move || {
             let s = servico.clone();
             let dizer = move |motivo| *s.camera.lock().expect("estado da câmera") = motivo;
-            camera_s1::rodar(quadros, dev, camera_s1::AQUECIMENTO, dizer, parar);
+            let contagem = servico.contagem_da_camera.clone();
+            camera_s1::rodar_contando(
+                quadros,
+                dev,
+                camera_s1::AQUECIMENTO,
+                dizer,
+                &contagem,
+                parar,
+            );
         })?;
     Ok(())
 }

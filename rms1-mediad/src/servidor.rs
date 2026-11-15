@@ -47,6 +47,8 @@ pub struct Servico {
     /// Por que a câmera não entrega quadro, se não entrega: quem escreve é a fonte da câmera.
     pub camera: Arc<Mutex<Option<String>>>,
     /// Por que o microfone não ouve, se não ouve, e o nível do último bloco (os bits de um `f32`, de 0 a 1).
+    /// Quantos quadros a câmera do robô entregou e quantos o driver pulou.
+    pub contagem_da_camera: Arc<crate::camera_s1::Contagem>,
     pub microfone: Arc<Mutex<Option<String>>>,
     pub nivel_do_microfone: Arc<AtomicU32>,
     /// O mixer do robô, se o serviço é o dono dele, e o volume em uso, de 0 a 100.
@@ -65,6 +67,7 @@ impl Servico {
             deteccoes,
             percepcao: Arc::default(),
             camera: Arc::default(),
+            contagem_da_camera: Arc::default(),
             microfone: Arc::default(),
             nivel_do_microfone: Arc::default(),
             mixer: Mutex::new(None),
@@ -294,6 +297,8 @@ pub async fn atender(conexao: UnixStream, s: Arc<Servico>) -> Result<()> {
                 "frames_copied": s.quadros.copias(),
                 "playing": s.tocador.lock().expect("trava do tocador").tocando(),
                 "camera_problem": *s.camera.lock().expect("estado da câmera"),
+                "camera_frames": s.contagem_da_camera.quadros.load(Ordering::Relaxed),
+                "camera_dropped": s.contagem_da_camera.perdidos.load(Ordering::Relaxed),
                 "microphone_problem": *s.microfone.lock().expect("estado do microfone"),
                 "mic_level": f32::from_bits(s.nivel_do_microfone.load(Ordering::Relaxed)),
                 "volume": s.volume.load(Ordering::Relaxed),

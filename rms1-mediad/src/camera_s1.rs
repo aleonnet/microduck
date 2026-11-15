@@ -21,7 +21,7 @@
 use std::fmt;
 use std::io;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use crate::camera::{NV12, S1_ALTURA, S1_LARGURA, bytes_nv12};
 use crate::quadros::{Quadro, Quadros};
@@ -254,6 +254,7 @@ pub const PED_MEMORIA: usize = 8;
 pub const BUF_INDICE: usize = 0;
 pub const BUF_TIPO: usize = 4;
 pub const BUF_USADOS: usize = 8;
+pub const BUF_SEQUENCIA: usize = 44;
 pub const BUF_MEMORIA: usize = 48;
 pub const BUF_DESLOCAMENTO: usize = 52;
 pub const BUF_TAMANHO: usize = 56;
@@ -271,6 +272,15 @@ pub struct CameraS1<D: Dispositivo> {
     dev: D,
     mapas: Vec<Mapa>,
     ligado: bool,
+    /// O número que o driver deu ao último quadro tirado da fila: um salto nele é quadro perdido.
+    sequencia: u32,
+}
+
+/// Quantos quadros a câmera entregou e quantos o driver pulou, desde que o serviço subiu: é o que `s1.media.status` mostra.
+#[derive(Default)]
+pub struct Contagem {
+    pub quadros: AtomicU64,
+    pub perdidos: AtomicU64,
 }
 
 impl<D: Dispositivo> CameraS1<D> {
@@ -281,6 +291,7 @@ impl<D: Dispositivo> CameraS1<D> {
             dev,
             mapas: Vec::with_capacity(BUFFERS as usize),
             ligado: false,
+            sequencia: 0,
         };
         c.sequencia()?;
         Ok(c)
@@ -463,6 +474,7 @@ impl<D: Dispositivo> CameraS1<D> {
         poe(&mut b, BUF_MEMORIA, MMAP);
         self.dev.ioctl(VIDIOC_DQBUF, &mut b)?;
         let indice = le(&b, BUF_INDICE);
+        self.sequencia = le(&b, BUF_SEQUENCIA);
         let mapa = self.mapas.get(indice as usize).ok_or_else(|| {
             io::Error::other(format!(
                 "o driver devolveu o buffer {indice}, e são {BUFFERS}"
@@ -470,6 +482,11 @@ impl<D: Dispositivo> CameraS1<D> {
         })?;
         let usados = (le(&b, BUF_USADOS) as usize).min(mapa.bytes().len());
         Ok(Some((indice, &mapa.bytes()[..usados])))
+    }
+
+    /// O número que o driver deu ao último quadro tirado da fila.
+    pub fn sequencia_do_ultimo(&self) -> u32 {
+        self.sequencia
     }
 
     /// Devolve ao driver um buffer tirado da fila.
@@ -511,6 +528,26 @@ pub fn rodar<D: Dispositivo>(
     dizer: impl Fn(Option<String>),
     parar: Arc<AtomicBool>,
 ) {
+    rodar_contando(
+        quadros,
+        dev,
+        aquecimento,
+        dizer,
+        &Contagem::default(),
+        parar,
+    );
+}
+
+/// [`rodar`], contando em `contagem` cada quadro que a câmera entrega e cada um que o driver pulou.
+pub fn rodar_contando<D: Dispositivo>(
+    quadros: Quadros,
+    dev: D,
+    aquecimento: u32,
+    dizer: impl Fn(Option<String>),
+    contagem: &Contagem,
+    parar: Arc<AtomicBool>,
+) {
+    let mut anterior: Option<u32> = None;
     let mut camera = match CameraS1::abrir(dev) {
         Ok(c) => c,
         Err(e) => {
@@ -525,6 +562,7 @@ pub fn rodar<D: Dispositivo>(
         let (indice, copia) = match camera.quadro(PRAZO_DO_QUADRO_MS) {
             Ok(Some((indice, bytes))) => {
                 vazios = 0;
+                contagem.quadros.fetch_add(1, Ordering::Relaxed);
                 if vistos < aquecimento {
                     vistos += 1;
                     if vistos == aquecimento {
@@ -565,6 +603,16 @@ pub fn rodar<D: Dispositivo>(
                 return;
             }
         };
+        // O driver numera os quadros: um salto no número é quadro que ele não entregou.
+        let numero = camera.sequencia_do_ultimo();
+        if let Some(a) = anterior
+            && numero > a.wrapping_add(1)
+        {
+            contagem
+                .perdidos
+                .fetch_add(u64::from(numero - a - 1), Ordering::Relaxed);
+        }
+        anterior = Some(numero);
         if let Some(dados) = copia {
             quadros.entregar(Quadro {
                 largura: S1_LARGURA,

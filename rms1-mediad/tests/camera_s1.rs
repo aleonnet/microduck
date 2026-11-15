@@ -32,6 +32,8 @@ struct Respostas {
     bytes_do_quadro: u32,
     /// O número do quadro em que tirar da fila passa a dar erro.
     falha_no_quadro: Option<u32>,
+    /// O número do quadro a partir do qual o driver pula três na numeração.
+    salto_no_quadro: Option<u32>,
 }
 
 impl Default for Respostas {
@@ -47,6 +49,7 @@ impl Default for Respostas {
             limites: (2592, 1944),
             bytes_do_quadro: 1_382_432,
             falha_no_quadro: None,
+            salto_no_quadro: None,
         }
     }
 }
@@ -158,6 +161,12 @@ impl Dispositivo for Gravacao {
                 let i = self.fila.remove(0);
                 poe(arg, 0, i);
                 poe(arg, 8, self.r.bytes_do_quadro);
+                let pulo = if self.r.salto_no_quadro.is_some_and(|n| self.quadros >= n) {
+                    3
+                } else {
+                    0
+                };
+                poe(arg, 44, self.quadros + pulo);
                 self.quadros += 1;
             }
             // VIDIOC_STREAMON e VIDIOC_STREAMOFF
@@ -475,6 +484,57 @@ fn camera_do_s1_sempre_desliga_o_fluxo() {
     desligou_e_soltou(&atos.lock().unwrap());
 }
 
+/// A câmera conta o que entrega e o que o driver pulou: é o que a prova no robô lê para dizer "sem descarte".
+#[test]
+fn camera_do_s1_conta_os_quadros_e_os_que_o_driver_pulou() {
+    let r = Respostas {
+        salto_no_quadro: Some(5),
+        falha_no_quadro: Some(9),
+        ..Respostas::default()
+    };
+    let (dev, _atos) = Gravacao::nova(r);
+    let contagem = cam::Contagem::default();
+    cam::rodar_contando(
+        Quadros::default(),
+        dev,
+        2,
+        |_| {},
+        &contagem,
+        Arc::new(AtomicBool::new(false)),
+    );
+    assert_eq!(
+        contagem.quadros.load(Ordering::Relaxed),
+        9,
+        "nove quadros antes da falha"
+    );
+    assert_eq!(
+        contagem.perdidos.load(Ordering::Relaxed),
+        3,
+        "o salto de três na numeração"
+    );
+    // Sem salto, nenhum perdido.
+    let (dev, _atos) = Gravacao::nova(Respostas {
+        falha_no_quadro: Some(9),
+        ..Respostas::default()
+    });
+    let contagem = cam::Contagem::default();
+    cam::rodar_contando(
+        Quadros::default(),
+        dev,
+        2,
+        |_| {},
+        &contagem,
+        Arc::new(AtomicBool::new(false)),
+    );
+    assert_eq!(
+        (
+            contagem.quadros.load(Ordering::Relaxed),
+            contagem.perdidos.load(Ordering::Relaxed)
+        ),
+        (9, 0)
+    );
+}
+
 /// Cada número de pedido e cada deslocamento usado, conferido com o que o compilador ARM de 32 bits imprimiu.
 #[test]
 fn os_numeros_sao_os_do_compilador_arm() {
@@ -526,6 +586,7 @@ fn os_numeros_sao_os_do_compilador_arm() {
         ("off_v4l2_buffer_index", cam::BUF_INDICE as u64),
         ("off_v4l2_buffer_type", cam::BUF_TIPO as u64),
         ("off_v4l2_buffer_bytesused", cam::BUF_USADOS as u64),
+        ("off_v4l2_buffer_sequence", cam::BUF_SEQUENCIA as u64),
         ("off_v4l2_buffer_memory", cam::BUF_MEMORIA as u64),
         ("off_v4l2_buffer_m", cam::BUF_DESLOCAMENTO as u64),
         ("off_v4l2_buffer_length", cam::BUF_TAMANHO as u64),
