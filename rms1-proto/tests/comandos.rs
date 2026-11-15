@@ -198,6 +198,7 @@ fn o_codigo_novo_nao_cita_reset_de_no_nem_para_dji_scratch() {
         "rms1-control/src",
         "rms1d/src",
         "rms1d-params/src",
+        "rms1-mediad/src",
     ] {
         varrer(&raiz.join(pasta), &mut arquivos);
     }

@@ -35,6 +35,8 @@ pub struct Params {
     pub armadura: Armadura,
     pub mira: Mira,
     pub dji: Dji,
+    /// O serviço de mídia, `rms1-mediad`. Sem a seção, o `rms1d` não repassa som e recusa dizendo isso.
+    pub midia: Option<Midia>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -212,6 +214,130 @@ pub struct Mira {
 pub struct Dji {
     /// Processos que seguram a serial (`scripts/s1/bench.sh:147`).
     pub parar: Vec<String>,
+}
+
+/// O serviço de mídia do S1: câmera, microfone e alto-falante, com um dono só (`rms1-mediad`).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct Midia {
+    /// Onde o `rms1-mediad` serve `media.frame` e recebe `robot.sound`.
+    pub socket: String,
+    pub camera: MidiaCamera,
+    pub microfone: MidiaMicrofone,
+    pub alto_falante: MidiaAltoFalante,
+    /// Depois de o robô tocar um som, por quanto tempo o que o microfone ouve é descartado.
+    pub trava_ms: u64,
+    pub percepcao: MidiaPercepcao,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FonteCamera {
+    /// Um padrão que se move, de 256 por 144: para máquina sem câmera.
+    Teste,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct MidiaCamera {
+    pub fonte: FonteCamera,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FonteMicrofone {
+    /// Sem microfone: nada é ouvido.
+    Nenhuma,
+    /// Um `.wav`, tocado em laço no ritmo real.
+    Arquivo,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct MidiaMicrofone {
+    pub fonte: FonteMicrofone,
+    /// O `.wav` da fonte de arquivo.
+    pub arquivo: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SaidaDeSom {
+    /// Um `aplay` por som, no dispositivo dado.
+    Aplay,
+    /// Nada toca.
+    Nula,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct MidiaAltoFalante {
+    pub saida: SaidaDeSom,
+    pub dispositivo: String,
+    /// Onde fica o banco de voz deste robô (`sounds ensure-bank`).
+    pub banco: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct MidiaPercepcao {
+    /// A porta UDP em que a estação Hailo se anuncia.
+    pub porta_anuncio: u16,
+    /// O teto de quadros por segundo que o S1 manda à estação, seja qual for o ritmo anunciado.
+    pub ritmo_max: u32,
+}
+
+impl Default for Midia {
+    fn default() -> Self {
+        Self {
+            socket: "/run/rms1-mediad/media.sock".to_owned(),
+            camera: MidiaCamera::default(),
+            microfone: MidiaMicrofone::default(),
+            alto_falante: MidiaAltoFalante::default(),
+            // A janela do runtime antigo do pato (`microduck_runtime/src/main.rs:2921-2935`). A do S1 se mede no robô.
+            trava_ms: 800,
+            percepcao: MidiaPercepcao::default(),
+        }
+    }
+}
+
+impl Default for MidiaCamera {
+    fn default() -> Self {
+        Self {
+            fonte: FonteCamera::Teste,
+        }
+    }
+}
+
+impl Default for MidiaMicrofone {
+    fn default() -> Self {
+        Self {
+            fonte: FonteMicrofone::Nenhuma,
+            arquivo: None,
+        }
+    }
+}
+
+impl Default for MidiaAltoFalante {
+    fn default() -> Self {
+        Self {
+            saida: SaidaDeSom::Nula,
+            // O que tocou a voz do pato no S1 em 2026-10-31 (`docs/s1/project/s1-bringup.md:1368-1373`).
+            dispositivo: "plughw:0,0".to_owned(),
+            // O lugar do banco no pato (`robotd-params`, `bank`).
+            banco: "/var/lib/robot/sounds".to_owned(),
+        }
+    }
+}
+
+impl Default for MidiaPercepcao {
+    fn default() -> Self {
+        Self {
+            porta_anuncio: 45679,
+            // Um quadro por vez nos 45,37 ms de ida e volta medidos em 2026-11-13 (S1, Pi, S1).
+            ritmo_max: 22,
+        }
+    }
 }
 
 impl Default for Robo {
@@ -578,6 +704,39 @@ impl Params {
                 "dji.parar não pode ter `{p}`: só {PODE_PARAR:?} podem parar"
             ));
         }
+        if let Some(m) = &self.midia {
+            if !m.socket.starts_with('/') {
+                return ruim(format!(
+                    "midia.socket tem de ser um caminho absoluto: {}",
+                    m.socket
+                ));
+            }
+            // Uma janela absurda deixaria o robô surdo sem ninguém saber.
+            if m.trava_ms > 10_000 {
+                return ruim(format!("midia.trava_ms acima de 10000: {}", m.trava_ms));
+            }
+            if !(1..=22).contains(&m.percepcao.ritmo_max) {
+                return ruim(format!(
+                    "midia.percepcao.ritmo_max fora de 1 a 22: {}",
+                    m.percepcao.ritmo_max
+                ));
+            }
+            if m.percepcao.porta_anuncio == 0 {
+                return ruim("midia.percepcao.porta_anuncio não pode ser 0".to_owned());
+            }
+            if m.microfone.fonte == FonteMicrofone::Arquivo && m.microfone.arquivo.is_none() {
+                return ruim(
+                    "midia.microfone.arquivo falta: a fonte de arquivo precisa do `.wav`"
+                        .to_owned(),
+                );
+            }
+            if !m.alto_falante.banco.starts_with('/') {
+                return ruim(format!(
+                    "midia.alto_falante.banco tem de ser um caminho absoluto: {}",
+                    m.alto_falante.banco
+                ));
+            }
+        }
         Ok(())
     }
 }
@@ -757,6 +916,7 @@ mod testes {
             "rms1d/src",
             "rms1d/src/bin",
             "rms1d-params/src",
+            "rms1-mediad/src",
         ] {
             for a in std::fs::read_dir(format!("{raiz}/{pasta}"))
                 .unwrap()
@@ -785,6 +945,44 @@ mod testes {
             }
         }
         assert!(achados.is_empty(), "{achados:?}");
+    }
+
+    /// Sem a seção, não há serviço de mídia; com ela vazia, valem os padrões; e cada erro é recusado pelo nome.
+    #[test]
+    fn midia_errada_e_recusada_pelo_nome() {
+        assert_eq!(Params::default().midia, None);
+        let p = de("[midia]\n").unwrap().midia.unwrap();
+        assert_eq!(p, Midia::default());
+        assert_eq!(
+            (p.trava_ms, p.percepcao.porta_anuncio, p.percepcao.ritmo_max),
+            (800, 45679, 22)
+        );
+        let p = de("[midia]\ntrava_ms = 400\n[midia.microfone]\nfonte = \"arquivo\"\narquivo = \"/tmp/a.wav\"\n[midia.alto_falante]\nsaida = \"aplay\"\n").unwrap().midia.unwrap();
+        assert_eq!(
+            (p.trava_ms, p.microfone.fonte, p.alto_falante.saida),
+            (400, FonteMicrofone::Arquivo, SaidaDeSom::Aplay)
+        );
+        for (t, nome) in [
+            ("[midia]\ntrava = 800\n", "trava"),
+            ("[midia]\ntrava_ms = 10001\n", "trava_ms"),
+            ("[midia]\nsocket = \"media.sock\"\n", "midia.socket"),
+            ("[midia.percepcao]\nritmo_max = 0\n", "ritmo_max"),
+            ("[midia.percepcao]\nritmo_max = 23\n", "ritmo_max"),
+            ("[midia.percepcao]\nporta_anuncio = 0\n", "porta_anuncio"),
+            ("[midia.camera]\nfonte = \"webcam\"\n", "webcam"),
+            (
+                "[midia.microfone]\nfonte = \"arquivo\"\n",
+                "midia.microfone.arquivo",
+            ),
+            (
+                "[midia.alto_falante]\nbanco = \"sons\"\n",
+                "midia.alto_falante.banco",
+            ),
+            ("[midia.alto_falante]\nvolume = 5\n", "volume"),
+        ] {
+            let e = de(t).unwrap_err().to_string();
+            assert!(e.contains(nome), "{t}: {e}");
+        }
     }
 
     /// Parar `dji_scratch` derrubou `dji_sys` no robô.
