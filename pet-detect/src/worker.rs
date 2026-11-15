@@ -51,7 +51,10 @@ const AUDIBLE_HOLD_FRAMES: u32 = (crate::WINDOW_SAMPLES as u32).div_ceil(SENTRY_
 /// RMS envelope watcher over ~32 ms frames with a slowly-adapting ambient floor. Petting
 /// sounds are loud on this mic (it's practically a contact mic for head scratches), so
 /// events are suppressed while the classifier reports petting (+1 s hangover).
-struct SoundSentry {
+///
+/// Public for `rms1-mediad`, the S1's media service, which runs this same sentry over its own microphone
+/// stream (it has no petting classifier, and passes `petting = false`).
+pub struct SoundSentry {
     floor: f32,
     frame_acc: f32,
     frame_n: u32,
@@ -68,8 +71,14 @@ struct SoundSentry {
     audible_frames: u32,
 }
 
+impl Default for SoundSentry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SoundSentry {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             floor: 0.003,
             frame_acc: 0.0,
@@ -101,11 +110,11 @@ impl SoundSentry {
     /// times the ambient floor for a whole second would be missed — and would have scored
     /// far below the 0.95 enter threshold anyway, on a mic this model was trained through
     /// where a head scratch is loud enough to need muting.
-    fn audible(&self) -> bool {
+    pub fn audible(&self) -> bool {
         self.audible_frames > 0
     }
 
-    fn push(&mut self, samples: &[f32], petting: bool, out: &mut Vec<SoundEvent>) {
+    pub fn push(&mut self, samples: &[f32], petting: bool, out: &mut Vec<SoundEvent>) {
         for &s in samples {
             self.frame_acc += s * s;
             self.frame_n += 1;

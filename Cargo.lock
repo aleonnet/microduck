@@ -4040,6 +4040,8 @@ dependencies = [
  "anyhow",
  "clap",
  "duck-ipc-proto",
+ "hound",
+ "pet-detect",
  "serde",
  "serde_json",
  "tempfile",

@@ -8,5 +8,7 @@
 //! com o cabeçalho do contrato, e o encontro de quadros, refeito em [`quadros`].
 
 pub mod camera;
+pub mod microfone;
 pub mod quadros;
 pub mod servidor;
+pub mod trava;
