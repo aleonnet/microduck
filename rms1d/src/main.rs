@@ -28,6 +28,10 @@ struct Args {
     /// `scripts/s1/rms1d-bench.sh` usa, para a recusa vir antes de parar qualquer processo.
     #[arg(long)]
     processos_a_parar: bool,
+    /// Valida o arquivo, imprime o limite da gravação em MiB (vazio se o arquivo não grava) e sai, sem tocar em nada. É de onde
+    /// `scripts/s1/rms1d-bench.sh` tira quanto espaço o disco do robô precisa ter: o número mora só em `rms1d-params`.
+    #[arg(long)]
+    limite_da_gravacao: bool,
 }
 
 /// Quadros de estado guardados para quem ficou para trás. Cliente mais lento que isso recebe um buraco.
@@ -117,6 +121,12 @@ fn main() -> ExitCode {
 
     if args.processos_a_parar {
         println!("{}", params.dji.parar.join(" "));
+        return ExitCode::SUCCESS;
+    }
+    if args.limite_da_gravacao {
+        if params.corpo.gravar.is_some() {
+            println!("{}", params.corpo.gravar_limite_mb);
+        }
         return ExitCode::SUCCESS;
     }
 

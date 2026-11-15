@@ -29,6 +29,21 @@ case "$*" in
     elif tem vivo_sem_somas; then echo RMS1D_VIVO;
     elif tem mesmo_binario; then printf '%s  /data/debian/opt/robot/bin/rms1d\r\n' "$SOMA_BIN"; fi ;;
   *"test -d"*) tem sem_chroot || echo chroot_ok ;;
+  # O disco do robô, no formato do `busybox df -k /data` medido no robô em 2026-11-15 (duas linhas, com `\r`): cheio como naquele
+  # dia, ou com folga. Guardadas as sobras, sobra espaço.
+  *espaco_do_robo*)
+    if tem disco_mudo; then :
+    elif tem pouco_espaco && [ ! -f "$DEFEITO.sobras_guardadas" ]; then printf 'espaco_do_robo\r\n/dev/block/platform/comip-mmc.1/by-name/userdata\r\n                       1015704    997904      1416 100%% /data\r\n'
+    else printf 'espaco_do_robo\r\n/dev/block/platform/comip-mmc.1/by-name/userdata\r\n                       1015704    828268    171052  83%% /data\r\n'; fi ;;
+  # A pasta das gravações, no formato do `busybox ls -l` pelo `adb shell`, com as cores: uma gravação esquecida, até ser apagada.
+  *sobras_do_robo*)
+    echo sobras_do_robo
+    if tem sobras && [ ! -f "$DEFEITO.sobras_guardadas" ]; then printf -- '-rw-rw-rw-    1 0        0         39428096 Jan  1 01:19 \033[0;0mrms1d-recebido.txt.robo-20261101-010101\033[0m\r\n'; fi
+    printf 'drwxrwxrwx    8 0        0             4096 Jan  1 00:02 \033[1;34msounds\033[0m\r\n' ;;
+  *"sha256sum /data/debian/var/lib/robot/"*".robo-"*)
+    if tem soma_diferente; then printf '0000000000000000000000000000000000000000000000000000000000000000  x\r\n'
+    else printf '%s  x\r\n' "$(printf 'gravacao antiga' | shasum -a 256 | cut -d' ' -f1)"; fi ;;
+  *"rm -f /data/debian/var/lib/robot/rms1d-recebido.txt.robo-20261101-010101"*) touch "$DEFEITO.sobras_guardadas" ;;
   *"pkill -TERM rms1-mediad"*sem_midia*) if tem midia_antiga; then echo MIDIA_ANTIGA_VIVA; else echo sem_midia; fi ;;
   *midia_no_ar*) if tem midia_morta; then echo MIDIA_MORTA; echo "rms1-mediad: mixer: o valor não pegou em MIC2 Volume"; else echo midia_no_ar; fi ;;
   *"pkill -TERM rms1d"*sem_rms1d*) if tem rms1d_antigo; then echo RMS1D_ANTIGO_VIVO; else echo sem_rms1d; fi ;;
@@ -38,7 +53,9 @@ case "$*" in
   *marca_gravada*) if tem sem_marca; then exit 0; fi; touch "$DEFEITO.marca"; echo marca_gravada ;;
   *marca_viva*) if [ -f "$DEFEITO.uma_falha" ] && [ -f "$DEFEITO.reiniciou" ]; then rm -f "$DEFEITO.uma_falha"; exit 1; fi; if [ -f "$DEFEITO.marca" ]; then echo marca_viva; else echo marca_sumiu; fi ;;
   # Só a cópia ao fundo da ativação, de nome `.robo-`, fica lenta: a da própria volta, rápida, não cobre a falta da espera.
-  *" pull "*".robo-"*) if tem copia_lenta; then sleep 4; fi; if tem pull_falha; then exit 1; fi ;;
+  *" pull "*".robo-"*) if tem copia_lenta; then sleep 4; fi; if tem pull_falha; then exit 1; fi
+    # A cópia chega: o último argumento é o destino neste Mac.
+    for d; do :; done; printf 'gravacao antiga' > "$d" ;;
   *"shell reboot"*) touch "$DEFEITO.reiniciou"; rm -f "$DEFEITO.conectado"; tem nao_reinicia || rm -f "$DEFEITO.marca" ;;
 esac
 exit 0
@@ -190,6 +207,36 @@ echo "--- o mesmo rms1d no ar com outra configuração: atualiza"
 atualiza outro_toml nao
 echo "--- o rms1d no ar sem as somas: atualiza"
 atualiza vivo_sem_somas sim
+
+echo "--- adendo 2: o disco do robô com pouco espaço, sem gravação esquecida: para antes de tocar na DJI"
+echo pouco_espaco > "$DEFEITO"
+reprova "pouco espaço" "o disco do robô tem 1 MB livres, e a gravação precisa de 128" "stop dji_monitor"
+if grep -qE "pkill|push " "$ADB_LOG"; then echo "POUCO ESPAÇO, E MEXEU NO ROBÔ:"; grep -E "pkill|push " "$ADB_LOG" | head -3; falhou=1; else echo "pouco espaço: nada parado nem enviado"; fi
+echo "--- adendo 2: o robô não diz o espaço do disco: para, sem subir às cegas"
+echo disco_mudo > "$DEFEITO"
+reprova "disco mudo" "não consegui ler o espaço do disco do robô" "stop dji_monitor"
+echo "--- adendo 2: uma gravação esquecida no robô, com espaço: copiada ao fundo, conferida pela soma, e só então apagada"
+echo sobras > "$DEFEITO"; rm -f "$DEFEITO.sobras_guardadas" "$T/out/robo-20261101-010101.recebido.txt"
+: > "$ADB_LOG"
+scripts/s1/rms1d-bench.sh up > "$T/up.txt" 2>&1 || { echo "up com sobras falhou:"; tail -5 "$T/up.txt"; falhou=1; }
+esperar_copia
+antes "pull /data/debian/var/lib/robot/rms1d-recebido.txt.robo-20261101-010101" "sha256sum /data/debian/var/lib/robot/rms1d-recebido.txt.robo-20261101-010101"
+antes "sha256sum /data/debian/var/lib/robot/rms1d-recebido.txt.robo-20261101-010101" "rm -f /data/debian/var/lib/robot/rms1d-recebido.txt.robo-20261101-010101"
+if [ -f "$T/out/robo-20261101-010101.recebido.txt" ] && grep -q "AVISO: há gravações antigas no robô (1)" "$T/up.txt"; then echo "sobra: guardada neste Mac, e a ativação avisou"; else echo "SOBRA NÃO GUARDADA, OU SEM AVISO:"; tail -5 "$T/up.txt"; falhou=1; fi
+echo "--- adendo 2: gravação esquecida e pouco espaço: guardada à vista antes de conferir o disco, e a ativação segue"
+printf 'sobras\npouco_espaco\n' > "$DEFEITO"; rm -f "$DEFEITO.sobras_guardadas" "$T/out/robo-20261101-010101.recebido.txt"
+: > "$ADB_LOG"
+scripts/s1/rms1d-bench.sh up > "$T/up.txt" 2>&1 || { echo "up com sobras e pouco espaço falhou:"; tail -5 "$T/up.txt"; falhou=1; }
+esperar_copia
+grep -q "Guardando as gravações antigas do robô" "$T/up.txt" && grep -q "Robô pronto" "$T/up.txt" && echo "sobras com pouco espaço: guarda à vista e segue" || { echo "SOBRAS COM POUCO ESPAÇO, SEM O PASSO:"; tail -5 "$T/up.txt"; falhou=1; }
+antes "rm -f /data/debian/var/lib/robot/rms1d-recebido.txt.robo-20261101-010101" "stop dji_monitor"
+echo "--- adendo 2: a cópia chega com a soma diferente: avisa pelo nome, e não apaga no robô"
+printf 'sobras\npouco_espaco\nsoma_diferente\n' > "$DEFEITO"; rm -f "$DEFEITO.sobras_guardadas" "$T/out/robo-20261101-010101.recebido.txt"
+reprova "soma diferente" "MB livres" "stop dji_monitor"
+grep -q "AVISO: a gravação antiga rms1d-recebido.txt.robo-20261101-010101 (37 MB) chegou com a soma diferente" "$T/up.txt" && echo "soma diferente: avisa pelo nome e pelo tamanho" || { echo "SOMA DIFERENTE, SEM AVISO:"; tail -5 "$T/up.txt"; falhou=1; }
+if grep -qF "rm -f /data/debian/var/lib/robot/rms1d-recebido.txt.robo-20261101-010101" "$ADB_LOG"; then echo "APAGOU NO ROBÔ COM A SOMA DIFERENTE"; falhou=1; else echo "soma diferente: a gravação fica no robô"; fi
+[ ! -e "$T/out/robo-20261101-010101.recebido.txt" ] && [ ! -e "$T/out/robo-20261101-010101.recebido.txt.copiando" ] && echo "soma diferente: nada fica neste Mac" || { echo "SOMA DIFERENTE, E FICOU ARQUIVO NO MAC"; falhou=1; }
+: > "$DEFEITO"; rm -f "$DEFEITO.sobras_guardadas"
 
 echo "--- as gravações ficam fora dos repositórios"
 rm -rf "$T/xdg"

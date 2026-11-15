@@ -92,14 +92,96 @@ separar_gravacao() { # separar_gravacao <prefixo em $OUT>
     local g r
     { read -r g; read -r r; } < <(gravacoes)
     for f in $g $r; do "${A[@]}" shell "$BB test -f $CHROOT$f && $BB mv -f $CHROOT$f $CHROOT$f.$1" >/dev/null 2>&1 || true; done
+    copiar_ao_fundo "$1"
+}
+
+# A cópia ao fundo: a gravação desta ativação (com o prefixo dado) e as esquecidas de ativações anteriores ($SOBRAS).
+copiar_ao_fundo() { # copiar_ao_fundo <prefixo em $OUT, ou vazio>
+    local g r
+    { read -r g; read -r r; } < <(gravacoes)
     # A própria cópia grava o seu número e o apaga ao terminar: um número velho no arquivo não fica esperando outro processo.
     # O número sai do `sh` filho (o pai dele é esta cópia): o bash do macOS, 3.2, não tem `BASHPID`.
     (
         sh -c 'echo "$PPID"' > "$ESTADO/copia.pid"
-        if [ -n "$g" ] && "${A[@]}" pull "$CHROOT$g.$1" "$OUT/$1.quadros"; then "${A[@]}" shell "$BB rm -f $CHROOT$g.$1"; fi
-        if [ -n "$r" ] && "${A[@]}" pull "$CHROOT$r.$1" "$OUT/$1.recebido.txt"; then "${A[@]}" shell "$BB rm -f $CHROOT$r.$1"; fi
+        if [ -n "$1" ]; then
+            if [ -n "$g" ] && "${A[@]}" pull "$CHROOT$g.$1" "$OUT/$1.quadros"; then "${A[@]}" shell "$BB rm -f $CHROOT$g.$1"; fi
+            if [ -n "$r" ] && "${A[@]}" pull "$CHROOT$r.$1" "$OUT/$1.recebido.txt"; then "${A[@]}" shell "$BB rm -f $CHROOT$r.$1"; fi
+        fi
+        guardar_sobras "$SOBRAS"
         rm -f "$ESTADO/copia.pid"
     ) >"$ESTADO/copia.log" 2>&1 </dev/null &
+}
+
+# O espaço livre do `/data` do robô, em KiB; vazio se a resposta não se lê. O `df -k` do busybox é o que a cópia de 2026-11-01
+# usou (`tools/copia/copiar_s1.py`, no laboratório): a última linha traz blocos, usado, livre, percentual e o ponto de montagem.
+espaco_livre_kib() {
+    "${A[@]}" shell "echo espaco_do_robo; $BB df -k /data" 2>/dev/null | tr -d '\r' | awk 'NF >= 4 && $(NF-2) ~ /^[0-9]+$/ && $NF == "/data" { v = $(NF-2) } END { print v }'
+}
+
+# As gravações de ativações anteriores que ficaram no robô (`<arquivo>.robo-<data>-<hora>`), "<bytes> <nome>" por linha. Ficam
+# quando a cópia delas não chega: duas, de 62 e 39 MB, encheram o disco do robô em 2026-11-15, e o laço caiu a 2 Hz. O `ls` do
+# busybox, pelo `adb shell`, sai com cores: as sequências saem aqui.
+sobras_no_robo() {
+    local g r
+    { read -r g; read -r r; } < <(gravacoes)
+    [ -n "$g" ] || return 0
+    "${A[@]}" shell "echo sobras_do_robo; $BB ls -l $(dirname "$CHROOT$g")" 2>/dev/null | tr -d '\r' | sed $'s/\x1b\\[[0-9;]*m//g' | awk '$NF ~ /[.]robo-/ { print $5, $NF }'
+}
+
+# Copia cada sobra, confere a soma SHA-256 dos dois lados e só então a apaga no robô. A que não copia, ou não confere, fica no
+# robô, e a linha diz qual e de que tamanho. Nunca sobrescreve o que já está neste Mac.
+guardar_sobras() { # guardar_sobras <linhas "<bytes> <nome>">
+    local g r pasta bytes nome sufixo destino la aqui
+    { read -r g; read -r r; } < <(gravacoes)
+    [ -n "$1" ] || return 0
+    pasta="$(dirname "$CHROOT$g")"
+    while read -r bytes nome; do
+        [ -n "$nome" ] || continue
+        sufixo="${nome##*.robo-}"
+        case "$nome" in
+            "$(basename "$g")".robo-*) destino="$OUT/robo-$sufixo.quadros" ;;
+            *) destino="$OUT/robo-$sufixo.recebido.txt" ;;
+        esac
+        while [ -e "$destino" ]; do destino="$destino.outra"; done
+        if ! "${A[@]}" pull "$pasta/$nome" "$destino.copiando" >/dev/null 2>&1; then
+            rm -f "$destino.copiando"
+            diz "AVISO: a gravação antiga $nome ($((bytes / 1024 / 1024)) MB) não foi copiada do robô, e segue lá."
+            continue
+        fi
+        la="$("${A[@]}" shell "$BB sha256sum $pasta/$nome" 2>/dev/null | tr -d '\r' | cut -d' ' -f1)"
+        aqui="$(shasum -a 256 "$destino.copiando" | cut -d' ' -f1)"
+        if [ -n "$la" ] && [ "$la" = "$aqui" ]; then
+            mv "$destino.copiando" "$destino"
+            "${A[@]}" shell "$BB rm -f $pasta/$nome" >/dev/null 2>&1 || true
+            echo "gravação antiga $nome guardada em $destino"
+        else
+            rm -f "$destino.copiando"
+            diz "AVISO: a gravação antiga $nome ($((bytes / 1024 / 1024)) MB) chegou com a soma diferente, e segue no robô."
+        fi
+    done <<< "$1"
+}
+
+# O disco do robô, antes de parar qualquer coisa: a gravação precisa de duas vezes o limite dela livre (uma inteira ainda cabe
+# depois de uma esquecida). Com pouco espaço e gravações esquecidas, elas são guardadas primeiro, à vista. Sem resposta, para.
+SOBRAS=""
+conferir_disco() { # conferir_disco <limite da gravação em MiB>
+    local precisa=$(($1 * 2 * 1024)) livre
+    livre="$(espaco_livre_kib)"
+    [ -n "$livre" ] || falha "não consegui ler o espaço do disco do robô; nada foi parado nele. Tente de novo"
+    SOBRAS="$(sobras_no_robo)"
+    if [ "$livre" -lt "$precisa" ] && [ -n "$SOBRAS" ]; then
+        passo "Guardando as gravações antigas do robô"
+        guardar_sobras "$SOBRAS"
+        livre="$(espaco_livre_kib)"
+        [ -n "$livre" ] || falha "não consegui ler o espaço do disco do robô; nada foi parado nele. Tente de novo"
+        SOBRAS="$(sobras_no_robo)"
+    fi
+    if [ "$livre" -lt "$precisa" ]; then
+        local quantas=0
+        if [ -n "$SOBRAS" ]; then quantas="$(printf '%s\n' "$SOBRAS" | wc -l | tr -d ' ')"; fi
+        falha "o disco do robô tem $((livre / 1024)) MB livres, e a gravação precisa de $((precisa / 1024)); gravações antigas no robô: $quantas. Nada foi parado nele"
+    fi
+    if [ -n "$SOBRAS" ]; then diz "AVISO: há gravações antigas no robô ($(printf '%s\n' "$SOBRAS" | wc -l | tr -d ' ')); a cópia delas roda ao fundo."; fi
 }
 
 # A cópia ao fundo termina antes de outra ativação ou da volta: o reinício a cortaria no meio. Só espera a cópia, que nasce de
@@ -180,6 +262,8 @@ up() {
     # Antes de qualquer coisa no robô: o arquivo recusado, com dji_scratch por exemplo, não chega a parar nada.
     local parar
     parar="$(target/debug/rms1d --config "$TOML" --processos-a-parar)" || falha "$TOML recusado; nada foi tocado no robô"
+    local limite
+    limite="$(target/debug/rms1d --config "$TOML" --limite-da-gravacao)"
     # Sem o binário, a soma vazia daria "igual" à do robô sem binário, e a DJI seria parada antes da falha.
     [ -s "$BIN" ] || falha "não achei $BIN; compile com cargo s1 -p rms1d. Nada foi tocado no robô"
     local midia
@@ -192,6 +276,7 @@ up() {
     confere chroot_ok "sem chroot em $CHROOT; rode scripts/s1/bench.sh exec uma vez" "test -d $CHROOT/bin && echo chroot_ok"
     "${A[@]}" shell "$BB grep -q ' $CHROOT/dev ' /proc/mounts || mount -o bind /dev $CHROOT/dev; $BB grep -q ' $CHROOT/proc ' /proc/mounts || mount -t proc proc $CHROOT/proc; $BB grep -q ' $CHROOT/sys ' /proc/mounts || mount -t sysfs sys $CHROOT/sys; $BB grep -q ' $CHROOT/mnt/dji ' /proc/mounts || { $BB mkdir -p $CHROOT/mnt/dji && mount -o bind /data $CHROOT/mnt/dji; }"
     "${A[@]}" shell "mkdir -p $CHROOT/opt/robot/bin $CHROOT/etc/robot $CHROOT/run $CHROOT/var/lib/robot"
+    if [ -n "$limite" ]; then conferir_disco "$limite"; fi
     # O que o robô tem. O busybox dele tem `sha256sum` (lido na cópia completa, `arvores/system/system/xbin/busybox`); o
     # `adb shell` do Android 4.4 termina a linha com `\r`.
     local estado soma_bin soma_toml vivo=""
@@ -214,6 +299,7 @@ up() {
         passo "Conectando ao robô"
         ligar_ponte
         if saude; then
+            if [ -n "$SOBRAS" ]; then copiar_ao_fundo ""; fi
             passo
             diz "Robô pronto"
             return

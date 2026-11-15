@@ -41,6 +41,7 @@ console, robotctl, rms1d-roteiro, e depois a inteligência
 - O laço nunca espera cliente. Intenções são trocas atômicas; o estado sai num canal limitado, e só é montado com assinante.
 - A saúde é publicada pelo laço, então um laço travado se denuncia pela idade do último ciclo.
 - Sair para o robô. `SIGTERM` e Ctrl-C passam pelo laço, que desarma e descarrega a gravação antes de o processo terminar. `kill -9` não tem esse caminho.
+- A gravação não escreve no ciclo. O laço só monta a linha e a entrega a uma fila de 1.024, sem esperar; uma thread só dela escreve nos arquivos. Fila cheia descarta a linha inteira e conta; falha do disco não vira falha de envio ao corpo; os dois arquivos somados param em `corpo.gravar_limite_mb` (64 MiB, cerca de 27 minutos a 2,49 MB por minuto), e o laço segue. Em 2026-11-15 o disco do robô encheu, a escrita era feita no ciclo, e o laço caiu de 100 para 2 a 4 Hz, 55 s depois de subir (`out/2026-11-14-s1-midia/medicao-disco-do-robo.txt`, no laboratório). Prova: `rms1-control/tests/gravacao.rs`, com um disco de mentira lento e um cheio.
 - Armar não cumpre pedido antigo: o que foi pedido antes de armar é esquecido, mesmo dentro do prazo.
 - `<socket>.lock` garante um só dono, e nunca é apagado.
 - `MissedTickBehavior::Skip`, em executor próprio.
@@ -122,6 +123,8 @@ Nas gravações de 2026-11-03:
 `scripts/s1/rms1d-bench.sh up` escolhe pelo que o robô tem: o mesmo `rms1d` no ar, com o mesmo binário e a mesma configuração pela soma `sha256`, e saudável, só religa a ponte ("Conectando ao robô"); outro `rms1d` no ar, "Atualizando o robô"; nada nosso, "Preparando o robô". Os três terminam em "Robô pronto". O binário só vai ao robô quando a soma muda, e os processos da DJI só param se estiverem no ar.
 
 As gravações do `rms1d` que sai (`corpo.gravar` e `corpo.gravar_recebido`) mudam de nome no robô para `<arquivo>.robo-<data>-<hora>`, um nome por ativação, e são copiadas ao fundo, logo, para `$XDG_STATE_HOME/rms1/gravacoes/<data>/`; só são apagadas no robô depois de a cópia chegar. A ativação seguinte e a volta à DJI esperam a cópia em curso, com prazo. Prova: `scripts/s1/test-rms1d-bench.sh`, com contraprova de cada caso.
+
+**O disco do robô, antes de parar a DJI.** Com gravação no arquivo, a ativação lê o espaço livre do `/data` (`busybox df -k /data`) e exige duas vezes o limite da gravação, que ela pergunta ao próprio `rms1d` (`--limite-da-gravacao`): 128 MiB com o padrão. Abaixo disso, ou sem resposta legível, para dizendo os números, sem parar nada no robô. Uma gravação de ativação anterior que ficou no robô, porque a cópia dela não chegou, entra na cópia de toda ativação: copiada, conferida pela soma SHA-256 dos dois lados, e só então apagada; com pouco espaço, isso roda à vista, no passo "Guardando as gravações antigas do robô", antes da conferência. A que não copia, ou não confere, fica no robô, e a ativação diz o nome e o tamanho. Em 2026-11-15, duas esquecidas, de 62 e 39 MB, tinham deixado o disco com 1,4 MB livres.
 
 ## A mira da DJI
 
