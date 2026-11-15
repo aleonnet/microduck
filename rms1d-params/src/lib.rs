@@ -77,6 +77,8 @@ pub struct Corpo {
     pub gravar: Option<PathBuf>,
     /// Grava cada leitura do corpo, `ms hex`, para reprocessar sem o robô. Exige `gravar`. Vazio não grava.
     pub gravar_recebido: Option<PathBuf>,
+    /// O limite dos dois arquivos da gravação somados, em MiB: chegando nele, ela para, e o laço segue.
+    pub gravar_limite_mb: u64,
     pub permissao: Permissao,
 }
 
@@ -378,6 +380,9 @@ impl Default for Corpo {
             endereco: "127.0.0.1:9100".to_owned(),
             gravar: None,
             gravar_recebido: None,
+            // Cerca de 27 minutos: o robô grava 2,49 MB por minuto (2.273.280 bytes em 54,8 s, medido em 2026-11-15, na
+            // gravação `robo-140456`). Sem limite, duas gravações esquecidas encheram o disco do robô nesse dia.
+            gravar_limite_mb: 64,
             permissao: Permissao::Dji,
         }
     }
@@ -620,6 +625,13 @@ impl Params {
                 "corpo.gravar_recebido precisa de corpo.gravar: as duas gravações andam juntas"
                     .to_owned(),
             );
+        }
+        // Zero desligaria a gravação sem dizer; acima disto, uma gravação sozinha ocupa mais da metade do disco do robô.
+        if !(1..=512).contains(&self.corpo.gravar_limite_mb) {
+            return ruim(format!(
+                "corpo.gravar_limite_mb fora de 1 a 512: {}",
+                self.corpo.gravar_limite_mb
+            ));
         }
         let e = &self.estimativa;
         if !(1..=5000).contains(&e.janela_ms) {
@@ -884,6 +896,26 @@ mod testes {
             p.estimativa.levantado_limiar_m_s, 0.4,
             "o resto segue o padrão"
         );
+    }
+
+    /// Adendo 2, critério 78: o limite da gravação vale 64 sem a chave, e fora de 1 a 512 é recusado pelo nome.
+    #[test]
+    fn limite_da_gravacao_e_recusado_pelo_nome() {
+        assert_eq!(Params::default().corpo.gravar_limite_mb, 64);
+        assert_eq!(
+            de("[corpo]\ngravar_limite_mb = 8\n")
+                .unwrap()
+                .corpo
+                .gravar_limite_mb,
+            8
+        );
+        for t in [
+            "[corpo]\ngravar_limite_mb = 0\n",
+            "[corpo]\ngravar_limite_mb = 513\n",
+        ] {
+            let e = de(t).unwrap_err().to_string();
+            assert!(e.contains("gravar_limite_mb"), "{t}: {e}");
+        }
     }
 
     /// O S1 é um só: número físico no arquivo é recusado pelo nome.

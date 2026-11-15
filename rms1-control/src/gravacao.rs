@@ -6,6 +6,10 @@ use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
+use std::thread::JoinHandle;
 use std::time::Instant;
 
 use rms1_proto::Quadro;
@@ -16,35 +20,188 @@ use crate::corpo::Corpo;
 
 /// Linhas escritas entre duas descargas do arquivo.
 const DESCARGA: u32 = 64;
+/// Linhas que esperam a escritora. O robô grava cerca de 81 por segundo (4.449 linhas em 54,8 s, medido em 2026-11-15): são
+/// uns 10 s de disco parado antes de a primeira linha ser descartada.
+const FILA: usize = 1024;
+/// O limite dos dois arquivos somados, quando ninguém diz outro: o padrão de `corpo.gravar_limite_mb`.
+const LIMITE_PADRAO: u64 = 64 * 1024 * 1024;
 
-/// Por fora de qualquer corpo: grava e repassa. Escrita em memória, descarregada a cada 64 linhas.
+/// Para onde a gravação escreve: um arquivo, ou o disco de mentira de um teste.
+pub type Destino = Box<dyn Write + Send>;
+
+#[derive(Clone, Copy)]
+enum Qual {
+    Enviado,
+    Recebido,
+}
+
+enum Recado {
+    Linha(Qual, String),
+    Recebido(Destino),
+    Limite(u64),
+}
+
+/// Por fora de qualquer corpo: grava e repassa.
+///
+/// A escrita não é feita no ciclo. Em 2026-11-15 o disco do robô encheu, a escrita era feita aqui, na thread do laço, e o laço
+/// caiu de 100 para 2 a 4 Hz (`out/2026-11-14-s1-midia/medicao-disco-do-robo.txt`, no laboratório). O ciclo só monta a linha
+/// e a entrega a uma fila limitada, sem esperar; uma thread só dela escreve e descarrega a cada 64 linhas. Fila cheia, a linha
+/// inteira é descartada e contada. Falha do disco fica com a escritora: o quadro foi ao corpo, e o envio diz isso.
 pub struct Gravando<C: Corpo> {
     corpo: C,
-    arquivo: BufWriter<File>,
     inicio: Instant,
-    pendentes: u32,
-    /// O que o corpo devolveu, `ms hex` por leitura, no mesmo relógio do enviado.
-    recebido: Option<(BufWriter<File>, u32)>,
-    /// A gravação do recebido está falhando: o aviso sai uma vez por falha, e não a cada leitura.
-    recebido_falhando: bool,
+    fila: Option<SyncSender<Recado>>,
+    escritora: Option<JoinHandle<()>>,
+    grava_recebido: bool,
+    perdidas: Arc<AtomicU64>,
+    /// Há linhas sendo descartadas: o aviso sai uma vez por episódio, e não a cada linha.
+    perdendo: bool,
 }
 
 impl<C: Corpo> Gravando<C> {
     pub fn new(corpo: C, caminho: &Path) -> io::Result<Self> {
-        Ok(Self {
+        Ok(Self::com_escritores(
             corpo,
-            arquivo: BufWriter::new(File::create(caminho)?),
+            Box::new(File::create(caminho)?),
+            None,
+        ))
+    }
+
+    /// Com os destinos dados, em vez de arquivos: é como um teste põe um disco lento ou cheio no lugar.
+    pub fn com_escritores(corpo: C, enviado: Destino, recebido: Option<Destino>) -> Self {
+        let (fila, recados) = mpsc::sync_channel(FILA);
+        let grava_recebido = recebido.is_some();
+        let escritora = std::thread::Builder::new()
+            .name("gravacao".to_owned())
+            .spawn(move || escrever(&recados, enviado, recebido));
+        let (fila, escritora) = match escritora {
+            Ok(e) => (Some(fila), Some(e)),
+            Err(e) => {
+                tracing::warn!(erro = %e, "a gravação não começou: sem a thread escritora");
+                (None, None)
+            }
+        };
+        Self {
+            corpo,
             inicio: Instant::now(),
-            pendentes: 0,
-            recebido: None,
-            recebido_falhando: false,
-        })
+            fila,
+            escritora,
+            grava_recebido,
+            perdidas: Arc::new(AtomicU64::new(0)),
+            perdendo: false,
+        }
     }
 
     /// Grava também cada leitura do corpo, em arquivo próprio.
     pub fn com_recebido(mut self, caminho: &Path) -> io::Result<Self> {
-        self.recebido = Some((BufWriter::new(File::create(caminho)?), 0));
+        let destino: Destino = Box::new(File::create(caminho)?);
+        // Na montagem, antes de qualquer ciclo: aqui pode esperar a fila.
+        if let Some(f) = &self.fila
+            && f.send(Recado::Recebido(destino)).is_ok()
+        {
+            self.grava_recebido = true;
+        }
         Ok(self)
+    }
+
+    /// O limite dos dois arquivos somados, em bytes. Chegando nele, a gravação para, avisa uma vez, e o laço segue.
+    pub fn com_limite(self, bytes: u64) -> Self {
+        if let Some(f) = &self.fila {
+            let _ = f.send(Recado::Limite(bytes));
+        }
+        self
+    }
+
+    /// Quantas linhas foram descartadas porque a escritora não acompanhou.
+    pub fn perdidas(&self) -> Arc<AtomicU64> {
+        self.perdidas.clone()
+    }
+
+    /// Entrega uma linha à escritora, sem esperar. É o único ponto em que o ciclo toca a gravação.
+    fn entregar(&mut self, qual: Qual, bytes: &[u8]) {
+        let Some(fila) = &self.fila else {
+            return;
+        };
+        let linha = format!("{} {}\n", self.inicio.elapsed().as_millis(), hex(bytes));
+        match fila.try_send(Recado::Linha(qual, linha)) {
+            Ok(()) => self.perdendo = false,
+            Err(TrySendError::Full(_)) => {
+                let n = self.perdidas.fetch_add(1, Ordering::Relaxed) + 1;
+                if !self.perdendo {
+                    tracing::warn!(
+                        perdidas = n,
+                        "a gravação não acompanha o laço: linhas descartadas"
+                    );
+                    self.perdendo = true;
+                }
+            }
+            Err(TrySendError::Disconnected(_)) => {
+                tracing::warn!("a escritora da gravação saiu: nada mais é gravado");
+                self.fila = None;
+            }
+        }
+    }
+}
+
+/// A thread escritora: a única que toca o disco. Sai quando a fila fecha, depois de escrever o que estava nela.
+fn escrever(recados: &Receiver<Recado>, enviado: Destino, recebido: Option<Destino>) {
+    let mut enviado = (BufWriter::new(enviado), 0u32);
+    let mut recebido = recebido.map(|r| (BufWriter::new(r), 0u32));
+    let mut limite = LIMITE_PADRAO;
+    let mut escritos = 0u64;
+    let mut no_limite = false;
+    // A escrita está falhando: o aviso sai uma vez por falha, e não a cada linha.
+    let mut falhando = false;
+    for recado in recados {
+        let (qual, linha) = match recado {
+            Recado::Recebido(d) => {
+                recebido = Some((BufWriter::new(d), 0));
+                continue;
+            }
+            Recado::Limite(n) => {
+                limite = n;
+                continue;
+            }
+            Recado::Linha(qual, linha) => (qual, linha),
+        };
+        if no_limite {
+            continue;
+        }
+        if escritos + linha.len() as u64 > limite {
+            no_limite = true;
+            tracing::warn!(
+                limite_bytes = limite,
+                "a gravação chegou ao limite e parou; o laço segue"
+            );
+            continue;
+        }
+        let Some((arquivo, pendentes)) = (match qual {
+            Qual::Enviado => Some(&mut enviado),
+            Qual::Recebido => recebido.as_mut(),
+        }) else {
+            continue;
+        };
+        let mut gravou = arquivo.write_all(linha.as_bytes());
+        *pendentes += 1;
+        if gravou.is_ok() && *pendentes >= DESCARGA {
+            *pendentes = 0;
+            gravou = arquivo.flush();
+        }
+        match gravou {
+            Ok(()) => {
+                escritos += linha.len() as u64;
+                falhando = false;
+            }
+            Err(e) if !falhando => {
+                tracing::warn!(erro = %e, "gravar falhou");
+                falhando = true;
+            }
+            Err(_) => {}
+        }
+    }
+    let _ = enviado.0.flush();
+    if let Some((arquivo, _)) = &mut recebido {
+        let _ = arquivo.flush();
     }
 }
 
@@ -55,57 +212,33 @@ fn hex(bytes: &[u8]) -> String {
 impl<C: Corpo> Corpo for Gravando<C> {
     fn enviar(&mut self, bytes: &[u8]) -> io::Result<()> {
         let r = self.corpo.enviar(bytes);
-        // O que falhou no envio não chegou ao corpo: não entra na gravação.
+        // O que falhou no envio não chegou ao corpo: não entra na gravação. E o que a gravação fizer não muda a resposta do corpo.
         if r.is_ok() {
-            writeln!(
-                self.arquivo,
-                "{} {}",
-                self.inicio.elapsed().as_millis(),
-                hex(bytes)
-            )?;
-            self.pendentes += 1;
-            if self.pendentes >= DESCARGA {
-                self.arquivo.flush()?;
-                self.pendentes = 0;
-            }
+            self.entregar(Qual::Enviado, bytes);
         }
         r
     }
 
     fn ler(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let n = self.corpo.ler(buf)?;
-        if n > 0
-            && let Some((arquivo, pendentes)) = &mut self.recebido
-        {
-            // Falha ao gravar não pode tirar a leitura do laço: o que chegou segue para a telemetria.
-            let gravou = writeln!(
-                arquivo,
-                "{} {}",
-                self.inicio.elapsed().as_millis(),
-                hex(&buf[..n])
-            );
-            *pendentes += 1;
-            if gravou.is_err() || *pendentes >= DESCARGA {
-                match gravou.and_then(|()| arquivo.flush()) {
-                    Err(e) if !self.recebido_falhando => {
-                        tracing::warn!(erro = %e, "gravar o recebido falhou");
-                        self.recebido_falhando = true;
-                    }
-                    Err(_) => {}
-                    Ok(()) => self.recebido_falhando = false,
-                }
-                *pendentes = 0;
-            }
+        if n > 0 && self.grava_recebido {
+            self.entregar(Qual::Recebido, &buf[..n]);
         }
         Ok(n)
     }
 }
 
 impl<C: Corpo> Drop for Gravando<C> {
+    /// Fecha a fila e espera a escritora: o que estava na fila vai ao disco, e o fim do arquivo é o último quadro enviado, o
+    /// comando de parar de quem sai armado.
     fn drop(&mut self) {
-        let _ = self.arquivo.flush();
-        if let Some((arquivo, _)) = &mut self.recebido {
-            let _ = arquivo.flush();
+        drop(self.fila.take());
+        if let Some(e) = self.escritora.take() {
+            let _ = e.join();
+        }
+        let perdidas = self.perdidas.load(Ordering::Relaxed);
+        if perdidas > 0 {
+            tracing::warn!(perdidas, "a gravação terminou com linhas descartadas");
         }
     }
 }

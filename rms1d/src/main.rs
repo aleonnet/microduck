@@ -42,11 +42,14 @@ fn montar_corpo(p: &Params) -> std::io::Result<Box<dyn Corpo>> {
         TipoCorpo::Falso => Box::new(CorpoFalso::default()),
     };
     // `gravar_recebido` sem `gravar` é recusado em `Params::validar`.
+    let limite = p.corpo.gravar_limite_mb * 1024 * 1024;
     Ok(match (&p.corpo.gravar, &p.corpo.gravar_recebido) {
-        (Some(enviado), Some(recebido)) => {
-            Box::new(Gravando::new(corpo, enviado)?.com_recebido(recebido)?)
-        }
-        (Some(enviado), None) => Box::new(Gravando::new(corpo, enviado)?),
+        (Some(enviado), Some(recebido)) => Box::new(
+            Gravando::new(corpo, enviado)?
+                .com_recebido(recebido)?
+                .com_limite(limite),
+        ),
+        (Some(enviado), None) => Box::new(Gravando::new(corpo, enviado)?.com_limite(limite)),
         (None, _) => corpo,
     })
 }

@@ -292,3 +292,174 @@ fn tempfile_dir() -> std::path::PathBuf {
     std::fs::create_dir_all(&d).unwrap();
     d
 }
+
+/// Um disco de mentira: demora em cada escrita, ou recusa como disco cheio, e guarda o que aceitou.
+#[derive(Clone, Default)]
+struct DiscoFalso {
+    demora: Duration,
+    cheio: bool,
+    escrito: Arc<std::sync::Mutex<Vec<u8>>>,
+}
+
+impl std::io::Write for DiscoFalso {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        std::thread::sleep(self.demora);
+        if self.cheio {
+            return Err(std::io::Error::other("No space left on device"));
+        }
+        self.escrito.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+fn um_quadro() -> Vec<u8> {
+    rms1_proto::barramento::Pedido::Responder { seq: 7 }
+        .quadro(0)
+        .montar()
+        .unwrap()
+}
+
+/// Adendo 2, critério 73: o disco lento não segura o ciclo. Em 2026-11-15 o disco do robô encheu, a escrita era feita dentro
+/// do ciclo, e o laço caiu de 100 para 2 a 4 Hz.
+#[test]
+fn disco_lento_nao_segura_o_ciclo() {
+    let lento = DiscoFalso {
+        demora: Duration::from_millis(300),
+        ..DiscoFalso::default()
+    };
+    let corpo = CorpoFalso::default();
+    let quadro = um_quadro();
+    let mut g = Gravando::com_escritores(
+        corpo.clone(),
+        Box::new(lento.clone()),
+        Some(Box::new(lento)),
+    );
+    let mut buf = [0u8; 64];
+    let inicio = Instant::now();
+    for _ in 0..200 {
+        g.enviar(&quadro).unwrap();
+        corpo.a_ler.lock().unwrap().extend_from_slice(&quadro);
+        assert!(g.ler(&mut buf).unwrap() > 0);
+    }
+    let gasto = inicio.elapsed();
+    assert!(
+        gasto < Duration::from_millis(100),
+        "o ciclo esperou o disco: 200 envios e 200 leituras levaram {gasto:?}"
+    );
+    assert_eq!(
+        corpo.quadros().len(),
+        200,
+        "todos os quadros foram ao corpo"
+    );
+}
+
+/// Adendo 2, critério 74: o disco cheio não vira falha de envio. O quadro foi ao corpo; dizer que não foi fazia a saúde
+/// acusar "o corpo não recebe".
+#[test]
+fn disco_cheio_nao_vira_falha_de_envio() {
+    let cheio = DiscoFalso {
+        cheio: true,
+        ..DiscoFalso::default()
+    };
+    let corpo = CorpoFalso::default();
+    let gravando = Gravando::com_escritores(
+        corpo.clone(),
+        Box::new(cheio.clone()),
+        Some(Box::new(cheio)),
+    );
+    let intencoes = Arc::new(Intencoes::default());
+    let saude = Arc::new(Saude::default());
+    let mut laco = Laco::new(
+        gravando,
+        &Params::default(),
+        intencoes.clone(),
+        saude.clone(),
+    );
+    intencoes.pedir_armar(true);
+    let mut t = Instant::now();
+    for _ in 0..50 {
+        intencoes.pedir_twist([0.5, 0.0, 0.0]);
+        t += Duration::from_millis(10);
+        laco.ciclo(t, false);
+    }
+    let falhados = saude
+        .erros_seguidos
+        .load(std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(
+        falhados, 0,
+        "a falha da gravação foi contada como {falhados} envios falhados ao corpo"
+    );
+    assert!(corpo.quadros().len() >= 100, "os quadros foram ao corpo");
+}
+
+/// Adendo 2, critério 75: a gravação para no limite, e o ciclo segue enviando.
+#[test]
+fn a_gravacao_para_no_limite() {
+    let d = tempfile_dir();
+    let (enviado, recebido) = (d.join("lim-enviado"), d.join("lim-recebido"));
+    let corpo = CorpoFalso::default();
+    let quadro = um_quadro();
+    let limite = 2000u64;
+    let mut g = Gravando::new(corpo.clone(), &enviado)
+        .unwrap()
+        .com_recebido(&recebido)
+        .unwrap()
+        .com_limite(limite);
+    let mut buf = [0u8; 64];
+    for _ in 0..200 {
+        g.enviar(&quadro).unwrap();
+        corpo.a_ler.lock().unwrap().extend_from_slice(&quadro);
+        assert!(g.ler(&mut buf).unwrap() > 0);
+    }
+    drop(g);
+    let textos = [&enviado, &recebido].map(|a| std::fs::read_to_string(a).unwrap());
+    let soma: u64 = textos.iter().map(|t| t.len() as u64).sum();
+    assert!(
+        soma > limite / 2 && soma <= limite,
+        "os dois arquivos somam {soma} bytes, com o limite em {limite}"
+    );
+    assert!(
+        textos.iter().all(|t| t.is_empty() || t.ends_with('\n')),
+        "só linhas inteiras"
+    );
+    assert_eq!(corpo.quadros().len(), 200, "o envio não parou no limite");
+}
+
+/// Adendo 2, critério 76: com a fila cheia, linhas inteiras são descartadas e contadas, e o arquivo só tem linhas inteiras.
+#[test]
+fn fila_cheia_perde_linhas_inteiras_e_conta() {
+    let lento = DiscoFalso {
+        demora: Duration::from_millis(20),
+        ..DiscoFalso::default()
+    };
+    let escrito = lento.escrito.clone();
+    let corpo = CorpoFalso::default();
+    let quadro = um_quadro();
+    let mut g = Gravando::com_escritores(corpo, Box::new(lento), None);
+    let perdidas = g.perdidas();
+    for _ in 0..5000 {
+        g.enviar(&quadro).unwrap();
+    }
+    drop(g);
+    let n = perdidas.load(std::sync::atomic::Ordering::Relaxed);
+    assert!(
+        n > 0,
+        "com o disco a 20 ms por escrita, 5000 linhas não cabem na fila"
+    );
+    let texto = String::from_utf8(escrito.lock().unwrap().clone()).unwrap();
+    assert!(texto.ends_with('\n'), "a última linha está inteira");
+    let linhas: Vec<&str> = texto.lines().collect();
+    assert_eq!(
+        linhas.len() as u64,
+        5000 - n,
+        "as gravadas mais as descartadas são as enviadas"
+    );
+    for l in linhas {
+        let (ms, h) = l.split_once(' ').expect("ms e hexadecimal");
+        ms.parse::<u64>().expect("milissegundos");
+        assert_eq!(h.len(), quadro.len() * 2, "linha cortada: {l}");
+    }
+}

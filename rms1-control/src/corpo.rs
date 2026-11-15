@@ -29,7 +29,7 @@ pub struct CorpoSerial {
     porta: Box<dyn serialport::SerialPort>,
 }
 
-/// Um décimo de milissegundo de folga em relação a um ciclo de 20 ms.
+/// Quanto uma leitura da serial pode esperar: 1 ms, num ciclo de 10 ms.
 const ESPERA_LEITURA: Duration = Duration::from_millis(1);
 
 impl CorpoSerial {
