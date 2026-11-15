@@ -4,7 +4,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 T="$(mktemp -d /tmp/rms1b.XXXXXX)"
-parar_ponte() { if [ -f "$T/e/ponte.pid" ]; then kill "$(cat "$T/e/ponte.pid")" 2>/dev/null || true; fi; }
+parar_ponte() { for f in "$T/e/ponte.pid" "$T/e/ponte-midia.pid"; do if [ -f "$f" ]; then kill "$(cat "$f")" 2>/dev/null || true; fi; done; }
 trap parar_ponte EXIT
 mkdir -p "$T/bin" "$T/e" "$T/out"
 export ADB_LOG="$T/adb.log"; : > "$ADB_LOG"
@@ -23,14 +23,16 @@ if tem adb_caiu && [ ! -f "$DEFEITO.conectado" ]; then exit 1; fi
 case "$*" in
   *estado_do_robo*)
     # O que o robô tem: o `rms1d` no ar e as somas do programa e da configuração.
-    if tem ja_no_ar; then echo RMS1D_VIVO; printf '%s  /data/debian/opt/robot/bin/rms1d\r\n%s  /data/debian/etc/robot/rms1d.toml\r\n' "$SOMA_BIN" "$SOMA_TOML";
+    if tem ja_no_ar; then echo RMS1D_VIVO; tem midia_caiu || echo MIDIA_VIVA; printf '%s  /data/debian/opt/robot/bin/rms1-mediad\r\n' "$SOMA_MIDIA"; printf '%s  /data/debian/opt/robot/bin/rms1d\r\n%s  /data/debian/etc/robot/rms1d.toml\r\n' "$SOMA_BIN" "$SOMA_TOML";
     elif tem outro_no_ar; then echo RMS1D_VIVO; printf '%s  /data/debian/opt/robot/bin/rms1d\r\n%s  /data/debian/etc/robot/rms1d.toml\r\n' 0000 0000;
     elif tem outro_toml; then echo RMS1D_VIVO; printf '%s  /data/debian/opt/robot/bin/rms1d\r\n%s  /data/debian/etc/robot/rms1d.toml\r\n' "$SOMA_BIN" 0000;
     elif tem vivo_sem_somas; then echo RMS1D_VIVO;
     elif tem mesmo_binario; then printf '%s  /data/debian/opt/robot/bin/rms1d\r\n' "$SOMA_BIN"; fi ;;
   *"test -d"*) tem sem_chroot || echo chroot_ok ;;
+  *"pkill -TERM rms1-mediad"*sem_midia*) if tem midia_antiga; then echo MIDIA_ANTIGA_VIVA; else echo sem_midia; fi ;;
+  *midia_no_ar*) if tem midia_morta; then echo MIDIA_MORTA; echo "rms1-mediad: mixer: o valor não pegou em MIC2 Volume"; else echo midia_no_ar; fi ;;
   *"pkill -TERM rms1d"*sem_rms1d*) if tem rms1d_antigo; then echo RMS1D_ANTIGO_VIVO; else echo sem_rms1d; fi ;;
-  *parada_conferida*) tem dji_vivo && echo AINDA_NO_AR_dji_hdvt_uav; tem serial_presa && echo SERIAL_PRESA /proc/9/fd/3; echo parada_conferida ;;
+  *parada_conferida*) tem dji_vivo && echo AINDA_NO_AR_dji_hdvt_uav; tem camera_viva && echo AINDA_NO_AR_dji_camera; tem serial_presa && echo SERIAL_PRESA /proc/9/fd/3; echo parada_conferida ;;
   *"pidof rms1d"*) if tem rms1d_morto; then echo RMS1D_MORTO; else echo rms1d_no_ar; fi ;;
   *"pidof dji_hdvt_uav"*) echo dji_voltou ;;
   *marca_gravada*) if tem sem_marca; then exit 0; fi; touch "$DEFEITO.marca"; echo marca_gravada ;;
@@ -79,12 +81,23 @@ reprova() {
 cargo build -q -p rms1d -p robotctl
 export SOMA_BIN="$(shasum -a 256 target/armv7-unknown-linux-gnueabihf/release/rms1d | cut -d' ' -f1)"
 export SOMA_TOML="$(shasum -a 256 deploy/s1/rms1d.toml | cut -d' ' -f1)"
+export SOMA_MIDIA="$(shasum -a 256 target/armv7-unknown-linux-gnueabihf/release/rms1-mediad | cut -d' ' -f1)"
 
 echo "--- o caminho certo"
 scripts/s1/rms1d-bench.sh up > "$T/up.txt" 2>&1 || { echo "up falhou:"; tail -20 "$T/up.txt"; exit 1; }
 grep -q "Robô pronto" "$T/up.txt" || { echo "up não terminou:"; tail -20 "$T/up.txt"; exit 1; }
 pediu "stop dji_hdvt_uav"
 pediu "stop dji_monitor"
+# A mídia: o `dji_camera` sai só pelo `init`, nunca por `kill`; o `rms1-mediad` sobe depois dele e antes do `rms1d`.
+pediu "stop dji_camera; setprop ctl.stop dji_camera"
+nunca 'kill $(/system/xbin/busybox pidof dji_camera)'
+antes "stop dji_camera" "/opt/robot/bin/rms1-mediad --config /etc/robot/rms1d.toml"
+antes "/opt/robot/bin/rms1-mediad --config" "/opt/robot/bin/rms1d --config"
+antes "pkill -TERM rms1-mediad" "push target/armv7-unknown-linux-gnueabihf/release/rms1-mediad"
+pediu "push deploy/s1/asound.conf /data/debian/etc/asound.conf"
+pediu "cp -f /system/audio/sound/power_on.wav /data/debian/var/lib/robot/sounds/greet/"
+pediu "forward tcp:9011 localfilesystem:/data/debian/run/rms1-mediad/media.sock"
+if grep -q "AVISO" "$T/up.txt"; then echo "AVISO NO CAMINHO CERTO:"; grep AVISO "$T/up.txt"; falhou=1; fi
 # A mira da DJI: o `/data` dela dentro do chroot, ligado só se ainda não estiver, antes de o `rms1d` subir.
 pediu "grep -q ' /data/debian/mnt/dji ' /proc/mounts || {"
 pediu "mkdir -p /data/debian/mnt/dji && mount -o bind /data /data/debian/mnt/dji; }"
@@ -118,6 +131,25 @@ print(("tempo por passo: %d passos, %d tempos" % (len(passos), len(tempos))) if 
 sys.exit(0 if len(passos) == len(tempos) and seguido else 1)
 PY
 
+echo "--- a mídia que não sobe avisa, com o motivo, e não impede pilotar"
+echo midia_morta > "$DEFEITO"
+: > "$ADB_LOG"
+scripts/s1/rms1d-bench.sh up > "$T/up.txt" 2>&1 || { echo "up com a mídia morta falhou:"; tail -5 "$T/up.txt"; falhou=1; }
+esperar_copia
+grep -q "AVISO: a mídia do robô não subiu (rms1-mediad: mixer: o valor não pegou em MIC2 Volume)" "$T/up.txt" && grep -q "Robô pronto" "$T/up.txt" && echo "mídia morta: avisa e segue" || { echo "MÍDIA MORTA, SEM AVISO:"; tail -5 "$T/up.txt"; falhou=1; }
+: > "$DEFEITO"
+
+echo "--- o dji_camera que não sai pelo init para tudo, sem kill e sem subir a mídia"
+echo camera_viva > "$DEFEITO"
+reprova "dji_camera vivo" "o dji_camera não saiu pelo init" "/opt/robot/bin/rms1-mediad --config"
+esperar_copia
+: > "$DEFEITO"
+
+echo "--- o rms1-mediad anterior que não sai"
+echo midia_antiga > "$DEFEITO"
+reprova "rms1-mediad antigo" "o rms1-mediad anterior não saiu" "stop dji_camera"
+: > "$DEFEITO"
+
 echo "--- o mesmo binário não vai de novo"
 echo mesmo_binario > "$DEFEITO"
 : > "$ADB_LOG"
@@ -132,7 +164,7 @@ echo ja_no_ar > "$DEFEITO"
 : > "$ADB_LOG"
 scripts/s1/rms1d-bench.sh up > "$T/up.txt" 2>&1 || { echo "up com o rms1d no ar falhou:"; tail -5 "$T/up.txt"; falhou=1; }
 grep -q "Conectando ao robô" "$T/up.txt" && grep -q "Robô pronto" "$T/up.txt" && echo "no ar e igual: conecta" || { echo "NO AR E IGUAL, NÃO CONECTOU:"; tail -5 "$T/up.txt"; falhou=1; }
-for proibido in "pkill -TERM rms1d" "push target" "stop dji_monitor" "/opt/robot/bin/rms1d --config"; do
+for proibido in "pkill -TERM rms1d" "pkill -TERM rms1-mediad" "push target" "stop dji_monitor" "stop dji_camera" "/opt/robot/bin/rms1d --config" "/opt/robot/bin/rms1-mediad --config"; do
     if grep -qF -- "$proibido" "$ADB_LOG"; then echo "NO AR E IGUAL, MAS PEDIU: $proibido"; falhou=1; fi
 done
 pediu "forward tcp:9010 localfilesystem:/data/debian/run/robotd.sock"
@@ -245,6 +277,8 @@ echo "--- a volta"
 : > "$ADB_LOG"
 scripts/s1/rms1d-bench.sh volta > "$T/volta.txt" 2>&1 || { echo "volta falhou:"; tail -20 "$T/volta.txt"; exit 1; }
 pediu "pkill -TERM rms1d"
+pediu "pkill -TERM rms1-mediad"
+pediu "forward --remove tcp:9011"
 pediu "shell reboot"
 pediu "forward --remove tcp:9010"
 pediu "pidof dji_hdvt_uav"
@@ -282,7 +316,12 @@ if grep -qF "shell reboot" "$ADB_LOG"; then echo "REINICIOU SEM MARCA"; falhou=1
 nunca "dji_scratch"
 nunca "dji_sys"
 nunca "dji_network"
-nunca "dji_camera"
+# O `dji_camera` só sai pelo `init`: nunca por `kill`, nem `pkill`, nem `killall`.
+nunca 'kill $(/system/xbin/busybox pidof dji_camera)'
+nunca "pkill dji_camera"
+nunca "pkill -TERM dji_camera"
+nunca "pkill -9 dji_camera"
+nunca "killall dji_camera"
 nunca "0x48"
 nunca "stop dji_vision"
 nunca "dd if="
