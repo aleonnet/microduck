@@ -309,7 +309,8 @@ impl Default for MidiaCamera {
     fn default() -> Self {
         Self {
             fonte: FonteCamera::Teste,
-            endereco: "127.0.0.1:19210".to_owned(),
+            // A porta da câmera no serviço local do simulador (`tools/simulador/s1_servico.py`, `--camera`, no laboratório).
+            endereco: "127.0.0.1:9210".to_owned(),
         }
     }
 }

@@ -171,6 +171,33 @@ fn camera_do_simulador_recusa_tamanho_errado_e_reconecta() {
 }
 
 #[test]
+fn sem_pagina_aberta_a_camera_diz_e_nao_refaz_a_conexao() {
+    // O serviço local está no ar, mas nenhuma página desenha: ele responde com um quadro de tamanho zero. Depois, a página abre.
+    let sim = simulador(vec![vec![], vec![], quadro(3)]);
+    let c = camera(&sim.endereco);
+    assert!(c.quadros.proximo().is_none());
+    let dito = c
+        .ditos
+        .lock()
+        .unwrap()
+        .iter()
+        .flatten()
+        .next_back()
+        .cloned()
+        .expect("o motivo");
+    assert!(dito.contains("nenhuma página"), "{dito}");
+    assert!(c.quadros.proximo().is_none());
+    let q = c.quadros.proximo().expect("o quadro, com a página aberta");
+    assert!(q.dados == quadro(3));
+    assert_eq!(
+        sim.conexoes.load(Ordering::SeqCst),
+        1,
+        "a conexão foi refeita sem precisar"
+    );
+    assert_eq!(c.ditos.lock().unwrap().last(), Some(&None));
+}
+
+#[test]
 fn sem_simulador_a_camera_diz_por_que_e_segue_tentando() {
     // Uma porta em que ninguém ouve.
     let livre = TcpListener::bind("127.0.0.1:0").unwrap();

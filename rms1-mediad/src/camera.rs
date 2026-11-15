@@ -67,13 +67,20 @@ pub fn rodar_teste(
     }
 }
 
-/// Pede um quadro ao simulador e o lê. Quadro de outro tamanho é erro, com os dois tamanhos: os dois lados discordam da
-/// geometria, e um quadro assim ninguém lê.
-fn pedir_ao_simulador(conexao: &mut TcpStream, esperado: usize) -> std::io::Result<Vec<u8>> {
+/// Pede um quadro ao simulador e o lê. `None` é a resposta de tamanho zero: o serviço local está no ar, e nenhuma página
+/// desenhou o quadro. Quadro de outro tamanho é erro, com os dois tamanhos: os dois lados discordam da geometria, e um
+/// quadro assim ninguém lê.
+fn pedir_ao_simulador(
+    conexao: &mut TcpStream,
+    esperado: usize,
+) -> std::io::Result<Option<Vec<u8>>> {
     conexao.write_all(&PEDIDO_AO_SIMULADOR)?;
     let mut tamanho = [0u8; 4];
     conexao.read_exact(&mut tamanho)?;
     let tamanho = u32::from_le_bytes(tamanho) as usize;
+    if tamanho == 0 {
+        return Ok(None);
+    }
     if tamanho != esperado {
         return Err(std::io::Error::other(format!(
             "veio um quadro de {tamanho} bytes, e o da câmera do S1 tem {esperado}"
@@ -81,7 +88,7 @@ fn pedir_ao_simulador(conexao: &mut TcpStream, esperado: usize) -> std::io::Resu
     }
     let mut dados = vec![0u8; esperado];
     conexao.read_exact(&mut dados)?;
-    Ok(dados)
+    Ok(Some(dados))
 }
 
 /// A câmera do simulador, até `parar` ficar verdadeiro. O quadro é pedido ao serviço local do simulador, em `endereco`, só
@@ -131,7 +138,11 @@ pub fn rodar_simulador(
                 continue;
             }
             match pedir_ao_simulador(&mut conexao, esperado) {
-                Ok(dados) => {
+                // A conversa segue inteira: a conexão fica, e o próximo pedido tenta de novo.
+                Ok(None) => avisar(Some(
+                    "o simulador está no ar, e nenhuma página desenhou o quadro".to_owned(),
+                )),
+                Ok(Some(dados)) => {
                     avisar(None);
                     quadros.entregar(Quadro {
                         largura: S1_LARGURA,
