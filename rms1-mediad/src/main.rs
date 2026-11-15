@@ -11,6 +11,7 @@ use clap::Parser;
 use rms1_mediad::alto_falante::{Aplay, Nula, Saida, Tocador};
 use rms1_mediad::camera;
 use rms1_mediad::microfone::{self, BLOCO, Ouvinte};
+use rms1_mediad::mixer;
 use rms1_mediad::percepcao;
 use rms1_mediad::quadros::Quadros;
 use rms1_mediad::servidor::{self, Servico};
@@ -35,6 +36,43 @@ const TIQUE: Duration = Duration::from_millis(20);
 const HZ_DO_MICROFONE: usize = 16_000;
 /// De quanto em quanto a câmera do simulador tenta de novo, com o serviço local fora do ar: o do pato, 1 s.
 const RECONECTAR_AO_SIMULADOR: Duration = Duration::from_secs(1);
+/// De quanto em quanto o microfone do robô sobe de novo o `arecord` que caiu.
+const RELIGAR_O_MICROFONE: Duration = Duration::from_secs(2);
+
+/// A câmera do robô, aberta pela sequência da DJI. Só existe no robô: em outra máquina, o serviço diz e não sobe.
+#[cfg(target_os = "linux")]
+fn subir_camera_do_robo(
+    dispositivo: &str,
+    quadros: Quadros,
+    servico: Arc<Servico>,
+    parar: Arc<AtomicBool>,
+) -> anyhow::Result<()> {
+    use rms1_mediad::camera_s1::{self, linux::Video0};
+    let dev =
+        Video0::abrir(dispositivo).map_err(|e| anyhow::anyhow!("{dispositivo} não abriu: {e}"))?;
+    *servico.camera.lock().expect("estado da câmera") =
+        Some("a câmera do robô está aquecendo".to_owned());
+    std::thread::Builder::new()
+        .name("camera".into())
+        .spawn(move || {
+            let s = servico.clone();
+            let dizer = move |motivo| *s.camera.lock().expect("estado da câmera") = motivo;
+            camera_s1::rodar(quadros, dev, camera_s1::AQUECIMENTO, dizer, parar);
+        })?;
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn subir_camera_do_robo(
+    dispositivo: &str,
+    _quadros: Quadros,
+    _servico: Arc<Servico>,
+    _parar: Arc<AtomicBool>,
+) -> anyhow::Result<()> {
+    anyhow::bail!(
+        "a câmera do robô ({dispositivo}) só existe no robô; aqui use a fonte de teste ou a do simulador"
+    )
+}
 
 fn subir_microfone(
     m: &Midia,
@@ -42,6 +80,50 @@ fn subir_microfone(
     servico: Arc<Servico>,
     parar: Arc<AtomicBool>,
 ) -> anyhow::Result<()> {
+    if m.microfone.fonte == FonteMicrofone::Arecord {
+        // O mesmo pedido do trabalhador do pato: PCM cru, 16 bits, 16 kHz, um canal.
+        let args: Vec<String> = [
+            "-q",
+            "-D",
+            &m.microfone.dispositivo,
+            "-f",
+            "S16_LE",
+            "-r",
+            "16000",
+            "-c",
+            "1",
+            "-t",
+            "raw",
+        ]
+        .iter()
+        .map(|a| (*a).to_owned())
+        .collect();
+        let (s, d) = (servico.clone(), servico.clone());
+        let saidas = microfone::Saidas {
+            // Sem assinante, o evento não tem para quem ir.
+            ouvido: Box::new(move |o| drop(s.ouvidos.send(o))),
+            nivel: servico.nivel_do_microfone.clone(),
+            dizer: Box::new(move |motivo| {
+                if let Some(m) = &motivo {
+                    tracing::warn!(motivo = m, "o microfone do robô");
+                }
+                *d.microfone.lock().expect("estado do microfone") = motivo;
+            }),
+        };
+        std::thread::Builder::new()
+            .name("microfone".into())
+            .spawn(move || {
+                microfone::rodar_comando(
+                    "arecord",
+                    &args,
+                    trava,
+                    saidas,
+                    RELIGAR_O_MICROFONE,
+                    parar,
+                )
+            })?;
+        return Ok(());
+    }
     let FonteMicrofone::Arquivo = m.microfone.fonte else {
         return Ok(());
     };
@@ -122,10 +204,31 @@ fn main() -> ExitCode {
         let servico = Servico::novo(quadros.clone(), tocador);
         let parar = Arc::new(AtomicBool::new(false));
 
+        // O chip de áudio antes do microfone e do alto-falante: um valor que não pega é dito, e o serviço não sobe.
+        if midia.mixer {
+            let mut chip: Box<dyn mixer::Controles> = Box::new(mixer::Amixer);
+            if let Err(e) = mixer::configurar(chip.as_mut()) {
+                eprintln!("rms1-mediad: mixer: {e}");
+                return ExitCode::FAILURE;
+            }
+            *servico.mixer.lock().expect("trava do mixer") = Some(chip);
+            if let Err(e) = servico.definir_volume(mixer::VOLUME_DE_PARTIDA) {
+                eprintln!("rms1-mediad: mixer: {e}");
+                return ExitCode::FAILURE;
+            }
+            tracing::info!("o mixer está como a partida da DJI deixa, conferido controle a controle");
+        }
+
         match midia.camera.fonte {
             FonteCamera::Teste => {
                 let (q, p) = (quadros.clone(), parar.clone());
                 std::thread::spawn(move || camera::rodar_teste(q, PERIODO_DE_TESTE, p));
+            }
+            FonteCamera::S1 => {
+                if let Err(e) = subir_camera_do_robo(&midia.camera.dispositivo, quadros.clone(), servico.clone(), parar.clone()) {
+                    eprintln!("rms1-mediad: câmera: {e}");
+                    return ExitCode::FAILURE;
+                }
             }
             FonteCamera::Simulador => {
                 let (q, p, s) = (quadros.clone(), parar.clone(), servico.clone());

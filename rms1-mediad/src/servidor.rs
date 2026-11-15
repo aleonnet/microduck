@@ -6,9 +6,11 @@
 //! - `s1.media.subscribe {"heard": true, "detections": true}`: a conexão passa a receber `s1.audio.heard {"kind"}`, já com
 //!   a trava aplicada, e `media.detections`, no formato do pato, a cada entrega do detector da estação. Cada pedido diz as
 //!   duas assinaturas: a que não vem é desligada.
+//! - `s1.media.volume {"volume": 0..100}`: o volume do alto-falante, na conta da DJI, pelo mixer do robô.
 //! - `s1.media.status`: o que o serviço está fazendo.
 
 use std::path::Path;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
@@ -21,6 +23,7 @@ use tokio::sync::broadcast;
 
 use crate::alto_falante::Tocador;
 use crate::microfone::Ouvido;
+use crate::mixer::Controles;
 use crate::percepcao::Estado;
 use crate::quadros::Quadros;
 
@@ -43,6 +46,12 @@ pub struct Servico {
     pub percepcao: Arc<Mutex<Estado>>,
     /// Por que a câmera não entrega quadro, se não entrega: quem escreve é a fonte da câmera.
     pub camera: Arc<Mutex<Option<String>>>,
+    /// Por que o microfone não ouve, se não ouve, e o nível do último bloco (os bits de um `f32`, de 0 a 1).
+    pub microfone: Arc<Mutex<Option<String>>>,
+    pub nivel_do_microfone: Arc<AtomicU32>,
+    /// O mixer do robô, se o serviço é o dono dele, e o volume em uso, de 0 a 100.
+    pub mixer: Mutex<Option<Box<dyn Controles>>>,
+    pub volume: AtomicU32,
 }
 
 impl Servico {
@@ -56,7 +65,21 @@ impl Servico {
             deteccoes,
             percepcao: Arc::default(),
             camera: Arc::default(),
+            microfone: Arc::default(),
+            nivel_do_microfone: Arc::default(),
+            mixer: Mutex::new(None),
+            volume: AtomicU32::new(u32::from(crate::mixer::VOLUME_DE_PARTIDA)),
         })
+    }
+
+    /// O volume do alto-falante, de 0 a 100, pelo mixer do robô. Sem mixer (teste e simulador), só guarda o número: no
+    /// simulador quem aplica o volume é a página.
+    pub fn definir_volume(&self, v: u8) -> Result<(), String> {
+        if let Some(m) = self.mixer.lock().expect("trava do mixer").as_mut() {
+            crate::mixer::volume(m.as_mut(), v)?;
+        }
+        self.volume.store(u32::from(v), Ordering::Relaxed);
+        Ok(())
     }
 
     /// Toca o que um `robot.sound` pede.
@@ -246,11 +269,34 @@ pub async fn atender(conexao: UnixStream, s: Arc<Servico>) -> Result<()> {
             }
             continue;
         }
+        if metodo == "s1.media.volume" {
+            let pedido_de = pedido.params.as_ref().and_then(|p| p["volume"].as_u64());
+            let resposta = match pedido_de {
+                Some(v) if v <= 100 => match s.definir_volume(v as u8) {
+                    Ok(()) => {
+                        proto::Response::ok(pedido.id.clone(), &serde_json::json!({"volume": v}))
+                    }
+                    Err(e) => erro(pedido.id.clone(), proto::code::INTERNAL_ERROR, &e),
+                },
+                _ => erro(
+                    pedido.id.clone(),
+                    proto::code::INVALID_PARAMS,
+                    "volume must be an integer from 0 to 100",
+                ),
+            };
+            if pedido.id.is_some() {
+                escrever(&mut escrita, &resposta).await?;
+            }
+            continue;
+        }
         if metodo == "s1.media.status" {
             let estado = serde_json::json!({
                 "frames_copied": s.quadros.copias(),
                 "playing": s.tocador.lock().expect("trava do tocador").tocando(),
                 "camera_problem": *s.camera.lock().expect("estado da câmera"),
+                "microphone_problem": *s.microfone.lock().expect("estado do microfone"),
+                "mic_level": f32::from_bits(s.nivel_do_microfone.load(Ordering::Relaxed)),
+                "volume": s.volume.load(Ordering::Relaxed),
                 "perception": *s.percepcao.lock().expect("estado da percepção"),
             });
             if pedido.id.is_some() {

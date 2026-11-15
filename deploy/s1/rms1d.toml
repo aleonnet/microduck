@@ -30,5 +30,20 @@ sensibilidade = 10
 arquivo = "/mnt/dji/rm_user_setting.json"
 
 [dji]
-# O monitor primeiro: ele religa quem cair.
-parar = ["dji_monitor", "dji_hdvt_uav"]
+# O monitor primeiro: ele religa quem cair. O `dji_camera` por último: ele segura a câmera e o microfone, e sai só pelo
+# `init`, sem `kill` (a bancada cuida disso).
+parar = ["dji_monitor", "dji_hdvt_uav", "dji_camera"]
+
+# A mídia do robô, do `rms1-mediad`: a câmera pela sequência da DJI, o microfone pelo canal esquerdo a 16 kHz, e o som pelo
+# `aplay`. Com a DJI parada, é ele quem deixa o chip de áudio como a partida dela deixa.
+[midia]
+mixer = true
+
+[midia.camera]
+fonte = "s1"
+
+[midia.microfone]
+fonte = "arecord"
+
+[midia.alto_falante]
+saida = "aplay"

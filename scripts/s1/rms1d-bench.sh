@@ -3,9 +3,10 @@
 # linha `[rms1d-bench]`, que a página mostra, e a falha, em `[rms1d-bench] PAROU: <motivo>`. Não comanda nada que um cliente
 # real não comande: quem manda é a página, `robotctl` e `rms1d-roteiro`, pelo socket. Só muda o corpo, em `deploy/s1/rms1d.toml`.
 #
-#   scripts/s1/rms1d-bench.sh up       acesso, envia, para só o que segura a serial, sobe o `rms1d`. Nada se move. De novo:
-#                                      o anterior sai primeiro, e a gravação dele fica em $S1_OUT. O binário só vai ao
-#                                      robô se mudou.
+#   scripts/s1/rms1d-bench.sh up       acesso, envia, para só o que `[dji] parar` manda, sobe o `rms1d` e, se o arquivo tem
+#                                      `[midia]`, o `rms1-mediad` (câmera, microfone e alto-falante). Nada se move. De
+#                                      novo: o anterior sai primeiro, e a gravação dele fica em $S1_OUT. Cada binário só
+#                                      vai ao robô se mudou.
 #   scripts/s1/rms1d-bench.sh volta    guarda a gravação, reinicia o robô e confere que a DJI voltou.
 #   scripts/s1/rms1d-bench.sh solta    só neste Mac: encerra a ponte e a porta até o robô. O `rms1d` dele segue no ar.
 #
@@ -31,6 +32,12 @@ ROBOTCTL="${S1_ROBOTCTL:-target/debug/robotctl}"
 BB=/system/xbin/busybox
 ENTRA="$BB chroot $CHROOT /usr/bin/env PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 BIN="${S1_BIN:-target/armv7-unknown-linux-gnueabihf/release/rms1d}"
+# A mídia: o `rms1-mediad` no robô, e a porta e o socket por onde este Mac fala com ele.
+BIN_MIDIA="${S1_BIN_MIDIA:-target/armv7-unknown-linux-gnueabihf/release/rms1-mediad}"
+TCP_MIDIA="${S1_PORTA_MIDIA:-9011}"
+SOCKET_MIDIA="$ESTADO/media.sock"
+# Os sons do robô: os da própria DJI (`/system/audio/sound`), sob os nomes do contrato, uma pasta por som.
+SONS="chirp:media_sound_demo_recognize_success greet:power_on alarm:media_sound_demo_attacked inquire:media_sound_demo_scanning peck:sleeping coo:media_sound_demo_gimbal_rotate"
 A=(adb -s "$ALVO")
 # Prova do reinício: `/tmp` é tmpfs (`init.rc`, `mount tmpfs tmpfs /tmp`), e só reiniciar apaga a marca.
 MARCA=/tmp/rms1d_antes_do_reinicio
@@ -112,13 +119,45 @@ esperar_copia() {
     done
 }
 
-# A página até o `rms1d` do robô: a porta do `adb` e a ponte do socket.
+# O socket do `rms1-mediad` no robô, lido de `[midia]` no arquivo; vazio se o arquivo não tem mídia.
+socket_da_midia() {
+    python3 -I -c 'import sys,tomllib; c=tomllib.load(open(sys.argv[1],"rb")); print(c["midia"].get("socket","/run/rms1-mediad/media.sock") if "midia" in c else "")' "$TOML"
+}
+
+# A página até o `rms1d` do robô: a porta do `adb` e a ponte do socket. Com mídia, o mesmo até o `rms1-mediad`.
 ligar_ponte() {
     "${A[@]}" forward "tcp:$TCP" "localfilesystem:$CHROOT/run/robotd.sock" >/dev/null
     if [ -f "$ESTADO/ponte.pid" ]; then kill "$(cat "$ESTADO/ponte.pid")" 2>/dev/null || true; fi
     nohup python3 -I scripts/s1/rms1d-ponte.py "$SOCKET" "127.0.0.1:$TCP" >"$ESTADO/ponte.log" 2>&1 </dev/null &
     echo $! > "$ESTADO/ponte.pid"
+    local m
+    m="$(socket_da_midia)"
+    if [ -n "$m" ]; then
+        "${A[@]}" forward "tcp:$TCP_MIDIA" "localfilesystem:$CHROOT$m" >/dev/null
+        if [ -f "$ESTADO/ponte-midia.pid" ]; then kill "$(cat "$ESTADO/ponte-midia.pid")" 2>/dev/null || true; fi
+        nohup python3 -I scripts/s1/rms1d-ponte.py "$SOCKET_MIDIA" "127.0.0.1:$TCP_MIDIA" >"$ESTADO/ponte-midia.log" 2>&1 </dev/null &
+        echo $! > "$ESTADO/ponte-midia.pid"
+    fi
     sleep 1
+}
+
+# A mídia do robô: envia o `rms1-mediad`, o dispositivo do microfone e os sons, e o sobe. A câmera e o microfone já estão
+# livres: o `dji_camera` foi parado e conferido antes. Uma falha aqui não impede pilotar: avisa, com o motivo, e segue.
+subir_midia() { # subir_midia <socket no robô> <1 se o binário do robô já é este>
+    local pasta
+    pasta="$(dirname "$1")"
+    if [ -z "$2" ]; then "${A[@]}" push "$BIN_MIDIA" "$CHROOT/opt/robot/bin/rms1-mediad" >/dev/null; fi
+    "${A[@]}" push deploy/s1/asound.conf "$CHROOT/etc/asound.conf" >/dev/null
+    local copia=""
+    for par in $SONS; do
+        copia="$copia $BB mkdir -p $CHROOT/var/lib/robot/sounds/${par%%:*}; $BB cp -f /system/audio/sound/${par#*:}.wav $CHROOT/var/lib/robot/sounds/${par%%:*}/;"
+    done
+    "${A[@]}" shell "chmod 755 $CHROOT/opt/robot/bin/rms1-mediad; mkdir -p $CHROOT$pasta; $copia"
+    "${A[@]}" shell "($BB setsid $BB nohup $ENTRA /opt/robot/bin/rms1-mediad --config /etc/robot/rms1d.toml </dev/null >/data/rms1-mediad.log 2>&1 &); $BB sleep 3"
+    "${A[@]}" shell "$BB pidof rms1-mediad >/dev/null && echo midia_no_ar || { echo MIDIA_MORTA; $BB tail -3 /data/rms1-mediad.log; }" | tr -d '\r' | tee "$OUT/midia.txt"
+    if ! grep -q midia_no_ar "$OUT/midia.txt"; then
+        diz "AVISO: a mídia do robô não subiu ($(grep -v MIDIA_MORTA "$OUT/midia.txt" | tail -1)). Dá para pilotar; a câmera, o microfone e o som ficam fora."
+    fi
 }
 
 saude() { # saude: 0 saudável; 1 doente; o texto em $OUT/saude.txt
@@ -135,7 +174,7 @@ up() {
     esperar_copia
     if [ -z "${S1_SEM_COMPILAR:-}" ]; then
         passo "Compilando o rms1d"
-        cargo s1 -p rms1d
+        cargo s1 -p rms1d -p rms1-mediad
         cargo build -q -p rms1d -p robotctl
     fi
     # Antes de qualquer coisa no robô: o arquivo recusado, com dji_scratch por exemplo, não chega a parar nada.
@@ -143,6 +182,11 @@ up() {
     parar="$(target/debug/rms1d --config "$TOML" --processos-a-parar)" || falha "$TOML recusado; nada foi tocado no robô"
     # Sem o binário, a soma vazia daria "igual" à do robô sem binário, e a DJI seria parada antes da falha.
     [ -s "$BIN" ] || falha "não achei $BIN; compile com cargo s1 -p rms1d. Nada foi tocado no robô"
+    local midia
+    midia="$(socket_da_midia)"
+    if [ -n "$midia" ]; then
+        [ -s "$BIN_MIDIA" ] || falha "não achei $BIN_MIDIA; compile com cargo s1 -p rms1-mediad. Nada foi tocado no robô"
+    fi
     passo "Abrindo o acesso ao robô"
     python3 -I "$ACESSO" abrir --host "$IP"
     confere chroot_ok "sem chroot em $CHROOT; rode scripts/s1/bench.sh exec uma vez" "test -d $CHROOT/bin && echo chroot_ok"
@@ -151,7 +195,7 @@ up() {
     # O que o robô tem. O busybox dele tem `sha256sum` (lido na cópia completa, `arvores/system/system/xbin/busybox`); o
     # `adb shell` do Android 4.4 termina a linha com `\r`.
     local estado soma_bin soma_toml vivo=""
-    estado="$("${A[@]}" shell "echo estado_do_robo; $BB pidof rms1d >/dev/null && echo RMS1D_VIVO; $BB sha256sum $CHROOT/opt/robot/bin/rms1d $CHROOT/etc/robot/rms1d.toml 2>/dev/null" | tr -d '\r' || true)"
+    estado="$("${A[@]}" shell "echo estado_do_robo; $BB pidof rms1d >/dev/null && echo RMS1D_VIVO; $BB pidof rms1-mediad >/dev/null && echo MIDIA_VIVA; $BB sha256sum $CHROOT/opt/robot/bin/rms1d $CHROOT/etc/robot/rms1d.toml $CHROOT/opt/robot/bin/rms1-mediad 2>/dev/null" | tr -d '\r' || true)"
     echo "$estado"
     case "$estado" in *RMS1D_VIVO*) vivo=1 ;; esac
     soma_bin="$(printf '%s\n' "$estado" | grep '/opt/robot/bin/rms1d$' | cut -d' ' -f1 || true)"
@@ -159,7 +203,14 @@ up() {
     local mesmo_bin="" mesmo_toml=""
     if [ -n "$soma_bin" ] && [ "$soma_bin" = "$(shasum -a 256 "$BIN" | cut -d' ' -f1)" ]; then mesmo_bin=1; fi
     if [ -n "$soma_toml" ] && [ "$soma_toml" = "$(shasum -a 256 "$TOML" | cut -d' ' -f1)" ]; then mesmo_toml=1; fi
-    if [ -n "$vivo" ] && [ -n "$mesmo_bin" ] && [ -n "$mesmo_toml" ]; then
+    # Com mídia no arquivo, "o mesmo no ar" inclui o `rms1-mediad`: o mesmo binário, e vivo.
+    local mesma_midia="" midia_ok=1
+    if [ -n "$midia" ]; then
+        if [ "$(printf '%s\n' "$estado" | grep '/opt/robot/bin/rms1-mediad$' | cut -d' ' -f1 || true)" = "$(shasum -a 256 "$BIN_MIDIA" | cut -d' ' -f1)" ]; then mesma_midia=1; fi
+        case "$estado" in *MIDIA_VIVA*) ;; *) midia_ok="" ;; esac
+        [ -n "$mesma_midia" ] || midia_ok=""
+    fi
+    if [ -n "$vivo" ] && [ -n "$mesmo_bin" ] && [ -n "$mesmo_toml" ] && [ -n "$midia_ok" ]; then
         passo "Conectando ao robô"
         ligar_ponte
         if saude; then
@@ -172,22 +223,38 @@ up() {
     if [ -n "$vivo" ]; then passo "Atualizando o robô"; else passo "Preparando o robô"; fi
     # Um `rms1d` de antes sai pelo caminho que para o robô, e antes do envio: binário em uso não se sobrescreve, e a trava
     # faria o novo morrer em silêncio, com o velho respondendo no lugar dele.
+    # O `rms1-mediad` de antes sai primeiro, por SIGTERM: é assim que ele desliga o fluxo da câmera antes de soltá-la.
+    confere sem_midia "o rms1-mediad anterior não saiu; desligue o robô na chave" "$BB pkill -TERM rms1-mediad; $BB sleep 1; $BB pidof rms1-mediad >/dev/null && { $BB sleep 2; $BB pidof rms1-mediad >/dev/null && echo MIDIA_ANTIGA_VIVA || echo sem_midia; } || echo sem_midia"
     confere sem_rms1d "o rms1d anterior não saiu; desligue o robô na chave" "$BB pkill -TERM rms1d; $BB sleep 1; $BB pidof rms1d >/dev/null && echo RMS1D_ANTIGO_VIVO || echo sem_rms1d"
     separar_gravacao "robo-$(date +%Y%m%d-%H%M%S)"
     if [ -z "$mesmo_bin" ]; then "${A[@]}" push "$BIN" "$CHROOT/opt/robot/bin/rms1d" >/dev/null; fi
     "${A[@]}" push "$TOML" "$CHROOT/etc/robot/rms1d.toml" >/dev/null
     "${A[@]}" shell "chmod 755 $CHROOT/opt/robot/bin/rms1d"
     # Os processos da DJI que seguram a serial: parados só se estiverem no ar, e a serial conferida livre sempre.
+    # O `dji_camera` sai só pelo `init` (`stop` e `setprop ctl.stop`), nunca por `kill`: morto no meio do fluxo, ele deixou a
+    # câmera respondendo ENODEV até reiniciar (2026-10-30). Espera-se até 5 s por ele.
     local lista="" vivos=""
     for p in $parar; do
-        lista="$lista $BB pidof $p >/dev/null && { stop $p; setprop ctl.stop $p; kill \$($BB pidof $p) 2>/dev/null; $BB sleep 1; };"
+        if [ "$p" = dji_camera ]; then
+            lista="$lista $BB pidof $p >/dev/null && { stop $p; setprop ctl.stop $p; for n in 1 2 3 4 5; do $BB pidof $p >/dev/null || break; $BB sleep 1; done; };"
+        else
+            lista="$lista $BB pidof $p >/dev/null && { stop $p; setprop ctl.stop $p; kill \$($BB pidof $p) 2>/dev/null; $BB sleep 1; };"
+        fi
         vivos="$vivos $BB pidof $p >/dev/null && echo AINDA_NO_AR_$p;"
     done
     local saida
     saida="$("${A[@]}" shell "$lista $vivos for f in /proc/[0-9]*/fd/*; do $BB readlink \$f 2>/dev/null | $BB grep -q ttyS3 && echo SERIAL_PRESA \$f; done; echo parada_conferida" | tee "$OUT/parar.txt")"
     echo "$saida"
     case "$saida" in *parada_conferida*) ;; *) falha "a parada dos processos da DJI não respondeu" ;; esac
+    case "$saida" in *AINDA_NO_AR_dji_camera*) falha "o dji_camera não saiu pelo init, e ele não é morto à força: a câmera ficaria travada. Reinicie o robô" ;; esac
     case "$saida" in *AINDA_NO_AR*|*SERIAL_PRESA*) falha "a serial do controlador não ficou livre: dois programas nela é o que este passo evita. Reinicie o robô" ;; esac
+    # A mídia antes do `rms1d`: quando ele começa a repassar som, o `rms1-mediad` já está ouvindo.
+    if [ -n "$midia" ]; then
+        case " $parar " in
+            *" dji_camera "*) subir_midia "$midia" "$mesma_midia" ;;
+            *) diz "AVISO: o arquivo tem [midia] e não manda parar o dji_camera; a mídia do robô não foi ligada." ;;
+        esac
+    fi
     "${A[@]}" shell "($BB setsid $BB nohup $ENTRA /opt/robot/bin/rms1d --config /etc/robot/rms1d.toml --socket /run/robotd.sock </dev/null >/data/rms1d.log 2>&1 &); $BB sleep 1"
     sleep 2
     "${A[@]}" shell "$BB pidof rms1d >/dev/null && echo rms1d_no_ar || { echo RMS1D_MORTO; $BB tail -5 /data/rms1d.log; }" | tee "$OUT/up.txt"
@@ -209,6 +276,8 @@ up() {
 
 solta() {
     if [ -f "$ESTADO/ponte.pid" ]; then kill "$(cat "$ESTADO/ponte.pid")" 2>/dev/null || true; fi
+    if [ -f "$ESTADO/ponte-midia.pid" ]; then kill "$(cat "$ESTADO/ponte-midia.pid")" 2>/dev/null || true; fi
+    "${A[@]}" forward --remove "tcp:$TCP_MIDIA" >/dev/null 2>&1 || true
     "${A[@]}" forward --remove "tcp:$TCP" >/dev/null 2>&1 || true
 }
 
@@ -225,10 +294,12 @@ volta() {
     }
     esperar_copia
     passo "parando o rms1d no robô"
-    # SIGTERM: o `rms1d` para o robô e descarrega a gravação antes de sair.
-    "${A[@]}" shell "$BB pkill -TERM rms1d; $BB sleep 1" || true
+    # SIGTERM: o `rms1d` para o robô e descarrega a gravação antes de sair; o `rms1-mediad` desliga o fluxo da câmera.
+    "${A[@]}" shell "$BB pkill -TERM rms1-mediad; $BB pkill -TERM rms1d; $BB sleep 1" || true
     guardar_gravacao "robo-$(date +%H%M%S)"
     if [ -f "$ESTADO/ponte.pid" ]; then kill "$(cat "$ESTADO/ponte.pid")" 2>/dev/null || true; fi
+    if [ -f "$ESTADO/ponte-midia.pid" ]; then kill "$(cat "$ESTADO/ponte-midia.pid")" 2>/dev/null || true; fi
+    "${A[@]}" forward --remove "tcp:$TCP_MIDIA" >/dev/null 2>&1 || true
     "${A[@]}" forward --remove "tcp:$TCP" >/dev/null 2>&1 || true
     confere marca_gravada "não consegui marcar o robô antes de reiniciar; o robô não foi reiniciado. Tente de novo" "echo x > $MARCA && echo marca_gravada"
     passo "reiniciando o robô"

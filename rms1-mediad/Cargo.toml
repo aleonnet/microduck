@@ -35,6 +35,10 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "tim
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 
+# A câmera do robô: `open`, `ioctl`, `mmap` e `poll` em `/dev/video0`.
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 hound.workspace = true
 tempfile = "3"

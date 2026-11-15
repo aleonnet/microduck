@@ -14,9 +14,11 @@ pub const CAMINHO_PADRAO: &str = "/etc/robot/rms1d.toml";
 /// A tabela física do S1, a origem única.
 pub const TABELA: &str = include_str!("../robo_s1.json");
 
-/// O único que pode ser parado no robô, os dois que seguram a serial. Lista de permitidos, e não de proibidos: parar
+/// O único que pode ser parado no robô: os dois que seguram a serial, e o `dji_camera`, que segura a câmera e o microfone
+/// e é parado para o `rms1-mediad` ficar com eles (a bancada o para por `stop` e `setprop ctl.stop`, sem `kill`: morto no
+/// meio do fluxo, ele deixou a câmera sem responder até reiniciar). Lista de permitidos, e não de proibidos: parar
 /// `dji_scratch` derrubou `dji_sys` (`docs/s1/robot/rms1d-pontos-de-controle.md`), e o próximo nome ninguém conhece.
-const PODE_PARAR: [&str; 2] = ["dji_monitor", "dji_hdvt_uav"];
+const PODE_PARAR: [&str; 3] = ["dji_monitor", "dji_hdvt_uav", "dji_camera"];
 
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields, default)]
@@ -228,6 +230,8 @@ pub struct Midia {
     /// Depois de o robô tocar um som, por quanto tempo o que o microfone ouve é descartado.
     pub trava_ms: u64,
     pub percepcao: MidiaPercepcao,
+    /// Se o serviço grava o mixer do chip de áudio ao subir, como a partida da DJI grava. Só no robô, com a DJI parada.
+    pub mixer: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -237,6 +241,8 @@ pub enum FonteCamera {
     Teste,
     /// A câmera do robô simulado: a página desenha o quadro, 1280 por 720, só quando alguém o pede.
     Simulador,
+    /// A câmera do robô, `/dev/video0`, aberta pela sequência da DJI. Só no robô, com o `dji_camera` parado.
+    S1,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -245,6 +251,8 @@ pub struct MidiaCamera {
     pub fonte: FonteCamera,
     /// Onde o serviço local do simulador entrega a câmera simulada (`endereço:porta`).
     pub endereco: String,
+    /// O dispositivo da câmera do robô.
+    pub dispositivo: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -254,6 +262,8 @@ pub enum FonteMicrofone {
     Nenhuma,
     /// Um `.wav`, tocado em laço no ritmo real.
     Arquivo,
+    /// O microfone do robô, por um `arecord` no dispositivo dado.
+    Arecord,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -262,6 +272,8 @@ pub struct MidiaMicrofone {
     pub fonte: FonteMicrofone,
     /// O `.wav` da fonte de arquivo.
     pub arquivo: Option<String>,
+    /// O dispositivo do `arecord`: o `micleft` de `deploy/s1/asound.conf`, o canal esquerdo a 16 kHz.
+    pub dispositivo: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -301,6 +313,7 @@ impl Default for Midia {
             // A janela do runtime antigo do pato (`microduck_runtime/src/main.rs:2921-2935`). A do S1 se mede no robô.
             trava_ms: 800,
             percepcao: MidiaPercepcao::default(),
+            mixer: false,
         }
     }
 }
@@ -311,6 +324,7 @@ impl Default for MidiaCamera {
             fonte: FonteCamera::Teste,
             // A porta da câmera no serviço local do simulador (`tools/simulador/s1_servico.py`, `--camera`, no laboratório).
             endereco: "127.0.0.1:9210".to_owned(),
+            dispositivo: "/dev/video0".to_owned(),
         }
     }
 }
@@ -320,6 +334,7 @@ impl Default for MidiaMicrofone {
         Self {
             fonte: FonteMicrofone::Nenhuma,
             arquivo: None,
+            dispositivo: "micleft".to_owned(),
         }
     }
 }
@@ -1005,12 +1020,16 @@ mod testes {
 
     /// Parar `dji_scratch` derrubou `dji_sys` no robô.
     #[test]
-    fn so_aceita_parar_o_que_segura_a_serial() {
+    fn so_aceita_parar_o_que_a_lista_permite() {
+        // Os três, por extenso: o `dji_camera` entrou com o serviço de mídia.
+        assert_eq!(PODE_PARAR, ["dji_monitor", "dji_hdvt_uav", "dji_camera"]);
+        de("[dji]\nparar = [\"dji_monitor\", \"dji_hdvt_uav\", \"dji_camera\"]\n").unwrap();
         for p in [
             "dji_scratch",
             "dji_sys",
             "dji_network",
-            "dji_camera",
+            "dji_camera ",
+            "dji_camera dji_scratch",
             "dji_scratch ",
             "dji_monitor dji_scratch",
             "",

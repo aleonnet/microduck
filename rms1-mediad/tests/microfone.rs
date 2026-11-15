@@ -114,3 +114,92 @@ fn depois_da_trava_volta_a_ouvir() {
         [Ouvido::Barulho, Ouvido::Voz]
     );
 }
+
+/// O microfone do robô lê PCM cru da saída de um programa. Aqui o programa é o `cat` de um arquivo com a palma e a fala.
+#[test]
+fn microfone_do_robo_ouve_pelo_programa_e_volta_quando_ele_cai() {
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+    use std::sync::{Arc, Mutex};
+    let pasta = tempfile::tempdir().unwrap();
+    let cru = pasta.path().join("palma_e_fala.raw");
+    let bytes: Vec<u8> = palma_e_fala()
+        .iter()
+        .flat_map(|a| ((a * 32767.0) as i16).to_le_bytes())
+        .collect();
+    std::fs::write(&cru, bytes).unwrap();
+
+    let (ouvidos, ditos) = (
+        Arc::new(Mutex::new(Vec::new())),
+        Arc::new(Mutex::new(Vec::new())),
+    );
+    let (o, d) = (ouvidos.clone(), ditos.clone());
+    let nivel = Arc::new(AtomicU32::new(0));
+    let parar = Arc::new(AtomicBool::new(false));
+    let saidas = microfone::Saidas {
+        ouvido: Box::new(move |x| o.lock().unwrap().push(x)),
+        nivel: nivel.clone(),
+        dizer: Box::new(move |m: Option<String>| d.lock().unwrap().push(m)),
+    };
+    let (p, args) = (parar.clone(), vec![cru.to_str().unwrap().to_owned()]);
+    let trava = Trava::nova(Duration::from_millis(800));
+    let laco = std::thread::spawn(move || {
+        microfone::rodar_comando("cat", &args, trava, saidas, Duration::from_millis(20), p)
+    });
+    // O `cat` termina no fim do arquivo: o microfone diz que parou e sobe de novo. Duas voltas bastam.
+    let limite = Instant::now() + Duration::from_secs(10);
+    while ditos.lock().unwrap().iter().filter(|m| m.is_some()).count() < 2 {
+        assert!(
+            Instant::now() < limite,
+            "o microfone não voltou: {:?}",
+            ditos.lock().unwrap()
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    parar.store(true, Ordering::Relaxed);
+    laco.join().unwrap();
+    let ouvidos = ouvidos.lock().unwrap();
+    assert_eq!(
+        &ouvidos[..2],
+        [Ouvido::Barulho, Ouvido::Voz],
+        "a palma e a fala da primeira volta"
+    );
+    let ditos = ditos.lock().unwrap();
+    assert_eq!(ditos[0], None, "ouvindo");
+    assert!(
+        ditos[1]
+            .as_deref()
+            .is_some_and(|m| m.contains("o microfone parou")),
+        "{ditos:?}"
+    );
+
+    // O programa que não existe é dito, e o serviço não cai.
+    let ditos = Arc::new(Mutex::new(Vec::new()));
+    let d = ditos.clone();
+    let parar = Arc::new(AtomicBool::new(false));
+    let saidas = microfone::Saidas {
+        ouvido: Box::new(|_| {}),
+        nivel: Arc::new(AtomicU32::new(0)),
+        dizer: Box::new(move |m: Option<String>| d.lock().unwrap().push(m)),
+    };
+    let p = parar.clone();
+    let trava = Trava::nova(Duration::from_millis(800));
+    let laco = std::thread::spawn(move || {
+        microfone::rodar_comando(
+            "programa-que-nao-existe",
+            &[],
+            trava,
+            saidas,
+            Duration::from_millis(5),
+            p,
+        )
+    });
+    std::thread::sleep(Duration::from_millis(60));
+    parar.store(true, Ordering::Relaxed);
+    laco.join().unwrap();
+    assert!(
+        ditos.lock().unwrap()[0]
+            .as_deref()
+            .is_some_and(|m| m.contains("não abriu"))
+    );
+    assert!((microfone::nivel(&[0.5, -0.5, 0.5, -0.5]) - 0.5).abs() < 1e-6);
+}

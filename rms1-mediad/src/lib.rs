@@ -9,8 +9,10 @@
 
 pub mod alto_falante;
 pub mod camera;
+pub mod camera_s1;
 pub mod estacao;
 pub mod microfone;
+pub mod mixer;
 pub mod percepcao;
 pub mod quadros;
 pub mod reducao;
