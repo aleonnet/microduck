@@ -14,6 +14,7 @@ PORTA_PAGINA="${RMS1_PORTA_PAGINA:-8765}"
 PORTA_WS="${RMS1_PORTA_WS:-8766}"
 PORTA_TCP="${RMS1_PORTA_TCP:-9000}"
 PORTA_QUADROS="${RMS1_PORTA_QUADROS:-9100}"
+PORTA_CAMERA="${RMS1_PORTA_CAMERA:-9210}"
 PAGINA="http://127.0.0.1:$PORTA_PAGINA/viewer/"
 ESPERA_PAGINA_S=120
 
@@ -34,6 +35,14 @@ limpar_rms1d() {
     orfao="$(cat "$ESTADO/rms1d.pid")"
     if e_nosso "$orfao" rms1d; then kill "$orfao" 2>/dev/null || true; fi
     : > "$ESTADO/rms1d.pid"
+}
+
+# O mesmo para o `rms1-mediad` do simulador, o serviço de mídia que sobe ao lado do `rms1d`: ele ficaria com a trava do socket dele.
+limpar_mediad() {
+    [ -s "$ESTADO/rms1-mediad.pid" ] || return 0
+    orfao="$(cat "$ESTADO/rms1-mediad.pid")"
+    if e_nosso "$orfao" rms1-mediad; then kill "$orfao" 2>/dev/null || true; fi
+    : > "$ESTADO/rms1-mediad.pid"
 }
 
 # Nem a ponte até o robô, nem a porta do `adb`. Só neste Mac: o robô, quem devolve é "Voltar ao modo DJI".
@@ -68,6 +77,7 @@ parar() {
         done
     done
     limpar_rms1d
+    limpar_mediad
     limpar_ponte
     limpar_arquivos
 }
@@ -76,7 +86,7 @@ conferir() {
     command -v uv >/dev/null 2>&1 || falha "falta o uv. Instale com: brew install uv"
     command -v cargo >/dev/null 2>&1 || falha "falta o cargo. Instale o Rust em https://rustup.rs"
     [ -f "$LAB/tools/simulador/s1_servico.py" ] || falha "não achei o laboratório em $LAB. Aponte com S1_LAB=<pasta>"
-    for porta in "$PORTA_PAGINA" "$PORTA_WS" "$PORTA_TCP" "$PORTA_QUADROS"; do
+    for porta in "$PORTA_PAGINA" "$PORTA_WS" "$PORTA_TCP" "$PORTA_QUADROS" "$PORTA_CAMERA"; do
         if lsof -nP -iTCP:"$porta" -sTCP:LISTEN >/dev/null 2>&1; then
             quem="$(lsof -nP -iTCP:"$porta" -sTCP:LISTEN | awk 'NR==2 {print $1 ", processo " $2}')"
             falha "a porta $porta está ocupada por $quem. Encerre esse processo ou rode scripts/rms1 down"
@@ -86,6 +96,7 @@ conferir() {
 
 morreu() {
     limpar_rms1d
+    limpar_mediad
     limpar_ponte
     limpar_arquivos
     echo "[rms1] o serviço parou. O que ele disse:" >&2
@@ -100,6 +111,7 @@ encerrar() {
         wait "$pid" 2>/dev/null || true
     fi
     limpar_rms1d
+    limpar_mediad
     limpar_ponte
     limpar_arquivos
     diz "encerrado"
@@ -110,10 +122,11 @@ subir() {
     conferir
     mkdir -p "$ESTADO"
     limpar_rms1d
+    limpar_mediad
     echo "$$" > "$ESTADO/rms1.pid"
     trap encerrar INT TERM HUP
-    diz "compilando o rms1d, a primeira vez leva alguns minutos"
-    (cd "$REPO" && exec cargo build --quiet -p rms1d) &
+    diz "compilando o rms1d e o rms1-mediad, a primeira vez leva alguns minutos"
+    (cd "$REPO" && exec cargo build --quiet -p rms1d -p rms1-mediad) &
     compilando=$!
     wait "$compilando" || falha "a compilação falhou; o erro está acima"
     compilando=""
@@ -121,7 +134,7 @@ subir() {
     diz "subindo o serviço local"
     uv run --no-project --python 3.11 --with "websockets==$VERSAO" python "$LAB/tools/simulador/s1_servico.py" \
         --microduck "$REPO" --estado "$ESTADO" \
-        --porta-pagina "$PORTA_PAGINA" --ws "$PORTA_WS" --tcp "$PORTA_TCP" --quadros "$PORTA_QUADROS" \
+        --porta-pagina "$PORTA_PAGINA" --ws "$PORTA_WS" --tcp "$PORTA_TCP" --quadros "$PORTA_QUADROS" --camera "$PORTA_CAMERA" \
         > "$ESTADO/servico.log" 2>&1 &
     pid=$!
     echo "$pid" > "$ESTADO/servico.pid"
