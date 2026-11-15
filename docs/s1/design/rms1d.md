@@ -45,6 +45,10 @@ console, robotctl, rms1d-roteiro, e depois a inteligência
 - `<socket>.lock` garante um só dono, e nunca é apagado.
 - `MissedTickBehavior::Skip`, em executor próprio.
 
+## O som é do `rms1-mediad`
+
+`robot.sound` chega ao `rms1d`, como no pato chega ao `robotd`, e ele o repassa ao `rms1-mediad` como notificação, sem esperar pela resposta: o laço nunca espera cliente. Sem `[midia]` em `rms1d.toml`, ou com o `rms1-mediad` fora do ar, a chamada é recusada com o motivo. A câmera, o microfone e o alto-falante têm um dono só, e a página dele é [`rms1-mediad.md`](rms1-mediad.md).
+
 ## O pato é piso, não teto
 
 O contrato comum é uma das saídas. O que o S1 tem a mais, como telemetria completa, armaduras, lançador e modos, entra inteiro nas etapas seguintes, com lista própria, sem ser cortado para caber no pato. Modos e tiro chegam ao console como skills de `robot.do`, porque `mediad` recusa `s1.*` em `session.rs`.

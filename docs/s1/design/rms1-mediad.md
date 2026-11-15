@@ -1,0 +1,85 @@
+# `rms1-mediad`: o serviço de mídia do S1
+
+Status: em uso com a fonte de teste e contra a estação de mentira; a câmera, o microfone e o alto-falante do robô e os do simulador entram nas etapas seguintes desta frente. Data: 2026-11-14.
+
+O dono único da câmera, do microfone e do alto-falante do S1. No pato a câmera é do `mediad`, e o microfone e o som são do `robotd`. No S1 os três ficam num processo só, fora do `rms1d`, por três razões:
+
+- a saída de som e a captura do microfone são de um cliente só;
+- a trava contra a própria voz precisa saber, no mesmo lugar, o que toca e o que chega;
+- uma falha de mídia não pode derrubar quem move o robô.
+
+Nada aqui depende do `mediad` do pato, que só existe com GStreamer. O que é igual ao pato é a interface, e o que compila para o S1 é reusado: o vigia de som (`pet-detect`), a supressão das caixas (`duck-detect`) e o desenho do tocador (`robotd/src/sound.rs`).
+
+## O caminho
+
+```text
+console, cérebro, rms1d (o som)                 estação Hailo (Pi 4), achada pelo anúncio
+        │  JSON-RPC, um socket unix                    ▲ quadro reduzido      │ entregas
+        ▼                                              │ TCP                  ▼
+                              rms1-mediad
+        ┌──────────────┬──────────────┬───────────────┐
+        ▼              ▼              ▼               ▼
+     câmera        microfone     alto-falante     percepção
+  teste | sim | S1   arquivo | S1   aplay | nula   (segue o anúncio)
+```
+
+As fontes ficam atrás da mesma interface: a de teste, a do simulador e a do robô. Entre uma e outra só muda `[midia]` em `rms1d.toml`.
+
+## As peças
+
+| Arquivo | O que é |
+|---|---|
+| `rms1-mediad/src/quadros.rs` | O encontro de quadros: quem quer um quadro pede, e recebe o próximo que for capturado |
+| `rms1-mediad/src/camera.rs` | As fontes da câmera. Nesta etapa, a de teste (256 por 144, NV12) |
+| `rms1-mediad/src/microfone.rs` | O ouvinte: o vigia de som do pato, com a trava. A fonte de arquivo |
+| `rms1-mediad/src/trava.rs` | A trava contra a própria voz |
+| `rms1-mediad/src/alto_falante.rs` | O tocador: um som por vez, e o `wheee` em três partes. A saída é uma interface (`aplay` ou nula) |
+| `rms1-mediad/src/reducao.rs` | O quadro que vai à estação: NV12 reduzido a RGB 320 por 180, sem moldura |
+| `rms1-mediad/src/estacao.rs` | O anúncio da estação e o cabeçalho das mensagens |
+| `rms1-mediad/src/percepcao.rs` | A percepção pela estação: segue o anúncio, manda o quadro, lê as entregas, publica |
+| `rms1-mediad/src/servidor.rs` | O socket local |
+| `rms1d-params` | `[midia]` em `rms1d.toml`: o esquema, os padrões e a validação |
+
+## O que vem do desenho do pato, e quem garante
+
+- **Quadro pedido, e não publicado.** Copiar um quadro custa o quadro inteiro (1.382.400 bytes no S1). Quadro que ninguém pediu custa uma leitura atômica. `sem_pedido_nao_copia`.
+- **O próximo, e não o último.** O pedido é respondido por uma captura feita depois dele; no prazo vencido, a resposta é erro, nunca um quadro de antes. `sem_quadro_no_prazo_e_erro`.
+- **Uma captura responde a todos os que esperam.** `dois_pedidos_uma_copia`.
+- **O robô não ouve a si mesmo.** Enquanto o alto-falante toca, e por `[midia] trava_ms` depois (800 ms, o do pato, até a medição no S1), o que o microfone ouve é descartado. `o_proprio_som_e_descartado`, `depois_da_trava_volta_a_ouvir`.
+- **Um som por vez.** Um som novo corta o anterior; durante o `wheee`, o avulso é descartado; sem renovação por 300 ms, o `wheee` pousa. `um_som_por_vez`, `wheee_pousa_ou_corta`.
+- **Ligar não toca nada.** Som só sai por `robot.sound`.
+- **`<socket>.lock` garante um só dono**, antes de qualquer dispositivo ser aberto.
+
+## O socket
+
+Um socket unix, `[midia] socket`, em JSON-RPC, uma linha por mensagem.
+
+| Chamada | O que faz |
+|---|---|
+| `hello` | A versão do contrato e a do serviço |
+| `media.frame` | O próximo quadro: uma linha com o cabeçalho do contrato do pato (`MediaFrameHeader`) e, em seguida, exatamente `bytes` bytes crus. A conexão fecha depois dele |
+| `robot.sound` | O do contrato do pato (`tag` e `hold`), como requisição ou notificação |
+| `s1.media.subscribe` | `{"heard": true, "detections": true}`. A conexão passa a receber `s1.audio.heard {"kind"}`, já com a trava aplicada, e `media.detections`. Cada pedido diz as duas assinaturas: a que não vem é desligada |
+| `s1.media.status` | O que o serviço está fazendo: quadros copiados, se há som tocando, e a percepção (`perception`) |
+
+**O som passa pelo `rms1d`.** Quem pede som fala com o `rms1d`, como no pato fala com o `robotd`: ele repassa `robot.sound` a este serviço como notificação, sem esperar, e responde aceito. Sem `[midia]` em `rms1d.toml`, ou com este serviço fora do ar, recusa com o motivo. `rms1d/tests/midia.rs`.
+
+## A percepção pela estação Hailo
+
+O S1 captura, a estação pensa, e o S1 publica o que ela achou. O formato do anúncio e das mensagens mora em `tools/hailo/estacao_anuncio.py`, no laboratório (`~/Development/RoboMaster-S1`); o lado do S1 é conferido contra um pacote e uma mensagem gravados por lá (`rms1-mediad/tests/estacao.rs`).
+
+- **O S1 não lê o contrato das funções: lê o anúncio.** A estação difunde, a cada 0,5 s, na porta UDP `[midia] percepcao.porta_anuncio` (45679), que entradas quer, em que ritmo, e o que cada função ligada entrega. Vale anúncio de rede privada ou da própria máquina. Sem anúncio por 3 s, a estação saiu, e nada é mandado.
+- **Com duas estações na rede, fica a que já está em uso** enquanto ela se anuncia. Uma estação é o endereço e a porta dos quadros.
+- **O quadro vai pequeno e sem moldura:** RGB 320 por 180, 172.800 bytes. A moldura de cada modelo é posta na estação. `scripts/test-rms1-mediad-lab.sh` prova que a redução daqui, com a moldura de lá, dá os mesmos bytes do programa da medição de 2026-11-13.
+- **O ritmo é o da estação,** até o teto de `[midia] percepcao.ritmo_max` (22 por segundo). Os 2 por segundo do detector do pato são calor na placa dele; aqui o Hailo está no Pi.
+- **Cada entrega vem com o canal da função.** As caixas do detector de patos (leitor `nanodet_v8`) passam pela supressão do pato (`duck_detect::decode`), voltam aos pixels do quadro da câmera e saem em `media.detections`, no formato do pato, também sem caixa nenhuma. Só a função que o anúncio marca com `publica` é publicada; as outras são contadas em `s1.media.status`.
+- **A medida.** Uma vez por segundo o S1 manda à estação a ida e volta que mediu e os quadros por segundo: é o que o painel da estação mostra.
+- **Conexão caída reconecta, com espera crescente.** `s1.media.status` diz por que nada está sendo mandado, quando não está.
+
+Os testes: `rms1-mediad/tests/percepcao.rs`, com uma estação de mentira em 127.0.0.1.
+
+## O que falta nesta frente
+
+- A câmera, o microfone e o alto-falante do simulador, e a interface de mídia na página.
+- A câmera do robô (a sequência da DJI, passo a passo), o microfone e o alto-falante dele, o mixer, e o volume (`s1.media.volume`).
+- As medições com o robô ligado, que fixam a janela da trava no S1.

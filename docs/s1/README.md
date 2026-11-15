@@ -12,6 +12,7 @@ One page owns a mechanism, and the others link to it. When two pages disagree, t
 |---|---|
 | [`design/s1-body.md`](design/s1-body.md) | How the S1 runs the software today: the loop, telemetry, what is outside `s1d`, what is reused, every part by component, and the target architecture, proposed. |
 | [`design/rms1d.md`](design/rms1d.md) | `rms1d`, o serviço novo do corpo: o caminho, as peças, os modos e o lugar da Coral |
+| [`design/rms1-mediad.md`](design/rms1-mediad.md) | `rms1-mediad`, o serviço de mídia: a câmera, o microfone e o alto-falante com um dono só, o socket, e a percepção pela estação Hailo |
 | [`robot/rms1d-pontos-de-controle.md`](robot/rms1d-pontos-de-controle.md) | Cada ponto de controle das etapas 1 e 2, e a comparação com o `s1d` |
 | [`robot/rms1d-roteiro-chassi-torre.md`](robot/rms1d-roteiro-chassi-torre.md) | O roteiro da prova, no simulador e no robô |
 | [`robot/s1-commands.md`](robot/s1-commands.md) | Every command: the frame, the test, the proof on the robot, what reaches it, what is missing. Open defects. The base for wiring commands to the console and the pad. |
