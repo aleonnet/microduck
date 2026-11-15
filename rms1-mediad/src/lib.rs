@@ -9,6 +9,7 @@
 
 pub mod alto_falante;
 pub mod camera;
+pub mod estacao;
 pub mod microfone;
 pub mod quadros;
 pub mod servidor;

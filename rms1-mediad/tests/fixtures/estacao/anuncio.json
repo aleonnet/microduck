@@ -1,0 +1,1 @@
+{"rms1_hailo":2,"quadros":47002,"painel":8080,"entradas":[{"n":1,"id":"quadro_continuo","formato":"rgb_320x180","ritmo":15}],"funcoes":[{"n":1,"id":"detector","entrega":"caixas","leitor":"nanodet_v8","publica":"media.detections","nota":0.35,"iou":0.5}]}
