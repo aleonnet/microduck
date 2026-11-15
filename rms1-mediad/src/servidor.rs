@@ -9,7 +9,13 @@
 //! - `s1.media.volume {"volume": 0..100}`: o volume do alto-falante, na conta da DJI, pelo mixer do robô.
 //! - `s1.media.status`: o que o serviço está fazendo.
 //! - `s1.media.preview {"width": 640}`: o quadro reduzido a RGB, para quem só quer olhar (a tela "Sentidos"): o cabeçalho de
-//!   `media.frame`, com `format: "RGB"`, e os bytes. A conexão fica aberta, e serve o pedido seguinte.
+//!   `media.frame`, com `format: "RGB"`, e os bytes. A conexão fica aberta, e serve o pedido seguinte. Com
+//!   `"format": "jpeg"` (e `"quality"`, de 30 a 90, padrão 70) o quadro vem em JPEG, `format: "JPEG"`: é o que a tela usa,
+//!   porque o Wi-Fi do robô não leva 691 KB por quadro a um ritmo de vídeo.
+//!
+//! O mesmo atendimento serve uma porta TCP, se `[midia] porta_video` a pede ([`servir_tcp`]): por ela só passam `hello`,
+//! `s1.media.preview` e `s1.media.status`. É o caminho do vídeo até a tela, direto pela rede: pelo `adb`, um quadro de
+//! 691 KB levava mais de 4 s (medido em 2026-11-15, `out/2026-11-14-s1-midia/medida-tela-no-robo.txt`, no laboratório).
 
 use std::path::Path;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -18,9 +24,8 @@ use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use anyhow::Result;
 use duck_ipc_proto as proto;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::net::unix::OwnedWriteHalf;
-use tokio::net::{UnixListener, UnixStream};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
+use tokio::net::{TcpListener, UnixListener, UnixStream};
 use tokio::sync::broadcast;
 
 use crate::alto_falante::Tocador;
@@ -37,6 +42,19 @@ const OUVIDOS_NA_FILA: usize = 32;
 /// A largura do quadro reduzido de `s1.media.preview`, sem pedido de outra, e a menor que se aceita.
 const PREVIA_LARGURA: usize = 640;
 const PREVIA_MINIMA: usize = 64;
+/// A qualidade do JPEG da prévia, sem pedido de outra, e a faixa aceita.
+const JPEG_QUALIDADE: u64 = 70;
+const JPEG_FAIXA: (u64, u64) = (30, 90);
+
+/// Codifica em JPEG um quadro RGB, com o codificador do `mediad` do pato.
+pub fn jpeg_de_rgb(rgb: &[u8], largura: u32, altura: u32, qualidade: u8) -> Option<Vec<u8>> {
+    use image::ImageEncoder as _;
+    let mut jpeg = Vec::with_capacity(rgb.len() / 8);
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, qualidade)
+        .write_image(rgb, largura, altura, image::ExtendedColorType::Rgb8)
+        .ok()?;
+    Some(jpeg)
+}
 /// Das detecções só a mais nova interessa: a fila do pato (`mediad/src/detect.rs`), 8.
 const DETECCOES_NA_FILA: usize = 8;
 
@@ -169,9 +187,35 @@ pub async fn servir(ouvinte: UnixListener, servico: Arc<Servico>) {
     }
 }
 
-/// Atende uma conexão até ela fechar, até um erro de leitura do pedido, ou até um quadro ser entregue.
+/// A porta do vídeo: o mesmo atendimento, pela rede, só para olhar (`hello`, `s1.media.preview` e `s1.media.status`).
+pub async fn servir_tcp(ouvinte: TcpListener, servico: Arc<Servico>) {
+    loop {
+        match ouvinte.accept().await {
+            Ok((conexao, _)) => {
+                let _ = conexao.set_nodelay(true);
+                let s = servico.clone();
+                tokio::spawn(async move {
+                    if let Err(erro) = atender_em(conexao, s, true).await {
+                        tracing::debug!(%erro, "conexão de vídeo terminou");
+                    }
+                });
+            }
+            Err(erro) => tracing::warn!(%erro, "accept da porta do vídeo falhou"),
+        }
+    }
+}
+
+/// Atende uma conexão do socket local até ela fechar, até um erro de leitura do pedido, ou até um quadro ser entregue.
 pub async fn atender(conexao: UnixStream, s: Arc<Servico>) -> Result<()> {
-    let (leitura, mut escrita) = conexao.into_split();
+    atender_em(conexao, s, false).await
+}
+
+/// O atendimento, em qualquer conexão. Com `so_olhar`, só passam os métodos que não mudam nada no robô.
+pub async fn atender_em<C>(conexao: C, s: Arc<Servico>, so_olhar: bool) -> Result<()>
+where
+    C: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    let (leitura, mut escrita) = tokio::io::split(conexao);
     let mut leitor = BufReader::new(leitura);
     let mut ouvindo: Option<broadcast::Receiver<Ouvido>> = None;
     let mut vendo: Option<broadcast::Receiver<Arc<str>>> = None;
@@ -231,6 +275,20 @@ pub async fn atender(conexao: UnixStream, s: Arc<Servico>) -> Result<()> {
             }
         };
         let metodo = pedido.method.as_str();
+        if so_olhar
+            && !matches!(
+                metodo,
+                proto::method::HELLO | "s1.media.preview" | "s1.media.status"
+            )
+        {
+            let texto = format!("{metodo} is not served on the video port");
+            escrever(
+                &mut escrita,
+                &erro(pedido.id, proto::code::METHOD_NOT_FOUND, &texto),
+            )
+            .await?;
+            continue;
+        }
         if metodo == proto::method::HELLO {
             let ola = proto::HelloResult {
                 api_version: proto::API_VERSION,
@@ -365,10 +423,37 @@ pub async fn atender(conexao: UnixStream, s: Arc<Servico>) -> Result<()> {
                 .await?;
                 continue;
             };
+            // Em JPEG, se pedido: é o que cabe no Wi-Fi do robô a um ritmo de vídeo.
+            let quer = |o: &str| pedido.params.as_ref().map(|p| p[o].clone());
+            let em_jpeg = quer("format")
+                .and_then(|f| f.as_str().map(|f| f.eq_ignore_ascii_case("jpeg")))
+                == Some(true);
+            let (formato, rgb) = if em_jpeg {
+                let qualidade = quer("quality")
+                    .and_then(|q| q.as_u64())
+                    .unwrap_or(JPEG_QUALIDADE)
+                    .clamp(JPEG_FAIXA.0, JPEG_FAIXA.1) as u8;
+                let codificado = tokio::task::spawn_blocking(move || {
+                    jpeg_de_rgb(&rgb, ls as u32, as_ as u32, qualidade)
+                })
+                .await?;
+                let Some(jpeg) = codificado else {
+                    let texto = "the frame would not encode as JPEG";
+                    escrever(
+                        &mut escrita,
+                        &erro(pedido.id, proto::code::INTERNAL_ERROR, texto),
+                    )
+                    .await?;
+                    continue;
+                };
+                ("JPEG", jpeg)
+            } else {
+                ("RGB", rgb)
+            };
             let cabecalho = proto::MediaFrameHeader {
                 width: ls as u32,
                 height: as_ as u32,
-                format: "RGB".to_owned(),
+                format: formato.to_owned(),
                 bytes: rgb.len(),
                 captured_at_unix_us: quadro
                     .capturado_em
@@ -417,7 +502,10 @@ fn erro(id: Option<proto::Id>, codigo: i32, texto: &str) -> proto::Response {
     proto::Response::err(id, proto::Error::new(codigo, texto))
 }
 
-async fn escrever<T: serde::Serialize>(escrita: &mut OwnedWriteHalf, mensagem: &T) -> Result<()> {
+async fn escrever<T: serde::Serialize, W: AsyncWrite + Unpin>(
+    escrita: &mut W,
+    mensagem: &T,
+) -> Result<()> {
     let mut linha = serde_json::to_vec(mensagem)?;
     linha.push(b'\n');
     escrita.write_all(&linha).await?;

@@ -234,6 +234,9 @@ pub struct Midia {
     pub percepcao: MidiaPercepcao,
     /// Se o serviço grava o mixer do chip de áudio ao subir, como a partida da DJI grava. Só no robô, com a DJI parada.
     pub mixer: bool,
+    /// A porta TCP em que o serviço entrega o quadro reduzido a quem só quer olhar (a tela do simulador), direto pela
+    /// rede. Zero: não há porta. Por ela não passa nada que mude o robô.
+    pub porta_video: u16,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -324,6 +327,7 @@ impl Default for Midia {
             trava_ms: 800,
             percepcao: MidiaPercepcao::default(),
             mixer: false,
+            porta_video: 0,
         }
     }
 }

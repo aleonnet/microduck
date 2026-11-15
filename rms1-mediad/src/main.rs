@@ -302,7 +302,17 @@ fn main() -> ExitCode {
             }
         });
 
-        tracing::warn!(socket = %socket.display(), camera = ?midia.camera.fonte, microfone = ?midia.microfone.fonte, som = ?midia.alto_falante.saida, "rms1-mediad no ar");
+        // A porta do vídeo, se o arquivo pede: sem ela o serviço segue de pé, e a tela fica sem a imagem direta.
+        if midia.porta_video != 0 {
+            match tokio::net::TcpListener::bind(("0.0.0.0", midia.porta_video)).await {
+                Ok(porta) => {
+                    tokio::spawn(servidor::servir_tcp(porta, servico.clone()));
+                }
+                Err(e) => tracing::warn!(erro = %e, porta = midia.porta_video, "a porta do vídeo não abriu"),
+            }
+        }
+
+        tracing::warn!(socket = %socket.display(), camera = ?midia.camera.fonte, microfone = ?midia.microfone.fonte, som = ?midia.alto_falante.saida, porta_video = midia.porta_video, "rms1-mediad no ar");
         tokio::select! {
             () = servidor::servir(ouvinte, servico.clone()) => {}
             _ = tokio::signal::ctrl_c() => {}

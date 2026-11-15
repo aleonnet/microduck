@@ -238,3 +238,126 @@ async fn a_previa_entrega_o_quadro_reduzido_em_rgb_e_a_conexao_fica() {
         assert_eq!(&rgb[rgb.len() - 3..], [0, 0, 0], "o de baixo é preto");
     }
 }
+
+/// Uma câmera de mentira: a cada pedido, um quadro NV12 de 1280 por 720, branco em cima e preto embaixo.
+fn camera_de_mentira(servico: &Arc<Servico>) {
+    use rms1_mediad::quadros::Quadro;
+    let q = servico.quadros.clone();
+    std::thread::spawn(move || {
+        loop {
+            if q.levar_pedido() {
+                let (l, a) = (1280usize, 720usize);
+                let mut dados = vec![128u8; l * a * 3 / 2];
+                dados[..l * a / 2].fill(235);
+                dados[l * a / 2..l * a].fill(16);
+                q.entregar(Quadro {
+                    largura: l as u32,
+                    altura: a as u32,
+                    formato: "NV12",
+                    capturado_em: std::time::SystemTime::now(),
+                    dados,
+                });
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    });
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_porta_do_video_entrega_jpeg_pela_rede_e_so_deixa_olhar() {
+    use tokio::io::AsyncReadExt;
+    let (_pasta, anota, servico) = montar();
+    camera_de_mentira(&servico);
+    let porta = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endereco = porta.local_addr().unwrap();
+    tokio::spawn(servidor::servir_tcp(porta, servico));
+    let mut c = BufReader::new(tokio::net::TcpStream::connect(endereco).await.unwrap());
+    // Dois quadros pela mesma conexão, em JPEG: bem menores que o RGB, e cada um um JPEG inteiro.
+    for id in [1u64, 2] {
+        let pedido = format!(
+            "{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"s1.media.preview\",\"params\":{{\"format\":\"jpeg\"}}}}\n"
+        );
+        c.get_mut().write_all(pedido.as_bytes()).await.unwrap();
+        let mut texto = String::new();
+        tokio::time::timeout(Duration::from_secs(5), c.read_line(&mut texto))
+            .await
+            .expect("o cabeçalho em 5 s")
+            .unwrap();
+        let r: serde_json::Value = serde_json::from_str(&texto).unwrap();
+        let h = &r["result"];
+        let n = h["bytes"].as_u64().unwrap() as usize;
+        assert_eq!(
+            (
+                h["width"].as_u64(),
+                h["height"].as_u64(),
+                h["format"].as_str()
+            ),
+            (Some(640), Some(360), Some("JPEG")),
+            "{r}"
+        );
+        assert!(
+            n < 640 * 360 * 3 / 10,
+            "o JPEG saiu grande demais: {n} bytes"
+        );
+        let mut jpeg = vec![0u8; n];
+        tokio::time::timeout(Duration::from_secs(5), c.read_exact(&mut jpeg))
+            .await
+            .expect("os bytes do quadro em 5 s")
+            .unwrap();
+        assert_eq!(
+            (&jpeg[..2], &jpeg[n - 2..]),
+            (&[0xFF, 0xD8][..], &[0xFF, 0xD9][..]),
+            "não é um JPEG inteiro"
+        );
+        // O que o JPEG guarda é o quadro: branco em cima, preto embaixo.
+        let aberto = image::load_from_memory(&jpeg).unwrap().to_rgb8();
+        assert_eq!((aberto.width(), aberto.height()), (640, 360));
+        assert!(
+            aberto.get_pixel(320, 20).0.iter().all(|&v| v > 240),
+            "o de cima não é branco"
+        );
+        assert!(
+            aberto.get_pixel(320, 340).0.iter().all(|&v| v < 15),
+            "o de baixo não é preto"
+        );
+    }
+    // Pela porta do vídeo ninguém toca som nem muda o volume: só se olha.
+    for metodo in [
+        "robot.sound",
+        "s1.media.volume",
+        "s1.media.subscribe",
+        "media.frame",
+    ] {
+        let pedido = format!(
+            "{{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"{metodo}\",\"params\":{{\"tag\":\"chirp\",\"volume\":10}}}}\n"
+        );
+        c.get_mut().write_all(pedido.as_bytes()).await.unwrap();
+        let r = linha_de(&mut c).await;
+        assert!(
+            r["error"]["message"]
+                .as_str()
+                .unwrap_or("")
+                .contains("video port"),
+            "{metodo} passou pela porta do vídeo: {r}"
+        );
+    }
+    assert!(
+        anota.0.lock().unwrap().is_empty(),
+        "um som tocou pela porta do vídeo"
+    );
+    // O estado, que não muda nada, passa.
+    c.get_mut()
+        .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"s1.media.status\"}\n")
+        .await
+        .unwrap();
+    assert!(linha_de(&mut c).await["result"]["perception"].is_object());
+}
+
+async fn linha_de<C: tokio::io::AsyncBufRead + Unpin>(leitor: &mut C) -> serde_json::Value {
+    let mut texto = String::new();
+    tokio::time::timeout(Duration::from_secs(5), leitor.read_line(&mut texto))
+        .await
+        .expect("uma linha em 5 s")
+        .unwrap();
+    serde_json::from_str(&texto).unwrap()
+}

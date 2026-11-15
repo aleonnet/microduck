@@ -40,6 +40,9 @@ parar = ["dji_monitor", "dji_hdvt_uav", "dji_camera"]
 # `aplay`. Com a DJI parada, é ele quem deixa o chip de áudio como a partida dela deixa.
 [midia]
 mixer = true
+# A porta em que a tela do simulador busca a imagem da câmera, direto pela rede e em JPEG: pelo `adb` um quadro levava mais
+# de 4 s. Por ela só se olha: nenhum comando passa.
+porta_video = 47010
 
 [midia.camera]
 fonte = "s1"

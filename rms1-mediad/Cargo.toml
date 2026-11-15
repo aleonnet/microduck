@@ -25,6 +25,8 @@ clap = { workspace = true, features = ["derive"] }
 # A supressão das caixas do detector de patos: a mesma conta do pato.
 duck-detect = { path = "../duck-detect" }
 duck-ipc-proto = { path = "../duck-ipc-proto" }
+# O JPEG do quadro que vai à tela: o mesmo codificador do `mediad` do pato (`mediad/src/stream.rs`), já no `Cargo.lock`.
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
 pet-detect = { path = "../pet-detect" }
 rms1d-params = { path = "../rms1d-params" }
 serde.workspace = true
