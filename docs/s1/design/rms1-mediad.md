@@ -1,6 +1,6 @@
 # `rms1-mediad`: o serviço de mídia do S1
 
-Status: em uso com a fonte de teste e contra a estação de mentira; a câmera, o microfone e o alto-falante do robô e os do simulador entram nas etapas seguintes desta frente. Data: 2026-11-14.
+Status: em uso no robô e no simulador desde 2026-11-15, com a estação Hailo de verdade. Data: 2026-11-14; atualizado em 2026-11-15. A ativação no robô está em [`../robot/rms1-mediad-no-robo.md`](../robot/rms1-mediad-no-robo.md).
 
 O dono único da câmera, do microfone e do alto-falante do S1. No pato a câmera é do `mediad`, e o microfone e o som são do `robotd`. No S1 os três ficam num processo só, fora do `rms1d`, por três razões:
 
@@ -30,11 +30,13 @@ As fontes ficam atrás da mesma interface: a de teste, a do simulador e a do rob
 | Arquivo | O que é |
 |---|---|
 | `rms1-mediad/src/quadros.rs` | O encontro de quadros: quem quer um quadro pede, e recebe o próximo que for capturado |
-| `rms1-mediad/src/camera.rs` | As fontes da câmera. Nesta etapa, a de teste (256 por 144, NV12) |
-| `rms1-mediad/src/microfone.rs` | O ouvinte: o vigia de som do pato, com a trava. A fonte de arquivo |
+| `rms1-mediad/src/camera.rs` | As fontes da câmera, atrás da mesma interface: a de teste, a do simulador e a do robô |
+| `rms1-mediad/src/camera_s1.rs` | A câmera do robô, aberta pelos 27 passos do `dji_camera`, com cada resposta do driver conferida com a gravada |
+| `rms1-mediad/src/mixer.rs` | O mixer do chip de áudio do robô: o estado da partida da DJI, gravado e conferido, e o volume na conta da DJI |
+| `rms1-mediad/src/microfone.rs` | O ouvinte: o vigia de som do pato, com a trava. As fontes: arquivo, o `arecord` do robô e o simulador |
 | `rms1-mediad/src/trava.rs` | A trava contra a própria voz |
-| `rms1-mediad/src/alto_falante.rs` | O tocador: um som por vez, e o `wheee` em três partes. A saída é uma interface (`aplay` ou nula) |
-| `rms1-mediad/src/reducao.rs` | O quadro que vai à estação: NV12 reduzido a RGB 320 por 180, sem moldura |
+| `rms1-mediad/src/alto_falante.rs` | O tocador: um som por vez, e o `wheee` em três partes. A saída é uma interface (`aplay`, o simulador ou nula) |
+| `rms1-mediad/src/reducao.rs` | O quadro que vai à estação: NV12 reduzido a RGB 640 por 360, sem moldura |
 | `rms1-mediad/src/estacao.rs` | O anúncio da estação e o cabeçalho das mensagens |
 | `rms1-mediad/src/percepcao.rs` | A percepção pela estação: segue o anúncio, manda o quadro, lê as entregas, publica |
 | `rms1-mediad/src/servidor.rs` | O socket local |
@@ -71,7 +73,7 @@ O S1 captura, a estação pensa, e o S1 publica o que ela achou. O formato do an
 
 - **O S1 não lê o contrato das funções: lê o anúncio.** A estação difunde, a cada 0,5 s, na porta UDP `[midia] percepcao.porta_anuncio` (45679), que entradas quer, em que ritmo, e o que cada função ligada entrega. Vale anúncio de rede privada ou da própria máquina. Sem anúncio por 3 s, a estação saiu, e nada é mandado.
 - **Com duas estações na rede, fica a que já está em uso** enquanto ela se anuncia. Uma estação é o endereço e a porta dos quadros.
-- **O quadro vai pequeno e sem moldura:** RGB 320 por 180, 172.800 bytes. A moldura de cada modelo é posta na estação. `scripts/test-rms1-mediad-lab.sh` prova que a redução daqui, com a moldura de lá, dá os mesmos bytes do programa da medição de 2026-11-13.
+- **O quadro vai reduzido e sem moldura:** RGB 640 por 360, 691.200 bytes (`percepcao.rs`, `QUADRO_LARGURA` e `QUADRO_ALTURA`). A moldura de cada modelo é posta na estação. `scripts/test-rms1-mediad-lab.sh` prova que a redução daqui, com a moldura de lá, dá os mesmos bytes do programa da medição de 2026-11-13, no tamanho daquela medição (320 por 180).
 - **O ritmo é o da estação,** até o teto de `[midia] percepcao.ritmo_max` (22 por segundo). Os 2 por segundo do detector do pato são calor na placa dele; aqui o Hailo está no Pi.
 - **Cada entrega vem com o canal da função.** As caixas do detector de patos (leitor `nanodet_v8`) passam pela supressão do pato (`duck_detect::decode`), voltam aos pixels do quadro da câmera e saem em `media.detections`, no formato do pato, também sem caixa nenhuma. Só a função que o anúncio marca com `publica` é publicada; as outras são contadas em `s1.media.status`.
 - **A medida.** Uma vez por segundo o S1 manda à estação a ida e volta que mediu e os quadros por segundo: é o que o painel da estação mostra.
@@ -92,7 +94,7 @@ Com `[midia.alto_falante] saida = "simulador"` e `[midia.microfone] fonte = "sim
 
 Testes: `cargo test -p rms1-mediad --test som_simulado`.
 
-## O que falta nesta frente
+## O que ficou para depois desta frente
 
-- A câmera do robô (a sequência da DJI, passo a passo), o microfone e o alto-falante dele, o mixer, e o volume (`s1.media.volume`).
-- As medições com o robô ligado, que fixam a janela da trava no S1.
+- O que o robô faz com as caixas: ninguém age sobre elas ainda (é da frente do cérebro).
+- A janela da trava contra a própria voz segue nos 0,8 s do pato. No robô, o nível do microfone voltou ao piso 0,00 s depois do fim do som, e nenhum evento passou (`out/2026-11-14-s1-midia/prova-trava.txt`, no laboratório, 2026-11-15); a janela não foi encurtada.
