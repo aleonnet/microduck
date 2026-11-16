@@ -20,7 +20,9 @@
 //   rms1-venc info                                              as versões que as bibliotecas dizem; não codifica nada
 //   rms1-venc jpeg <quadro.nv12> <larg> <alt> <q 0..10> <voltas> <saida.jpg>
 //   rms1-venc h264 <quadro.nv12> <larg> <alt> <bits/s> <quadros/s> <voltas> <saida.h264>
-// O quadro é NV12 (Y, depois UV intercalado), no tamanho dito. Cada volta codifica o mesmo quadro; sai o tempo de cada etapa.
+// O arquivo é NV12 (Y, depois UV intercalado), no tamanho dito, com um quadro ou com vários em seguida: cada volta codifica o
+// quadro seguinte, e recomeça do primeiro quando o arquivo acaba. Com zero voltas, uma por quadro do arquivo. Sai o tempo de
+// cada quadro (só a chamada do codificador, sem a leitura do arquivo). O JPEG de cada volta vai um atrás do outro na saída.
 #include <dlfcn.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -166,13 +168,19 @@ static void resumo(const char *nome, double *ms, int n, u32 bytes) {
     printf("%s: mediana %.2f ms, pior %.2f ms, %u bytes\n", nome, ms[n / 2], ms[n - 1], bytes);
 }
 
-// O quadro do arquivo copiado para a memória do codificador; devolve o tamanho de um quadro NV12.
-static u32 carregar(const char *caminho, u32 l, u32 a, EwlMemoria *m) {
-    u32 tamanho = l * a * 3 / 2;
+// O arquivo dos quadros, e quantos ele tem.
+static FILE *abrir_quadros(const char *caminho, u32 l, u32 a, int *quantos) {
     FILE *f = fopen(caminho, "rb");
-    if (!f || fread(m->virt, 1, tamanho, f) != tamanho) { fprintf(stderr, "não li um quadro NV12 de %u por %u em %s\n", l, a, caminho); exit(2); }
-    fclose(f);
-    return tamanho;
+    if (!f || fseek(f, 0, SEEK_END)) { fprintf(stderr, "não abri %s\n", caminho); exit(2); }
+    *quantos = (int)(ftell(f) / (long)(l * a * 3 / 2));
+    if (*quantos < 1) { fprintf(stderr, "%s não tem um quadro NV12 de %u por %u\n", caminho, l, a); exit(2); }
+    return f;
+}
+
+// O quadro de número i (dando a volta no arquivo) copiado para a memória do codificador.
+static void carregar(FILE *f, int i, int quantos, u32 l, u32 a, EwlMemoria *m) {
+    u32 tamanho = l * a * 3 / 2;
+    if (fseek(f, (long)(i % quantos) * (long)tamanho, SEEK_SET) || fread(m->virt, 1, tamanho, f) != tamanho) { fprintf(stderr, "não li o quadro %d\n", i); exit(2); }
 }
 
 static void gravar(const char *caminho, const void *dados, u32 n, const char *modo) {
@@ -216,7 +224,9 @@ static int jpeg(int argc, char **argv) {
     if (!ewl) { fprintf(stderr, "EWLInit falhou\n"); return 1; }
     EwlMemoria entra = { 0 }, sai = { 0 };
     if (EWLMallocLinear(ewl, l * a * 3 / 2, &entra) || EWLMallocLinear(ewl, SAIDA_BYTES, &sai)) { fprintf(stderr, "sem memória do codificador\n"); return 1; }
-    carregar(argv[2], l, a, &entra);
+    int quantos;
+    FILE *quadros = abrir_quadros(argv[2], l, a, &quantos);
+    if (voltas == 0) voltas = quantos;
 
     JpegConfig c;
     memset(&c, 0, sizeof c);
@@ -235,7 +245,10 @@ static int jpeg(int argc, char **argv) {
 
     double *ms = calloc(voltas, sizeof *ms);
     JpegSaida s;
+    u32 total = 0;
+    gravar(argv[7], "", 0, "wb");
     for (int i = 0; i < voltas; i++) {
+        carregar(quadros, i, quantos, l, a, &entra);
         JpegQuadro e;
         memset(&e, 0, sizeof e);
         memset(&s, 0, sizeof s);
@@ -250,11 +263,12 @@ static int jpeg(int argc, char **argv) {
         r = Encode(inst, &e, &s);
         ms[i] = agora_ms() - t;
         if (r != 1) { fprintf(stderr, "JpegEncEncode: %d na volta %d\n", r, i); Release(inst); return 1; }
+        gravar(argv[7], sai.virt, s.jfifSize, "ab");
+        total += s.jfifSize;
     }
-    gravar(argv[7], sai.virt, s.jfifSize, "wb");
-    char nome[64];
-    snprintf(nome, sizeof nome, "JPEG de hardware %ux%u nível %u", l, a, q);
-    resumo(nome, ms, voltas, s.jfifSize);
+    char nome[96];
+    snprintf(nome, sizeof nome, "JPEG de hardware %ux%u nível %u, %d quadros, média por quadro", l, a, q, voltas);
+    resumo(nome, ms, voltas, total / voltas);
     Release(inst);
     EWLFreeLinear(ewl, &entra);
     EWLFreeLinear(ewl, &sai);
@@ -290,7 +304,9 @@ static int h264(int argc, char **argv) {
     EwlMemoria entra = { 0 }, sai = { 0 };
     if (EWLMallocLinear(ewl, cheia, &entra) || EWLMallocLinear(ewl, SAIDA_BYTES, &sai)) { fprintf(stderr, "sem memória do codificador\n"); return 1; }
     memset(entra.virt, 0x80, cheia);
-    carregar(argv[2], l, a, &entra);
+    int quantos;
+    FILE *quadros = abrir_quadros(argv[2], l, a, &quantos);
+    if (voltas == 0) voltas = quantos;
 
     H264Config c;
     memset(&c, 0, sizeof c);
@@ -340,6 +356,7 @@ static int h264(int argc, char **argv) {
     u32 total = 0, maior = 0, inteiro = 0;
     for (int i = 0; i < voltas; i++) {
         int intra = i % (int)fps == 0; // um quadro inteiro por segundo: quem entra no meio espera no máximo isso
+        carregar(quadros, i, quantos, l, a, &entra);
         memset(&s, 0, sizeof s);
         e.busLuma = entra.barramento;
         e.busChromaU = entra.barramento + l * a;
