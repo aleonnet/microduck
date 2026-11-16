@@ -20,15 +20,33 @@
 //   rms1-venc info                                              as versões que as bibliotecas dizem; não codifica nada
 //   rms1-venc jpeg <quadro.nv12> <larg> <alt> <q 0..10> <voltas> <saida.jpg>
 //   rms1-venc h264 <quadro.nv12> <larg> <alt> <bits/s> <quadros/s> <voltas> <saida.h264>
+//   rms1-venc servir <socket>                                   o serviço: o rms1-mediad manda o quadro e recebe o codificado
+//
+// O serviço (`servir`). O socket é de domínio Unix, num caminho que os dois lados enxergam: `/data/debian/run/rms1-venc/venc.sock`
+// daqui, `/run/rms1-venc/venc.sock` de dentro do chroot. Um cliente por vez. O quadro é sempre NV12 de 640 por 360.
+//   pedido:   1 byte de comando, 4 de parâmetro, 4 de tamanho (little-endian), e a carga
+//     1  quadro em H.264        carga: o quadro NV12. O primeiro depois de um fluxo novo é inteiro e leva os cabeçalhos; depois,
+//                               um inteiro por segundo
+//     2  quadro em JPEG         parâmetro: o nível, de 0 a 10; carga: o quadro NV12
+//     3  fluxo novo de H.264    parâmetro: a taxa em Mb/s nos 16 bits de baixo (0 = o máximo do chip: o quantizador fixo no
+//                               mínimo) e os quadros por segundo nos 16 de cima; sem carga
+//   resposta: 1 byte de estado (0 = certo), 4 de tamanho, e a carga: o quadro codificado, ou o motivo em texto
+// Com SIGTERM ele termina o fluxo, solta o chip e apaga o socket.
 // O arquivo é NV12 (Y, depois UV intercalado), no tamanho dito, com um quadro ou com vários em seguida: cada volta codifica o
 // quadro seguinte, e recomeça do primeiro quando o arquivo acaba. Com zero voltas, uma por quadro do arquivo. Sai o tempo de
 // cada quadro (só a chamada do codificador, sem a leitura do arquivo). O JPEG de cada volta vai um atrás do outro na saída.
 #include <dlfcn.h>
+#include <errno.h>
+#include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/un.h>
 #include <time.h>
+#include <unistd.h>
 
 typedef uint32_t u32;
 typedef int32_t i32;
@@ -389,11 +407,312 @@ static int h264(int argc, char **argv) {
     return r < 0;
 }
 
+// ---- o serviço ----------------------------------------------------------------------------------------------------------------
+#define S_LARG 640u
+#define S_ALT 360u
+#define S_QUADRO (S_LARG * S_ALT * 3 / 2)
+#define S_QP_MINIMO 10 // o mínimo de fábrica do chip (a "taxa de fábrica" que o modo h264 imprime): a melhor qualidade que ele dá
+
+static volatile sig_atomic_t s_parar = 0;
+static void s_sinal(int n) { (void)n; s_parar = 1; }
+
+// O H.264: a biblioteca, a memória do chip, o codificador e o fluxo em curso.
+static struct {
+    const void *ewl;
+    EwlMemoria entra, sai;
+    void *inst;
+    u32 fps, n;                 // os quadros por segundo do fluxo, e quantos quadros ele já tem
+    uint8_t cab[256];           // os cabeçalhos do fluxo, que vão na frente do primeiro quadro
+    u32 cab_n;
+    i32 (*Init)(const H264Config *, void **);
+    i32 (*GetPre)(void *, H264Entrada *);
+    i32 (*SetPre)(void *, const H264Entrada *);
+    i32 (*GetTaxa)(void *, H264Taxa *);
+    i32 (*SetTaxa)(void *, const H264Taxa *);
+    i32 (*Start)(void *, const H264Quadro *, H264Saida *);
+    i32 (*Encode)(void *, const H264Quadro *, H264Saida *, void *, void *);
+    i32 (*End)(void *, const H264Quadro *, H264Saida *);
+    i32 (*Release)(void *);
+} V;
+
+// O JPEG: o codificador é refeito quando o nível muda.
+static struct {
+    const void *ewl;
+    EwlMemoria entra, sai;
+    void *inst;
+    u32 nivel;
+    i32 (*Init)(const JpegConfig *, void **);
+    i32 (*SetPictureSize)(void *, const JpegConfig *);
+    i32 (*Encode)(void *, const JpegQuadro *, JpegSaida *);
+    i32 (*Release)(void *);
+} J;
+
+static char s_motivo[160];
+static int s_falha(const char *o_que, i32 r) {
+    snprintf(s_motivo, sizeof s_motivo, "%s: %d", o_que, (int)r);
+    return -1;
+}
+
+// Abre a biblioteca e pede ao chip a memória do quadro e a da saída. Devolve a memória por `entra` e `sai`.
+static int s_abrir(const char *nome, u32 cliente, u32 entra_bytes, void **lib, const void **ewl, EwlMemoria *entra, EwlMemoria *sai) {
+    *lib = abrir(nome);
+    const void *(*EWLInit)(EwlInicio *) = achar(*lib, "EWLInit");
+    i32 (*EWLMallocLinear)(const void *, u32, EwlMemoria *) = achar(*lib, "EWLMallocLinear");
+    EwlInicio inicio = { cliente };
+    *ewl = EWLInit(&inicio);
+    if (!*ewl) return s_falha("EWLInit", -1);
+    if (EWLMallocLinear(*ewl, entra_bytes, entra) || EWLMallocLinear(*ewl, SAIDA_BYTES, sai)) return s_falha("a memória do codificador", -1);
+    return 0;
+}
+
+static void s_h264_fechar(void) {
+    if (!V.inst) return;
+    H264Quadro e;
+    H264Saida s;
+    memset(&e, 0, sizeof e);
+    memset(&s, 0, sizeof s);
+    e.pOutBuf = V.sai.virt;
+    e.busOutBuf = V.sai.barramento;
+    e.outBufSize = SAIDA_BYTES;
+    V.End(V.inst, &e, &s);
+    V.Release(V.inst);
+    V.inst = NULL;
+}
+
+// Um fluxo novo de H.264: o codificador é refeito, e o primeiro quadro sai inteiro, com os cabeçalhos na frente.
+static int s_h264_fluxo(u32 mbps, u32 fps) {
+    static void *lib = NULL;
+    if (!lib) {
+        if (s_abrir(VIDEO, 1, S_LARG * ((S_ALT + 15) & ~15u) * 3 / 2, &lib, &V.ewl, &V.entra, &V.sai)) return -1;
+        memset(V.entra.virt, 0x80, S_LARG * ((S_ALT + 15) & ~15u) * 3 / 2);
+        V.Init = achar(lib, "H264EncInit");
+        V.GetPre = achar(lib, "H264EncGetPreProcessing");
+        V.SetPre = achar(lib, "H264EncSetPreProcessing");
+        V.GetTaxa = achar(lib, "H264EncGetRateCtrl");
+        V.SetTaxa = achar(lib, "H264EncSetRateCtrl");
+        V.Start = achar(lib, "H264EncStrmStart");
+        V.Encode = achar(lib, "H264EncStrmEncode");
+        V.End = achar(lib, "H264EncStrmEnd");
+        V.Release = achar(lib, "H264EncRelease");
+    }
+    s_h264_fechar();
+    if (fps < 1 || fps > 60) return s_falha("quadros por segundo fora de 1 a 60", (i32)fps);
+    H264Config c;
+    memset(&c, 0, sizeof c);
+    c.level = 41;
+    c.width = S_LARG;
+    c.height = S_ALT;
+    c.frameRateNum = fps;
+    c.frameRateDenom = 1;
+    c.refFrameAmount = 1;
+    i32 r = V.Init(&c, &V.inst);
+    if (r) { V.inst = NULL; return s_falha("H264EncInit", r); }
+    H264Entrada p;
+    memset(&p, 0, sizeof p);
+    if ((r = V.GetPre(V.inst, &p))) return s_falha("H264EncGetPreProcessing", r);
+    p.origWidth = S_LARG;
+    p.origHeight = S_ALT;
+    p.xOffset = p.yOffset = 0;
+    p.inputType = 1;
+    p.rotation = 0;
+    p.videoStabilization = 0;
+    p.scaledOutput = 0;
+    if ((r = V.SetPre(V.inst, &p))) return s_falha("H264EncSetPreProcessing", r);
+    H264Taxa x;
+    memset(&x, 0, sizeof x);
+    if ((r = V.GetTaxa(V.inst, &x))) return s_falha("H264EncGetRateCtrl", r);
+    x.pictureSkip = 0;
+    x.hrd = 0;
+    x.gopLen = fps;
+    if (mbps == 0) {
+        // O máximo do chip: sem controle de taxa, e o quantizador fixo no mínimo em todo quadro, o primeiro inclusive.
+        x.pictureRc = 0;
+        x.mbRc = 0;
+        x.qpHdr = S_QP_MINIMO;
+        x.qpMin = S_QP_MINIMO;
+    } else {
+        x.pictureRc = 1;
+        x.bitPerSecond = mbps * 1000000u;
+    }
+    if ((r = V.SetTaxa(V.inst, &x))) return s_falha("H264EncSetRateCtrl", r);
+    H264Quadro e;
+    H264Saida s;
+    memset(&e, 0, sizeof e);
+    memset(&s, 0, sizeof s);
+    e.pOutBuf = V.sai.virt;
+    e.busOutBuf = V.sai.barramento;
+    e.outBufSize = SAIDA_BYTES;
+    if ((r = V.Start(V.inst, &e, &s))) return s_falha("H264EncStrmStart", r);
+    if (s.streamSize > sizeof V.cab) return s_falha("os cabeçalhos do fluxo não cabem", (i32)s.streamSize);
+    memcpy(V.cab, V.sai.virt, s.streamSize);
+    V.cab_n = s.streamSize;
+    V.fps = fps;
+    V.n = 0;
+    return 0;
+}
+
+// Um quadro em H.264. A saída fica na memória do chip; o primeiro quadro de um fluxo leva os cabeçalhos em `cab`.
+static int s_h264_quadro(const uint8_t *nv12, const uint8_t **cab, u32 *cab_n, const uint8_t **dados, u32 *n) {
+    if (!V.inst) return s_falha("quadro em H.264 sem um fluxo aberto (o comando 3 vem antes)", 0);
+    memcpy(V.entra.virt, nv12, S_QUADRO);
+    const int inteiro = V.n % V.fps == 0;
+    H264Quadro e;
+    H264Saida s;
+    memset(&e, 0, sizeof e);
+    memset(&s, 0, sizeof s);
+    e.busLuma = V.entra.barramento;
+    e.busChromaU = V.entra.barramento + S_LARG * S_ALT;
+    e.busChromaV = e.busChromaU;
+    e.timeIncrement = V.n ? 1 : 0;
+    e.pOutBuf = V.sai.virt;
+    e.busOutBuf = V.sai.barramento;
+    e.outBufSize = SAIDA_BYTES;
+    e.codingType = inteiro ? 0 : 1;
+    e.ipf = inteiro ? 2 : 3;
+    i32 r = V.Encode(V.inst, &e, &s, NULL, NULL);
+    if (r < 0) return s_falha("H264EncStrmEncode", r);
+    *cab = V.cab;
+    *cab_n = V.n == 0 ? V.cab_n : 0;
+    *dados = (const uint8_t *)V.sai.virt;
+    *n = s.streamSize;
+    V.n++;
+    return 0;
+}
+
+// Um quadro em JPEG, no nível dado.
+static int s_jpeg_quadro(const uint8_t *nv12, u32 nivel, const uint8_t **dados, u32 *n) {
+    static void *lib = NULL;
+    if (!lib) {
+        if (s_abrir(IMAGEM, 3, S_QUADRO, &lib, &J.ewl, &J.entra, &J.sai)) return -1;
+        J.Init = achar(lib, "JpegEncInit");
+        J.SetPictureSize = achar(lib, "JpegEncSetPictureSize");
+        J.Encode = achar(lib, "JpegEncEncode");
+        J.Release = achar(lib, "JpegEncRelease");
+        J.nivel = 99;
+    }
+    if (nivel > 10) return s_falha("nível do JPEG fora de 0 a 10", (i32)nivel);
+    if (!J.inst || J.nivel != nivel) {
+        if (J.inst) J.Release(J.inst);
+        J.inst = NULL;
+        JpegConfig c;
+        memset(&c, 0, sizeof c);
+        c.inputWidth = c.codingWidth = S_LARG;
+        c.inputHeight = c.codingHeight = S_ALT;
+        c.qLevel = nivel;
+        c.frameType = 1;
+        c.unitsType = 1;
+        c.markerType = 1;
+        c.xDensity = c.yDensity = 72;
+        i32 r = J.Init(&c, &J.inst);
+        if (r) { J.inst = NULL; return s_falha("JpegEncInit", r); }
+        if ((r = J.SetPictureSize(J.inst, &c))) { J.Release(J.inst); J.inst = NULL; return s_falha("JpegEncSetPictureSize", r); }
+        J.nivel = nivel;
+    }
+    memcpy(J.entra.virt, nv12, S_QUADRO);
+    JpegQuadro e;
+    JpegSaida s;
+    memset(&e, 0, sizeof e);
+    memset(&s, 0, sizeof s);
+    e.frameHeader = 1;
+    e.busLum = J.entra.barramento;
+    e.busCb = J.entra.barramento + S_LARG * S_ALT;
+    e.busCr = e.busCb;
+    e.pOutBuf = (uint8_t *)J.sai.virt;
+    e.busOutBuf = J.sai.barramento;
+    e.outBufSize = SAIDA_BYTES;
+    i32 r = J.Encode(J.inst, &e, &s);
+    if (r != 1) return s_falha("JpegEncEncode", r);
+    *dados = (const uint8_t *)J.sai.virt;
+    *n = s.jfifSize;
+    return 0;
+}
+
+static int s_ler(int fd, void *b, size_t n) {
+    size_t f = 0;
+    while (f < n) {
+        ssize_t r = read(fd, (char *)b + f, n - f);
+        if (r <= 0) return -1;
+        f += (size_t)r;
+    }
+    return 0;
+}
+
+static int s_escrever(int fd, const void *b, size_t n) {
+    size_t f = 0;
+    while (f < n) {
+        ssize_t r = write(fd, (const char *)b + f, n - f);
+        if (r <= 0) return -1;
+        f += (size_t)r;
+    }
+    return 0;
+}
+
+static u32 s_u32(const uint8_t *b) { return (u32)b[0] | ((u32)b[1] << 8) | ((u32)b[2] << 16) | ((u32)b[3] << 24); }
+
+static int s_responder(int fd, uint8_t estado, const uint8_t *a, u32 an, const uint8_t *b, u32 bn) {
+    const u32 n = an + bn;
+    uint8_t cab[5] = { estado, (uint8_t)n, (uint8_t)(n >> 8), (uint8_t)(n >> 16), (uint8_t)(n >> 24) };
+    if (s_escrever(fd, cab, 5) || (an && s_escrever(fd, a, an)) || (bn && s_escrever(fd, b, bn))) return -1;
+    return 0;
+}
+
+static int servir(const char *caminho) {
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_handler = s_sinal; // sem SA_RESTART: o sinal interrompe a espera, e o laço vê `s_parar`
+    sigaction(SIGTERM, &sa, NULL);
+    sigaction(SIGINT, &sa, NULL);
+    // O cliente que fecha no meio de uma resposta não derruba o serviço. Por `sigaction`: o sistema do robô (Android 4.4) não
+    // exporta `signal`, e a conferência da compilação reprovou a primeira versão por isso.
+    struct sigaction ignora;
+    memset(&ignora, 0, sizeof ignora);
+    ignora.sa_handler = SIG_IGN;
+    sigaction(SIGPIPE, &ignora, NULL);
+    struct sockaddr_un end;
+    memset(&end, 0, sizeof end);
+    end.sun_family = AF_UNIX;
+    if (strlen(caminho) >= sizeof end.sun_path) { fprintf(stderr, "o caminho do socket é longo demais\n"); return 2; }
+    strcpy(end.sun_path, caminho);
+    int s = socket(AF_UNIX, SOCK_STREAM, 0);
+    unlink(caminho);
+    if (s < 0 || bind(s, (struct sockaddr *)&end, sizeof end) || listen(s, 1)) { fprintf(stderr, "não abri o socket %s: %s\n", caminho, strerror(errno)); return 1; }
+    chmod(caminho, 0666);
+    fprintf(stderr, "rms1-venc: servindo em %s\n", caminho);
+    static uint8_t quadro[S_QUADRO];
+    while (!s_parar) {
+        int c = accept(s, NULL, NULL);
+        if (c < 0) continue;
+        uint8_t ped[9];
+        while (!s_parar && s_ler(c, ped, 9) == 0) {
+            const uint8_t comando = ped[0];
+            const u32 param = s_u32(ped + 1), tamanho = s_u32(ped + 5);
+            if (tamanho != 0 && tamanho != S_QUADRO) break; // sem confiar no tamanho, não há como achar o próximo pedido
+            if (tamanho && s_ler(c, quadro, tamanho)) break;
+            const uint8_t *cab = NULL, *dados = NULL;
+            u32 cab_n = 0, n = 0;
+            int r;
+            if (comando == 3) r = s_h264_fluxo(param & 0xffff, param >> 16);
+            else if (comando == 1 && tamanho) r = s_h264_quadro(quadro, &cab, &cab_n, &dados, &n);
+            else if (comando == 2 && tamanho) r = s_jpeg_quadro(quadro, param, &dados, &n);
+            else r = s_falha("pedido desconhecido, ou quadro sem carga", comando);
+            if (r ? s_responder(c, 1, (const uint8_t *)s_motivo, (u32)strlen(s_motivo), NULL, 0) : s_responder(c, 0, cab, cab_n, dados, n)) break;
+        }
+        close(c);
+    }
+    s_h264_fechar();
+    if (J.inst) J.Release(J.inst);
+    close(s);
+    unlink(caminho);
+    fprintf(stderr, "rms1-venc: saiu\n");
+    return 0;
+}
+
 int main(int argc, char **argv) {
     int r = 64;
     if (argc >= 2 && !strcmp(argv[1], "info")) r = info();
     else if (argc >= 2 && !strcmp(argv[1], "jpeg")) r = jpeg(argc, argv);
     else if (argc >= 2 && !strcmp(argv[1], "h264")) r = h264(argc, argv);
-    if (r == 64) fprintf(stderr, "uso: rms1-venc info | jpeg <quadro.nv12> <larg> <alt> <q> <voltas> <saida.jpg> | h264 <quadro.nv12> <larg> <alt> <bits/s> <quadros/s> <voltas> <saida.h264>\n");
+    else if (argc == 3 && !strcmp(argv[1], "servir")) r = servir(argv[2]);
+    if (r == 64) fprintf(stderr, "uso: rms1-venc info | jpeg <quadro.nv12> <larg> <alt> <q> <voltas> <saida.jpg> | h264 <quadro.nv12> <larg> <alt> <bits/s> <quadros/s> <voltas> <saida.h264> | servir <socket>\n");
     return r;
 }
