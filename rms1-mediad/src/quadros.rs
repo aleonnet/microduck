@@ -76,12 +76,24 @@ impl Quadros {
 
     /// Entrega a captura a todos os que esperam: uma cópia, por mais que sejam.
     pub fn entregar(&self, quadro: Quadro) {
+        drop(self.trocar(quadro));
+    }
+
+    /// Entrega o quadro e devolve o que estava guardado antes dele. A fonte que copia um quadro grande a cada entrega
+    /// reaproveita a memória do anterior, se ninguém mais o segura ([`Self::memoria_de`]).
+    pub fn trocar(&self, quadro: Quadro) -> Option<Arc<Quadro>> {
         let mut ultimo = self.0.ultimo.lock().expect("trava dos quadros");
-        ultimo.quadro = Some(Arc::new(quadro));
+        let anterior = ultimo.quadro.replace(Arc::new(quadro));
         ultimo.geracao = ultimo.geracao.wrapping_add(1);
         drop(ultimo);
         self.0.copias.fetch_add(1, Ordering::Relaxed);
         self.0.entregue.notify_all();
+        anterior
+    }
+
+    /// A memória de um quadro que já saiu de cena, para ser escrita de novo: `None` se alguém ainda o lê.
+    pub fn memoria_de(anterior: Option<Arc<Quadro>>) -> Option<Vec<u8>> {
+        Arc::try_unwrap(anterior?).ok().map(|q| q.dados)
     }
 
     pub fn copias(&self) -> u64 {

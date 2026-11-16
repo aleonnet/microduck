@@ -160,6 +160,8 @@ pub struct Estado {
     pub format: Option<String>,
     /// Por que o quadro foi cru, tendo a estação pedido outro formato.
     pub encoder_problem: Option<String>,
+    /// Quantos envios esperaram a estação alcançar: ela estava com dois quadros ainda sem resposta.
+    pub frames_held: u64,
 }
 
 /// As candidatas da resposta do detector, passadas do formato da estação (cinco números por caixa) para o que
@@ -347,6 +349,13 @@ struct Partilha {
 
 /// Quantos quadros esperam a marca da estação, no máximo: acima disto ela parou de marcar, e os mais antigos saem da fila.
 const EM_VOO_MAX: usize = 1024;
+/// Com este tanto de quadros ainda sem a marca da estação, o S1 não manda outro: espera. A estação que não dá conta do ritmo
+/// pedido receberia os quadros empilhados na rede, e a detecção chegaria cada vez mais velha (0,67 s de atraso no robô, em
+/// 2026-11-16, com o ritmo em 22 e um modelo que dá 18 por segundo). Assim o ritmo passa a ser o que ela aguenta, e o quadro
+/// que ela vê é sempre o mais novo: ele é tirado da câmera na hora de sair.
+const EM_VOO_LIMITE: usize = 2;
+/// Um quadro sem marca há mais que isto foi perdido pela estação: deixa de contar, para o envio não parar de vez.
+const SEM_MARCA: Duration = Duration::from_secs(1);
 
 /// Roda até `parar`. `publicar` recebe cada notificação pronta, uma linha JSON.
 pub fn rodar(
@@ -370,6 +379,8 @@ pub fn rodar(
     // O fluxo de H.264 em curso: a taxa, os quadros por segundo, e quando começou. `None`: o próximo quadro começa um.
     let mut fluxo: Option<(u32, u32, Instant)> = None;
     let mut ultimo_problema: Option<String> = None;
+    // Se o envio da vez está esperando a estação alcançar: conta uma vez por envio que esperou.
+    let mut segurando = false;
     let mut pacote = [0u8; 65535];
     let dizer = |por_que: Option<&str>, estacao: Option<IpAddr>, ritmo: Option<f64>| {
         let mut e = estado.lock().expect("estado da percepção");
@@ -477,6 +488,28 @@ pub fn rodar(
             std::thread::sleep((proximo - agora).min(Duration::from_millis(5)));
             continue;
         }
+        // A estação atrás: este envio espera a marca do quadro mais antigo, sem perder a vez (ele sai assim que ela chegar).
+        {
+            let mut p = partilha.lock().expect("partilha");
+            while p
+                .em_voo
+                .front()
+                .is_some_and(|(_, saiu)| agora.duration_since(*saiu) > SEM_MARCA)
+            {
+                p.em_voo.pop_front();
+                p.frente_medida = false;
+            }
+            if p.marcando && p.em_voo.len() >= EM_VOO_LIMITE {
+                drop(p);
+                if !segurando {
+                    segurando = true;
+                    estado.lock().expect("estado da percepção").frames_held += 1;
+                }
+                std::thread::sleep(Duration::from_millis(2));
+                continue;
+            }
+        }
+        segurando = false;
         // O próximo sai um período depois deste, e nunca em rajada para compensar atraso.
         proximo = (proximo + Duration::from_secs_f64(1.0 / ritmo)).max(agora);
         let Some(quadro) = quadros.proximo() else {

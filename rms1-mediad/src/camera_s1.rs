@@ -558,6 +558,8 @@ pub fn rodar_contando<D: Dispositivo>(
     };
     let quadro_inteiro = bytes_nv12(S1_LARGURA, S1_ALTURA);
     let (mut vistos, mut vazios) = (0u32, 0u32);
+    // O quadro que a última entrega tirou de cena: a memória dele serve à cópia seguinte.
+    let mut reserva: Option<std::sync::Arc<Quadro>> = None;
     while !parar.load(Ordering::Relaxed) {
         let (indice, copia) = match camera.quadro(PRAZO_DO_QUADRO_MS) {
             Ok(Some((indice, bytes))) => {
@@ -579,7 +581,12 @@ pub fn rodar_contando<D: Dispositivo>(
                     dizer(Some(motivo));
                     return;
                 } else if quadros.levar_pedido() {
-                    (indice, Some(bytes[..quadro_inteiro].to_vec()))
+                    // A cópia vai para a memória do quadro de duas entregas atrás, se ninguém mais o lê: uma memória nova de
+                    // 1,38 MB a cada quadro custava 341 faltas de página por quadro (medido no robô em 2026-11-16).
+                    let mut dados = Quadros::memoria_de(reserva.take()).unwrap_or_default();
+                    dados.clear();
+                    dados.extend_from_slice(&bytes[..quadro_inteiro]);
+                    (indice, Some(dados))
                 } else {
                     (indice, None)
                 }
@@ -614,7 +621,7 @@ pub fn rodar_contando<D: Dispositivo>(
         }
         anterior = Some(numero);
         if let Some(dados) = copia {
-            quadros.entregar(Quadro {
+            reserva = quadros.trocar(Quadro {
                 largura: S1_LARGURA,
                 altura: S1_ALTURA,
                 formato: NV12,

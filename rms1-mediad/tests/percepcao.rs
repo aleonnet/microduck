@@ -956,3 +956,54 @@ fn a_estacao_que_nao_diz_que_marca_o_quadro_nao_recebe_o_pedido() {
         "o S1 só pede o atendido a quem o anuncia"
     );
 }
+
+#[test]
+fn com_a_estacao_atras_o_s1_espera_a_marca_em_vez_de_empilhar_quadros() {
+    // A estação atende um quadro de cada vez e leva 150 ms em cada um: dá conta de menos de 7 por segundo, e o anúncio pede 20.
+    // Mandando no ritmo pedido, os quadros se empilham na rede e a detecção chega cada vez mais velha (no robô, 0,67 s de
+    // atraso, medidos em 2026-11-16 com o ritmo em 22 e o yolov11s). O S1 só manda outro quadro com menos de dois sem marca.
+    let porta = porta_livre();
+    let estacao = Estacao::subir_com(porta, QUADRO_A_20, SO_UM_VIGIA, r#","atendido":true"#);
+    let p = subir_percepcao(porta, 22.0, Duration::from_secs(3));
+    let servico = Duration::from_millis(150);
+    let fim = Instant::now() + Duration::from_millis(2500);
+    let mut fila = std::collections::VecDeque::new();
+    let (mut n, mut livre_em, mut maior_fila, mut atendidos) = (0u16, Instant::now(), 0usize, 0u32);
+    while Instant::now() < fim {
+        while let Ok(r) = estacao.recebidas.try_recv() {
+            if r.cab.tipo == Tipo::Entrada {
+                fila.push_back((n, r.quando));
+                n += 1;
+            }
+        }
+        maior_fila = maior_fila.max(fila.len());
+        if let Some(&(i, chegou)) = fila.front() {
+            // Um de cada vez: o serviço de um quadro começa quando ele chega e a estação está livre.
+            let pronto = chegou.max(livre_em) + servico;
+            if pronto <= Instant::now() {
+                fila.pop_front();
+                livre_em = pronto;
+                estacao.entregar(1, b"entrega");
+                estacao.atender(i);
+                atendidos += 1;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let e = p.estado.lock().unwrap().clone();
+    assert!(atendidos >= 10, "{atendidos} quadros atendidos em 2,5 s");
+    assert!(
+        maior_fila <= 2,
+        "{maior_fila} quadros sem resposta ao mesmo tempo: o S1 empilhou"
+    );
+    let ida = e.round_trip_ms.expect("a ida e volta medida");
+    assert!(
+        ida < 450.0,
+        "ida e volta de {ida:.0} ms com a estação levando 150 ms por quadro"
+    );
+    assert!(
+        e.frames_held > 0,
+        "o estado diz quantos envios esperaram pela estação"
+    );
+    assert_eq!(e.errors, 0);
+}

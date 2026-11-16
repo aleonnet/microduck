@@ -11,6 +11,12 @@ fn saturar(v: i32) -> u8 {
     v.clamp(0, 255) as u8
 }
 
+/// A coluna de origem de cada coluna da saída, pelo vizinho mais próximo. Feita uma vez por quadro: a mesma conta por pixel
+/// (uma divisão) custava 22,6 ms por quadro no processador do S1, medidos em 2026-11-16.
+fn colunas(l: usize, ls: usize) -> Vec<usize> {
+    (0..ls).map(|x| x * l / ls).collect()
+}
+
 /// Reduz um quadro NV12 de `l` por `a` a RGB de `ls` por `as_`. `None` se o quadro não tem o tamanho que diz ter, ou se
 /// algum tamanho é zero.
 pub fn nv12_para_rgb(nv12: &[u8], l: usize, a: usize, ls: usize, as_: usize) -> Option<Vec<u8>> {
@@ -18,18 +24,19 @@ pub fn nv12_para_rgb(nv12: &[u8], l: usize, a: usize, ls: usize, as_: usize) -> 
         return None;
     }
     let (luma, croma) = nv12.split_at(l * a);
-    let mut rgb = Vec::with_capacity(ls * as_ * 3);
-    for y in 0..as_ {
+    let colunas = colunas(l, ls);
+    let mut rgb = vec![0u8; ls * as_ * 3];
+    for (y, saida) in rgb.chunks_exact_mut(ls * 3).enumerate() {
         let sy = y * a / as_;
-        for x in 0..ls {
-            let sx = x * l / ls;
-            let yy = i32::from(luma[sy * l + sx]) - 16;
-            let par = (sy / 2) * l + (sx & !1);
-            let u = i32::from(croma[par]) - 128;
-            let v = i32::from(croma[par + 1]) - 128;
-            rgb.push(saturar((298 * yy + 409 * v + 128) >> 8));
-            rgb.push(saturar((298 * yy - 100 * u - 208 * v + 128) >> 8));
-            rgb.push(saturar((298 * yy + 516 * u + 128) >> 8));
+        let linha = &luma[sy * l..(sy + 1) * l];
+        let pares = &croma[(sy / 2) * l..(sy / 2 + 1) * l];
+        for (pixel, &sx) in saida.as_chunks_mut::<3>().0.iter_mut().zip(&colunas) {
+            let yy = i32::from(linha[sx]) - 16;
+            let u = i32::from(pares[sx & !1]) - 128;
+            let v = i32::from(pares[(sx & !1) + 1]) - 128;
+            pixel[0] = saturar((298 * yy + 409 * v + 128) >> 8);
+            pixel[1] = saturar((298 * yy - 100 * u - 208 * v + 128) >> 8);
+            pixel[2] = saturar((298 * yy + 516 * u + 128) >> 8);
         }
     }
     Some(rgb)
@@ -50,16 +57,51 @@ pub fn nv12_reduzido(nv12: &[u8], l: usize, a: usize, ls: usize, as_: usize) -> 
         return None;
     }
     let (luma, croma) = nv12.split_at(l * a);
-    let mut saida = Vec::with_capacity(ls * as_ * 3 / 2);
-    for y in 0..as_ {
-        let sy = y * a / as_;
-        saida.extend((0..ls).map(|x| luma[sy * l + x * l / ls]));
+    let mut saida = vec![0u8; ls * as_ * 3 / 2];
+    let (saida_luma, saida_croma) = saida.split_at_mut(ls * as_);
+    if l == 2 * ls && a == 2 * as_ {
+        // O caso do robô, 1280 por 720 para 640 por 360: metade exata. Uma linha sim, outra não, e um pixel sim, outro não;
+        // na croma, um par sim, outro não. Sem tabela nem conta por pixel.
+        for (y, linha) in saida_luma.chunks_exact_mut(ls).enumerate() {
+            let origem = &luma[2 * y * l..(2 * y + 1) * l];
+            for (o, par) in linha.iter_mut().zip(origem.as_chunks::<2>().0) {
+                *o = par[0];
+            }
+        }
+        for (y, linha) in saida_croma.chunks_exact_mut(ls).enumerate() {
+            let origem = &croma[2 * y * l..(2 * y + 1) * l];
+            for (o, quatro) in linha
+                .as_chunks_mut::<2>()
+                .0
+                .iter_mut()
+                .zip(origem.as_chunks::<4>().0)
+            {
+                o[0] = quatro[0];
+                o[1] = quatro[1];
+            }
+        }
+        return Some(saida);
     }
-    for y in (0..as_).step_by(2) {
+    let colunas = colunas(l, ls);
+    for (y, linha) in saida_luma.chunks_exact_mut(ls).enumerate() {
         let sy = y * a / as_;
-        for x in (0..ls).step_by(2) {
-            let par = (sy / 2) * l + ((x * l / ls) & !1);
-            saida.extend([croma[par], croma[par + 1]]);
+        let origem = &luma[sy * l..(sy + 1) * l];
+        for (o, &sx) in linha.iter_mut().zip(&colunas) {
+            *o = origem[sx];
+        }
+    }
+    for (y, linha) in saida_croma.chunks_exact_mut(ls).enumerate() {
+        let sy = 2 * y * a / as_;
+        let origem = &croma[(sy / 2) * l..(sy / 2 + 1) * l];
+        // A croma da saída é a do pixel par de cada par de colunas.
+        for (o, &sx) in linha
+            .as_chunks_mut::<2>()
+            .0
+            .iter_mut()
+            .zip(colunas.iter().step_by(2))
+        {
+            o[0] = origem[sx & !1];
+            o[1] = origem[(sx & !1) + 1];
         }
     }
     Some(saida)
@@ -68,6 +110,81 @@ pub fn nv12_reduzido(nv12: &[u8], l: usize, a: usize, ls: usize, as_: usize) -> 
 #[cfg(test)]
 mod testes {
     use super::*;
+
+    /// As duas reduções como foram escritas primeiro, com a conta por pixel: lentas, e fáceis de conferir a olho. São a
+    /// referência das que rodam.
+    fn rgb_de_referencia(nv12: &[u8], l: usize, a: usize, ls: usize, as_: usize) -> Vec<u8> {
+        let (luma, croma) = nv12.split_at(l * a);
+        let mut rgb = Vec::new();
+        for y in 0..as_ {
+            let sy = y * a / as_;
+            for x in 0..ls {
+                let sx = x * l / ls;
+                let yy = i32::from(luma[sy * l + sx]) - 16;
+                let par = (sy / 2) * l + (sx & !1);
+                let (u, v) = (i32::from(croma[par]) - 128, i32::from(croma[par + 1]) - 128);
+                rgb.push(saturar((298 * yy + 409 * v + 128) >> 8));
+                rgb.push(saturar((298 * yy - 100 * u - 208 * v + 128) >> 8));
+                rgb.push(saturar((298 * yy + 516 * u + 128) >> 8));
+            }
+        }
+        rgb
+    }
+
+    fn nv12_de_referencia(nv12: &[u8], l: usize, a: usize, ls: usize, as_: usize) -> Vec<u8> {
+        let (luma, croma) = nv12.split_at(l * a);
+        let mut saida = Vec::new();
+        for y in 0..as_ {
+            let sy = y * a / as_;
+            saida.extend((0..ls).map(|x| luma[sy * l + x * l / ls]));
+        }
+        for y in (0..as_).step_by(2) {
+            let sy = y * a / as_;
+            for x in (0..ls).step_by(2) {
+                let par = (sy / 2) * l + ((x * l / ls) & !1);
+                saida.extend([croma[par], croma[par + 1]]);
+            }
+        }
+        saida
+    }
+
+    #[test]
+    fn as_reducoes_que_rodam_dao_os_bytes_das_de_referencia_em_todo_tamanho() {
+        // Metade exata (o caso do robô), redução que não é metade, ampliação (a câmera de teste, 256 por 144, vai a 640 por
+        // 360), o mesmo tamanho, e proporções tortas.
+        let casos = [
+            (1280, 720, 640, 360),
+            (1280, 720, 320, 180),
+            (256, 144, 640, 360),
+            (640, 360, 640, 360),
+            (1280, 720, 426, 240),
+            (18, 10, 8, 6),
+            (8, 4, 4, 2),
+            (6, 4, 10, 6),
+        ];
+        for (l, a, ls, as_) in casos {
+            // Bytes que não se repetem em nenhum período pequeno: um erro de linha ou de coluna muda o resultado.
+            let nv12: Vec<u8> = (0..l * a * 3 / 2)
+                .map(|i| ((i * 7919 + i / 251) % 256) as u8)
+                .collect();
+            assert_eq!(
+                nv12_reduzido(&nv12, l, a, ls, as_).unwrap(),
+                nv12_de_referencia(&nv12, l, a, ls, as_),
+                "NV12 de {l} por {a} a {ls} por {as_}"
+            );
+            assert_eq!(
+                nv12_para_rgb(&nv12, l, a, ls, as_).unwrap(),
+                rgb_de_referencia(&nv12, l, a, ls, as_),
+                "RGB de {l} por {a} a {ls} por {as_}"
+            );
+        }
+        // O RGB aceita saída de lado ímpar, e o NV12 não.
+        let nv12: Vec<u8> = (0..18 * 10 * 3 / 2).map(|i| (i * 13 % 256) as u8).collect();
+        assert_eq!(
+            nv12_para_rgb(&nv12, 18, 10, 7, 5).unwrap(),
+            rgb_de_referencia(&nv12, 18, 10, 7, 5)
+        );
+    }
 
     #[test]
     fn o_nv12_reduzido_guarda_a_luma_e_a_croma_do_vizinho_mais_proximo() {

@@ -9,7 +9,7 @@
 
 use std::time::Instant;
 
-use rms1_mediad::reducao::nv12_para_rgb;
+use rms1_mediad::reducao::{nv12_para_rgb, nv12_reduzido};
 use rms1_mediad::servidor::jpeg_de_rgb;
 
 /// A mediana e o maior de uma lista de tempos, em ms.
@@ -38,6 +38,44 @@ fn main() -> anyhow::Result<()> {
     let nv12 = &nv12[..l * alt * 3 / 2];
     let qualidades: Vec<u8> = a[7].split(',').map(str::parse).collect::<Result<_, _>>()?;
     let pasta = a.get(8);
+
+    // O que a percepção faz a cada quadro quando o quadro vai codificado pelo chip: reduzir o NV12 a NV12. E, para comparar,
+    // o que a câmera faz: copiar o quadro inteiro para uma memória nova.
+    let mut tempos = Vec::with_capacity(voltas);
+    let mut pequeno = Vec::new();
+    for _ in 0..voltas {
+        let t = Instant::now();
+        pequeno = nv12_reduzido(nv12, l, alt, ls, as_)
+            .ok_or_else(|| anyhow::anyhow!("a redução a NV12 recusou o quadro"))?;
+        tempos.push(t.elapsed().as_secs_f64() * 1000.0);
+    }
+    let (mediana, pior) = resumo(tempos);
+    println!(
+        "reduzir {l}x{alt} NV12 a {ls}x{as_} NV12: mediana {mediana:.2} ms, pior {pior:.2} ms, {} bytes",
+        pequeno.len()
+    );
+    let mut tempos = Vec::with_capacity(voltas);
+    for _ in 0..voltas {
+        let t = Instant::now();
+        let copia = nv12.to_vec();
+        tempos.push(t.elapsed().as_secs_f64() * 1000.0);
+        std::hint::black_box(&copia);
+    }
+    let (mediana, pior) = resumo(tempos);
+    println!(
+        "copiar o quadro de {l}x{alt} para memória nova: mediana {mediana:.2} ms, pior {pior:.2} ms, {} bytes",
+        nv12.len()
+    );
+    let mut reuso = vec![0u8; nv12.len()];
+    let mut tempos = Vec::with_capacity(voltas);
+    for _ in 0..voltas {
+        let t = Instant::now();
+        reuso.copy_from_slice(nv12);
+        tempos.push(t.elapsed().as_secs_f64() * 1000.0);
+        std::hint::black_box(&reuso);
+    }
+    let (mediana, pior) = resumo(tempos);
+    println!("copiar o quadro para a mesma memória: mediana {mediana:.2} ms, pior {pior:.2} ms");
 
     let mut tempos = Vec::with_capacity(voltas);
     let mut rgb = Vec::new();
