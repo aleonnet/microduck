@@ -33,6 +33,7 @@ case "$*" in
   # dia, ou com folga. Guardadas as sobras, sobra espaço.
   *espaco_do_robo*)
     if tem disco_mudo; then :
+    elif tem espaco_do_dono; then printf 'espaco_do_robo\r\n/dev/block/platform/comip-mmc.1/by-name/userdata\r\n                       1015704    901024     98296  91%% /data\r\n'
     elif tem pouco_espaco && [ ! -f "$DEFEITO.sobras_guardadas" ]; then printf 'espaco_do_robo\r\n/dev/block/platform/comip-mmc.1/by-name/userdata\r\n                       1015704    997904      1416 100%% /data\r\n'
     else printf 'espaco_do_robo\r\n/dev/block/platform/comip-mmc.1/by-name/userdata\r\n                       1015704    828268    171052  83%% /data\r\n'; fi ;;
   # A pasta das gravações, no formato do `busybox ls -l` pelo `adb shell`, com as cores: uma gravação esquecida, até ser apagada.
@@ -208,9 +209,15 @@ atualiza outro_toml nao
 echo "--- o rms1d no ar sem as somas: atualiza"
 atualiza vivo_sem_somas sim
 
+echo "--- o caso do dono em 2026-11-15: 95 MB livres, sem gravação esquecida. Uma gravação inteira (64 MiB) cabe: a ativação segue"
+echo espaco_do_dono > "$DEFEITO"
+: > "$ADB_LOG"
+if scripts/s1/rms1d-bench.sh up > "$T/up.txt" 2>&1 && grep -q "Robô pronto" "$T/up.txt" && ! grep -q "MB livres" "$T/up.txt"; then echo "95 MB livres: a ativação seguiu até o Robô pronto"; else echo "95 MB LIVRES, E A ATIVAÇÃO PAROU:"; tail -3 "$T/up.txt"; falhou=1; fi
+esperar_copia
+
 echo "--- adendo 2: o disco do robô com pouco espaço, sem gravação esquecida: para antes de tocar na DJI"
 echo pouco_espaco > "$DEFEITO"
-reprova "pouco espaço" "o disco do robô tem 1 MB livres, e a gravação precisa de 128" "stop dji_monitor"
+reprova "pouco espaço" "o disco do robô tem 1 MB livres, e a gravação precisa de 64" "stop dji_monitor"
 if grep -qE "pkill|push " "$ADB_LOG"; then echo "POUCO ESPAÇO, E MEXEU NO ROBÔ:"; grep -E "pkill|push " "$ADB_LOG" | head -3; falhou=1; else echo "pouco espaço: nada parado nem enviado"; fi
 echo "--- adendo 2: o robô não diz o espaço do disco: para, sem subir às cegas"
 echo disco_mudo > "$DEFEITO"

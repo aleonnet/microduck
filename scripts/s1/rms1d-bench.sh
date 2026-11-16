@@ -161,11 +161,12 @@ guardar_sobras() { # guardar_sobras <linhas "<bytes> <nome>">
     done <<< "$1"
 }
 
-# O disco do robô, antes de parar qualquer coisa: a gravação precisa de duas vezes o limite dela livre (uma inteira ainda cabe
-# depois de uma esquecida). Com pouco espaço e gravações esquecidas, elas são guardadas primeiro, à vista. Sem resposta, para.
+# O disco do robô, antes de parar qualquer coisa: a gravação precisa do limite dela livre, que é o máximo que ela escreve. Eram
+# duas vezes o limite, por margem e sem medida, e isso recusou uma ativação com 95 MB livres e nenhuma gravação esquecida (o
+# dono, 2026-11-15). Com pouco espaço e gravações esquecidas, elas são guardadas primeiro, à vista. Sem resposta, para.
 SOBRAS=""
 conferir_disco() { # conferir_disco <limite da gravação em MiB>
-    local precisa=$(($1 * 2 * 1024)) livre
+    local precisa=$(($1 * 1024)) livre
     livre="$(espaco_livre_kib)"
     [ -n "$livre" ] || falha "não consegui ler o espaço do disco do robô; nada foi parado nele. Tente de novo"
     SOBRAS="$(sobras_no_robo)"
