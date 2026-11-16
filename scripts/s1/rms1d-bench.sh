@@ -4,7 +4,8 @@
 # real não comande: quem manda é a página, `robotctl` e `rms1d-roteiro`, pelo socket. Só muda o corpo, em `deploy/s1/rms1d.toml`.
 #
 #   scripts/s1/rms1d-bench.sh up       acesso, envia, para só o que `[dji] parar` manda, sobe o `rms1d` e, se o arquivo tem
-#                                      `[midia]`, o `rms1-mediad` (câmera, microfone e alto-falante). Nada se move. De
+#                                      `[midia]`, o `rms1-mediad` (câmera, microfone e alto-falante) e, com `[midia] venc`,
+#                                      antes dele o `rms1-venc` (o codificador de hardware do robô). Nada se move. De
 #                                      novo: o anterior sai primeiro, e a gravação dele fica em $S1_OUT. Cada binário só
 #                                      vai ao robô se mudou.
 #   scripts/s1/rms1d-bench.sh volta    guarda a gravação, reinicia o robô e confere que a DJI voltou.
@@ -35,6 +36,10 @@ BIN="${S1_BIN:-target/armv7-unknown-linux-gnueabihf/release/rms1d}"
 # A mídia: o `rms1-mediad` no robô, e a porta e o socket por onde este Mac fala com ele.
 BIN_MIDIA="${S1_BIN_MIDIA:-target/armv7-unknown-linux-gnueabihf/release/rms1-mediad}"
 TCP_MIDIA="${S1_PORTA_MIDIA:-9011}"
+# O codificador de hardware do S1: o `rms1-venc` é do lado Android do robô (usa as bibliotecas de lá), fora do chroot. Sai de
+# `sh rms1-mediad/venc/compila.sh`, que precisa do Android NDK e da cópia do sistema do robô, e por isso não é compilado aqui.
+BIN_VENC="${S1_BIN_VENC:-target/s1-android/rms1-venc}"
+VENC_NO_ROBO=/data/rms1-venc
 SOCKET_MIDIA="$ESTADO/media.sock"
 # Os sons do robô: os da própria DJI (`/system/audio/sound`), sob os nomes do contrato, uma pasta por som.
 SONS="chirp:media_sound_demo_recognize_success greet:power_on alarm:media_sound_demo_attacked inquire:media_sound_demo_scanning peck:sleeping coo:media_sound_demo_gimbal_rotate"
@@ -207,6 +212,25 @@ socket_da_midia() {
     python3 -I -c 'import sys,tomllib; c=tomllib.load(open(sys.argv[1],"rb")); print(c["midia"].get("socket","/run/rms1-mediad/media.sock") if "midia" in c else "")' "$TOML"
 }
 
+# O socket do `rms1-venc`, de dentro do chroot, lido de `[midia] venc` no arquivo; vazio se o arquivo não pede o codificador.
+socket_do_venc() {
+    python3 -I -c 'import sys,tomllib; c=tomllib.load(open(sys.argv[1],"rb")); print((c.get("midia") or {}).get("venc",""))' "$TOML"
+}
+
+# O codificador de hardware, antes do `rms1-mediad`, que é o cliente dele. Uma falha aqui não impede nada: avisa, e o quadro
+# vai cru à estação, como antes de existir o codificador.
+subir_venc() { # subir_venc <socket, de dentro do chroot>
+    if [ ! -s "$BIN_VENC" ]; then
+        diz "AVISO: o arquivo pede o codificador de hardware, e não achei $BIN_VENC (sh rms1-mediad/venc/compila.sh). O quadro vai cru à estação."
+        return 0
+    fi
+    "${A[@]}" push "$BIN_VENC" "$VENC_NO_ROBO" >/dev/null
+    "${A[@]}" shell "chmod 755 $VENC_NO_ROBO; mkdir -p $CHROOT$(dirname "$1"); ($BB setsid $BB nohup $VENC_NO_ROBO servir $CHROOT$1 </dev/null >/data/rms1-venc.log 2>&1 &); $BB sleep 1; $BB pidof rms1-venc >/dev/null && echo venc_no_ar || { echo VENC_MORTO; $BB tail -3 /data/rms1-venc.log; }" | tr -d '\r' | tee "$OUT/venc.txt"
+    if ! grep -q venc_no_ar "$OUT/venc.txt"; then
+        diz "AVISO: o codificador de hardware não subiu ($(grep -v VENC_MORTO "$OUT/venc.txt" | tail -1)). O quadro vai cru à estação."
+    fi
+}
+
 # A página até o `rms1d` do robô: a porta do `adb` e a ponte do socket. Com mídia, o mesmo até o `rms1-mediad`.
 ligar_ponte() {
     "${A[@]}" forward "tcp:$TCP" "localfilesystem:$CHROOT/run/robotd.sock" >/dev/null
@@ -231,6 +255,9 @@ subir_midia() { # subir_midia <socket no robô> <1 se o binário do robô já é
     pasta="$(dirname "$1")"
     if [ -z "$2" ]; then "${A[@]}" push "$BIN_MIDIA" "$CHROOT/opt/robot/bin/rms1-mediad" >/dev/null; fi
     "${A[@]}" push deploy/s1/asound.conf "$CHROOT/etc/asound.conf" >/dev/null
+    local venc
+    venc="$(socket_do_venc)"
+    if [ -n "$venc" ]; then subir_venc "$venc"; fi
     local copia=""
     for par in $SONS; do
         copia="$copia $BB mkdir -p $CHROOT/var/lib/robot/sounds/${par%%:*}; $BB cp -f /system/audio/sound/${par#*:}.wav $CHROOT/var/lib/robot/sounds/${par%%:*}/;"
@@ -281,7 +308,7 @@ up() {
     # O que o robô tem. O busybox dele tem `sha256sum` (lido na cópia completa, `arvores/system/system/xbin/busybox`); o
     # `adb shell` do Android 4.4 termina a linha com `\r`.
     local estado soma_bin soma_toml vivo=""
-    estado="$("${A[@]}" shell "echo estado_do_robo; $BB pidof rms1d >/dev/null && echo RMS1D_VIVO; $BB pidof rms1-mediad >/dev/null && echo MIDIA_VIVA; $BB sha256sum $CHROOT/opt/robot/bin/rms1d $CHROOT/etc/robot/rms1d.toml $CHROOT/opt/robot/bin/rms1-mediad 2>/dev/null" | tr -d '\r' || true)"
+    estado="$("${A[@]}" shell "echo estado_do_robo; $BB pidof rms1d >/dev/null && echo RMS1D_VIVO; $BB pidof rms1-mediad >/dev/null && echo MIDIA_VIVA; $BB pidof rms1-venc >/dev/null && echo VENC_VIVO; $BB sha256sum $CHROOT/opt/robot/bin/rms1d $CHROOT/etc/robot/rms1d.toml $CHROOT/opt/robot/bin/rms1-mediad 2>/dev/null" | tr -d '\r' || true)"
     echo "$estado"
     case "$estado" in *RMS1D_VIVO*) vivo=1 ;; esac
     soma_bin="$(printf '%s\n' "$estado" | grep '/opt/robot/bin/rms1d$' | cut -d' ' -f1 || true)"
@@ -295,6 +322,11 @@ up() {
         if [ "$(printf '%s\n' "$estado" | grep '/opt/robot/bin/rms1-mediad$' | cut -d' ' -f1 || true)" = "$(shasum -a 256 "$BIN_MIDIA" | cut -d' ' -f1)" ]; then mesma_midia=1; fi
         case "$estado" in *MIDIA_VIVA*) ;; *) midia_ok="" ;; esac
         [ -n "$mesma_midia" ] || midia_ok=""
+        # Com o codificador no arquivo e compilado neste Mac, "o mesmo no ar" inclui o `rms1-venc` vivo: sem ele o quadro iria
+        # cru à estação, e só conectar esconderia isso.
+        if [ -n "$(socket_do_venc)" ] && [ -s "$BIN_VENC" ]; then
+            case "$estado" in *VENC_VIVO*) ;; *) midia_ok="" ;; esac
+        fi
     fi
     if [ -n "$vivo" ] && [ -n "$mesmo_bin" ] && [ -n "$mesmo_toml" ] && [ -n "$midia_ok" ]; then
         passo "Conectando ao robô"
@@ -312,6 +344,8 @@ up() {
     # faria o novo morrer em silêncio, com o velho respondendo no lugar dele.
     # O `rms1-mediad` de antes sai primeiro, por SIGTERM: é assim que ele desliga o fluxo da câmera antes de soltá-la.
     confere sem_midia "o rms1-mediad anterior não saiu; desligue o robô na chave" "$BB pkill -TERM rms1-mediad; $BB sleep 1; $BB pidof rms1-mediad >/dev/null && { $BB sleep 2; $BB pidof rms1-mediad >/dev/null && echo MIDIA_ANTIGA_VIVA || echo sem_midia; } || echo sem_midia"
+    # O `rms1-venc` de antes sai depois do `rms1-mediad`, que é o cliente dele: por SIGTERM ele termina o fluxo e solta o chip.
+    "${A[@]}" shell "$BB pkill -TERM rms1-venc; $BB sleep 1" >/dev/null 2>&1 || true
     confere sem_rms1d "o rms1d anterior não saiu; desligue o robô na chave" "$BB pkill -TERM rms1d; $BB sleep 1; $BB pidof rms1d >/dev/null && echo RMS1D_ANTIGO_VIVO || echo sem_rms1d"
     separar_gravacao "robo-$(date +%Y%m%d-%H%M%S)"
     if [ -z "$mesmo_bin" ]; then "${A[@]}" push "$BIN" "$CHROOT/opt/robot/bin/rms1d" >/dev/null; fi
@@ -382,7 +416,7 @@ volta() {
     esperar_copia
     passo "parando o rms1d no robô"
     # SIGTERM: o `rms1d` para o robô e descarrega a gravação antes de sair; o `rms1-mediad` desliga o fluxo da câmera.
-    "${A[@]}" shell "$BB pkill -TERM rms1-mediad; $BB pkill -TERM rms1d; $BB sleep 1" || true
+    "${A[@]}" shell "$BB pkill -TERM rms1-mediad; $BB pkill -TERM rms1d; $BB sleep 1; $BB pkill -TERM rms1-venc" || true
     guardar_gravacao "robo-$(date +%H%M%S)"
     if [ -f "$ESTADO/ponte.pid" ]; then kill "$(cat "$ESTADO/ponte.pid")" 2>/dev/null || true; fi
     if [ -f "$ESTADO/ponte-midia.pid" ]; then kill "$(cat "$ESTADO/ponte-midia.pid")" 2>/dev/null || true; fi
