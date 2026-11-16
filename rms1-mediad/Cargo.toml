@@ -19,6 +19,11 @@ path = "src/main.rs"
 name = "rms1-mediad-prova"
 path = "src/bin/rms1-mediad-prova.rs"
 
+# Mede o custo de reduzir e de codificar o quadro, com as funções do serviço; roda no Mac e no S1.
+[[bin]]
+name = "rms1-mediad-codifica"
+path = "src/bin/rms1-mediad-codifica.rs"
+
 [dependencies]
 anyhow = "1"
 clap = { workspace = true, features = ["derive"] }
