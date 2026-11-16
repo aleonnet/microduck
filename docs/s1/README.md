@@ -6,6 +6,8 @@ So the S1's documents live in this tree, with the same folders the duck's docume
 
 **Where it stands:** nothing is proven yet through `duckctl udp-pad` or the browser. Start at [`project/s1-bringup.md`](project/s1-bringup.md#state-today-2026-11-01-code-at-27d4b6e-no-robot-touched-in-this-revision).
 
+**Estado em 2026-11-16, pelo caminho novo (`rms1d` e `rms1-mediad`):** o chassi e a torre respondem no robô e no simulador; a câmera, o microfone e o alto-falante têm um dono só, o `rms1-mediad`; e a câmera vai ao vivo à estação Hailo, codificada pelo chip do S1, com a detecção de volta em 65 ms. As medidas ficam no laboratório, em `~/Development/RoboMaster-S1/out/2026-11-14-s1-midia/adendo/README.md`. A frase acima, de 2026-11-01, vale para o caminho antigo, do `s1d`.
+
 One page owns a mechanism, and the others link to it. When two pages disagree, the one that does not own it is the bug; when the code and a page disagree, the page is the bug.
 
 | Page | What it owns |
