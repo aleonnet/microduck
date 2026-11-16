@@ -12,7 +12,7 @@
 //!
 //! Sem estação, nada é mandado, e `s1.media.status` diz por quê. Conexão caída reconecta com espera crescente.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream, UdpSocket};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -333,7 +333,20 @@ struct Partilha {
     medido: bool,
     /// A estação recusou uma mensagem: se o quadro vai em H.264, o fluxo recomeça por um quadro inteiro.
     recusou: bool,
+    /// Nesta conexão a estação marca cada quadro atendido ([`Tipo::Atendido`]): a ida e volta casa pelo número do quadro, e
+    /// não pelo último envio, que erra quando a resposta de um quadro chega depois do envio do seguinte.
+    marcando: bool,
+    /// Os quadros mandados e ainda não marcados atendidos, do mais antigo ao mais novo: o número de cada um, contado desde o
+    /// pedido, e quando saiu.
+    em_voo: VecDeque<(u16, Instant)>,
+    /// O número do próximo quadro a sair.
+    proximo: u16,
+    /// Se o quadro da frente da fila já teve a ida e volta medida: só a primeira entrega dele mede.
+    frente_medida: bool,
 }
+
+/// Quantos quadros esperam a marca da estação, no máximo: acima disto ela parou de marcar, e os mais antigos saem da fila.
+const EM_VOO_MAX: usize = 1024;
 
 /// Roda até `parar`. `publicar` recebe cada notificação pronta, uma linha JSON.
 pub fn rodar(
@@ -423,6 +436,21 @@ pub fn rodar(
                     // A espera só volta ao mínimo depois de a conexão provar que serve ([`QUADROS_DE_PROVA`]): a estação
                     // que recusa o robô aceita a conexão, responde com erro e fecha.
                     na_conexao = 0;
+                    // A estação que sabe marcar cada quadro atendido recebe o pedido, uma vez, antes do primeiro quadro: os
+                    // dois lados contam os quadros a partir dele. A que não diz que sabe fecharia a conexão ao recebê-lo.
+                    {
+                        let mut p = partilha.lock().expect("partilha");
+                        let pedido = Cabecalho {
+                            tipo: Tipo::Atendido,
+                            canal: 0,
+                            tamanho: 0,
+                        };
+                        p.marcando = p.anuncio.as_ref().is_some_and(|a| a.atendido)
+                            && (&c).write_all(&pedido.bytes()).is_ok();
+                        p.em_voo.clear();
+                        p.proximo = 0;
+                        p.frente_medida = false;
+                    }
                     if let Ok(leitura) = c.try_clone() {
                         let (p, e, pub_) = (partilha.clone(), estado.clone(), publicar.clone());
                         std::thread::spawn(move || ler_entregas(leitura, p, e, pub_));
@@ -541,8 +569,18 @@ pub fn rodar(
         let (c, _) = conexao.as_mut().expect("conexão aberta acima");
         {
             let mut p = partilha.lock().expect("partilha");
-            p.ultimo_envio = Some((Instant::now(), quadro.largura, quadro.altura));
+            let agora = Instant::now();
+            p.ultimo_envio = Some((agora, quadro.largura, quadro.altura));
             p.medido = false;
+            if p.marcando {
+                if p.em_voo.len() >= EM_VOO_MAX {
+                    p.em_voo.pop_front();
+                    p.frente_medida = false;
+                }
+                let n = p.proximo;
+                p.em_voo.push_back((n, agora));
+                p.proximo = n.wrapping_add(1);
+            }
         }
         if c.write_all(&cab.bytes())
             .and_then(|()| c.write_all(&rgb))
@@ -629,25 +667,38 @@ fn ler_entregas(
         }
         match c.tipo {
             Tipo::Entrega => {
-                let (funcao, envio, medir) = {
+                let (funcao, tamanho, saiu_em) = {
                     let mut p = partilha.lock().expect("partilha");
                     let f = p
                         .anuncio
                         .as_ref()
                         .and_then(|a| a.funcoes.iter().find(|f| f.n == c.canal).cloned());
-                    // A primeira entrega depois de um envio é a medida da ida e volta desse quadro.
-                    let medir = !std::mem::replace(&mut p.medido, true);
-                    (f, p.ultimo_envio, medir)
+                    // A ida e volta é a da primeira entrega de um quadro. Com a estação marcando cada quadro atendido, a
+                    // entrega é do quadro mais antigo ainda não marcado; sem isso, supõe-se que é do último envio.
+                    let saiu_em = if p.marcando {
+                        match p.em_voo.front().map(|(_, quando)| *quando) {
+                            Some(quando) if !p.frente_medida => {
+                                p.frente_medida = true;
+                                Some(quando)
+                            }
+                            _ => None,
+                        }
+                    } else if !std::mem::replace(&mut p.medido, true) {
+                        p.ultimo_envio.map(|(quando, _, _)| quando)
+                    } else {
+                        None
+                    };
+                    (f, p.ultimo_envio.map(|(_, l, a)| (l, a)), saiu_em)
                 };
                 // Entrega de uma função que o anúncio não tem, ou sem quadro mandado: não há como ler.
-                let (Some(funcao), Some((quando, l, a))) = (funcao, envio) else {
+                let (Some(funcao), Some((l, a))) = (funcao, tamanho) else {
                     estado.lock().expect("estado da percepção").errors += 1;
                     continue;
                 };
                 let levou = {
                     let mut e = estado.lock().expect("estado da percepção");
                     *e.deliveries.entry(funcao.id.clone()).or_default() += 1;
-                    if medir {
+                    if let Some(quando) = saiu_em {
                         e.round_trip_ms = Some(quando.elapsed().as_secs_f64() * 1000.0);
                     }
                     e.round_trip_ms.unwrap_or(0.0)
@@ -688,6 +739,14 @@ fn ler_entregas(
                 partilha.lock().expect("partilha").recusou = true;
             }
             // A estação não manda entradas nem medidas ao S1.
+            Tipo::Atendido => {
+                // O quadro marcado sai da fila, com os mais antigos que ele: as entregas seguintes são do quadro seguinte.
+                let mut p = partilha.lock().expect("partilha");
+                if let Some(i) = p.em_voo.iter().position(|(n, _)| *n == c.canal) {
+                    p.em_voo.drain(..=i);
+                    p.frente_medida = false;
+                }
+            }
             Tipo::Entrada | Tipo::EntradaH264 | Tipo::EntradaJpeg | Tipo::Medida => {
                 estado.lock().expect("estado da percepção").errors += 1
             }

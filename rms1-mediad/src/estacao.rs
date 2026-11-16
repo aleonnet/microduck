@@ -25,6 +25,9 @@ pub struct Anuncio {
     pub painel: u16,
     pub entradas: Vec<Entrada>,
     pub funcoes: Vec<Funcao>,
+    /// A estação sabe marcar cada quadro atendido ([`Tipo::Atendido`]). Uma estação de antes disto não diz nada.
+    #[serde(default)]
+    pub atendido: bool,
 }
 
 /// Uma entrada que a estação quer receber.
@@ -96,6 +99,11 @@ pub enum Tipo {
     EntradaH264 = 9,
     /// Do S1 para a estação: idem, em JPEG.
     EntradaJpeg = 10,
+    /// O quadro atendido. Do S1 para a estação, uma vez ao ligar, sem carga: o pedido para ela marcar cada quadro. Da estação
+    /// para o S1, depois de tudo o que ela tinha a mandar sobre um quadro: o canal leva o número do quadro, contado desde o
+    /// pedido, nos 16 bits de baixo. É por ele que o S1 sabe de qual quadro é cada entrega. Só entre um S1 e uma estação que
+    /// se entendem: a estação diz no anúncio (`atendido`) que sabe marcar, e só marca para o S1 que pediu.
+    Atendido = 11,
 }
 
 /// Os 8 bytes antes de cada carga: versão, tipo, canal e tamanho, little-endian.
@@ -134,6 +142,7 @@ impl Cabecalho {
             7 => Tipo::Medida,
             9 => Tipo::EntradaH264,
             10 => Tipo::EntradaJpeg,
+            11 => Tipo::Atendido,
             t => return Err(format!("tipo de mensagem desconhecido: {t}")),
         };
         let tamanho = u32::from_le_bytes([b[4], b[5], b[6], b[7]]);

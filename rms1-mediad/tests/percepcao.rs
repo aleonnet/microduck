@@ -109,9 +109,14 @@ struct Estacao {
 impl Estacao {
     /// Sobe a estação de mentira anunciando `funcoes` e `entradas` para a porta `porta_anuncio`, de 127.0.0.1.
     fn subir(porta_anuncio: u16, entradas: &str, funcoes: &str) -> Self {
+        Self::subir_com(porta_anuncio, entradas, funcoes, "")
+    }
+
+    /// O mesmo, com mais campos no anúncio (`extra` começa pela vírgula).
+    fn subir_com(porta_anuncio: u16, entradas: &str, funcoes: &str, extra: &str) -> Self {
         let tcp = TcpListener::bind("127.0.0.1:0").unwrap();
         let anuncio = format!(
-            r#"{{"rms1_hailo":2,"quadros":{},"painel":8080,"entradas":{entradas},"funcoes":{funcoes}}}"#,
+            r#"{{"rms1_hailo":2,"quadros":{},"painel":8080,"entradas":{entradas},"funcoes":{funcoes}{extra}}}"#,
             tcp.local_addr().unwrap().port()
         );
         let anunciando = Arc::new(AtomicBool::new(true));
@@ -172,6 +177,20 @@ impl Estacao {
         };
         c.write_all(&cab.bytes()).unwrap();
         c.write_all(carga).unwrap();
+    }
+
+    /// A estação marca o quadro `n` atendido.
+    fn atender(&self, n: u16) {
+        let mut c = self.conexao.lock().unwrap();
+        let cab = Cabecalho {
+            tipo: Tipo::Atendido,
+            canal: n,
+            tamanho: 0,
+        };
+        c.as_mut()
+            .expect("o S1 ligado")
+            .write_all(&cab.bytes())
+            .unwrap();
     }
 
     /// A estação recusa uma mensagem do canal dado, com o motivo.
@@ -819,5 +838,121 @@ fn a_estacao_que_recusa_faz_o_fluxo_recomecar_no_maximo_uma_vez_por_segundo() {
     assert!(
         (2..=4).contains(&n),
         "{n} fluxos em 2,3 s de recusas: recomeça, e no máximo um por segundo"
+    );
+}
+
+// ---- a ida e volta casada pelo número do quadro (2026-11-16) ---------------------------------------------------------------
+
+const SO_UM_VIGIA: &str = r#"[{"n":1,"id":"vigia","entrega":"mascara"}]"#;
+const QUADRO_A_20: &str = r#"[{"n":1,"id":"quadro_continuo","formato":"rgb_640x360","ritmo":20}]"#;
+
+/// A estação responde a cada quadro `atraso` depois de ele chegar, por `por`: `com_entrega` diz se o quadro de número dado tem
+/// entrega, e todos são marcados atendidos. Devolve quantas vezes o S1 pediu o atendido, e quantos quadros foram respondidos.
+fn responder_atrasado(
+    estacao: &Estacao,
+    atraso: Duration,
+    por: Duration,
+    com_entrega: impl Fn(u16) -> bool,
+) -> (usize, u16) {
+    let fim = Instant::now() + por;
+    let mut fila = std::collections::VecDeque::new();
+    let (mut pedidos, mut n, mut respondidos) = (0usize, 0u16, 0u16);
+    while Instant::now() < fim {
+        while let Ok(r) = estacao.recebidas.try_recv() {
+            match r.cab.tipo {
+                Tipo::Atendido => pedidos += 1,
+                Tipo::Entrada => {
+                    fila.push_back((n, r.quando + atraso));
+                    n += 1;
+                }
+                _ => {}
+            }
+        }
+        while fila
+            .front()
+            .is_some_and(|(_, quando)| *quando <= Instant::now())
+        {
+            let (i, _) = fila.pop_front().unwrap();
+            if com_entrega(i) {
+                estacao.entregar(1, b"entrega");
+            }
+            estacao.atender(i);
+            respondidos += 1;
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    (pedidos, respondidos)
+}
+
+#[test]
+fn com_o_quadro_marcado_atendido_a_ida_e_volta_e_a_do_quadro_e_nao_a_do_ultimo_envio() {
+    // A 20 quadros por segundo sai um quadro a cada 50 ms, e a estação responde 150 ms depois de cada um: a resposta de um
+    // quadro chega depois de mais dois ou três envios. Casada com o último envio, a medida daria menos de 50 ms.
+    let porta = porta_livre();
+    let estacao = Estacao::subir_com(porta, QUADRO_A_20, SO_UM_VIGIA, r#","atendido":true"#);
+    let p = subir_percepcao(porta, 22.0, Duration::from_secs(3));
+    let (pedidos, respondidos) = responder_atrasado(
+        &estacao,
+        Duration::from_millis(150),
+        Duration::from_millis(1800),
+        |_| true,
+    );
+    assert_eq!(pedidos, 1, "o S1 pede o atendido uma vez, ao ligar");
+    assert!(
+        respondidos >= 15,
+        "{respondidos} quadros respondidos em 1,8 s"
+    );
+    let e = p.estado.lock().unwrap().clone();
+    let ida = e.round_trip_ms.expect("a ida e volta medida");
+    assert!(
+        (120.0..260.0).contains(&ida),
+        "ida e volta de {ida:.1} ms, com a resposta 150 ms depois de cada quadro"
+    );
+    assert_eq!(e.errors, 0, "marcar o quadro atendido não é erro");
+}
+
+#[test]
+fn o_quadro_sem_entrega_nenhuma_nao_desloca_a_medida_dos_seguintes() {
+    // Metade dos quadros não tem entrega (a função não rodou neles): são só marcados atendidos. A medida dos outros segue a
+    // do próprio quadro.
+    let porta = porta_livre();
+    let estacao = Estacao::subir_com(porta, QUADRO_A_20, SO_UM_VIGIA, r#","atendido":true"#);
+    let p = subir_percepcao(porta, 22.0, Duration::from_secs(3));
+    let (_, respondidos) = responder_atrasado(
+        &estacao,
+        Duration::from_millis(150),
+        Duration::from_millis(1800),
+        |i| i % 2 == 0,
+    );
+    let e = p.estado.lock().unwrap().clone();
+    let entregas = e.deliveries.get("vigia").copied().unwrap_or(0);
+    assert!(
+        entregas >= 7 && entregas <= u64::from(respondidos / 2 + 1),
+        "{entregas} entregas em {respondidos} quadros"
+    );
+    let ida = e.round_trip_ms.expect("a ida e volta medida");
+    assert!(
+        (120.0..260.0).contains(&ida),
+        "ida e volta de {ida:.1} ms, com entrega em um quadro sim e outro não"
+    );
+}
+
+#[test]
+fn a_estacao_que_nao_diz_que_marca_o_quadro_nao_recebe_o_pedido() {
+    // Uma estação de antes disto fecharia a conexão ao receber um tipo de mensagem que não conhece.
+    let porta = porta_livre();
+    let estacao = Estacao::subir(porta, QUADRO_A_20, SO_UM_VIGIA);
+    let _p = subir_percepcao(porta, 22.0, Duration::from_secs(3));
+    let chegadas = estacao.colher(Duration::from_millis(600));
+    assert!(
+        chegadas
+            .iter()
+            .filter(|r| r.cab.tipo == Tipo::Entrada)
+            .count()
+            >= 4
+    );
+    assert!(
+        chegadas.iter().all(|r| r.cab.tipo != Tipo::Atendido),
+        "o S1 só pede o atendido a quem o anuncia"
     );
 }
