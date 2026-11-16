@@ -1,6 +1,6 @@
 # `rms1-mediad` no robô: a ativação, o que fica onde, e a volta
 
-Status: em uso no S1 desde 2026-11-15. O desenho do serviço está em [`../design/rms1-mediad.md`](../design/rms1-mediad.md); a prova de cada peça no robô, com os números, está no laboratório (`~/Development/RoboMaster-S1`), em `out/2026-11-14-s1-midia/` e no runbook `docs/2026-11-14-2355-runbook-midia-s1.md`.
+Status: em uso no S1 desde 2026-11-15. O desenho do serviço está em [`../design/rms1-mediad.md`](../design/rms1-mediad.md); a prova de cada peça no robô, com os números, está no laboratório (`~/Development/RoboMaster-S1`), em `out/2026-11-14-s1-midia/` e no runbook `docs/2026-11-16-1515-runbook-midia-s1.md`.
 
 ## O que a ativação faz pela mídia
 
