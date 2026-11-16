@@ -18,3 +18,4 @@ pub mod quadros;
 pub mod reducao;
 pub mod servidor;
 pub mod trava;
+pub mod venc;

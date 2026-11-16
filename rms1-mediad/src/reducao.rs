@@ -35,9 +35,68 @@ pub fn nv12_para_rgb(nv12: &[u8], l: usize, a: usize, ls: usize, as_: usize) -> 
     Some(rgb)
 }
 
+/// Reduz um quadro NV12 de `l` por `a` a NV12 de `ls` por `as_`, pelo vizinho mais próximo, sem passar por RGB: é o que o
+/// codificador de hardware do S1 recebe. A croma do quadro reduzido é a do pixel de cada par, como em [`nv12_para_rgb`], e
+/// fica com a metade da resolução do quadro reduzido, que é o que o NV12 guarda. `None` como lá.
+pub fn nv12_reduzido(nv12: &[u8], l: usize, a: usize, ls: usize, as_: usize) -> Option<Vec<u8>> {
+    if l == 0
+        || a == 0
+        || ls == 0
+        || as_ == 0
+        || !ls.is_multiple_of(2)
+        || !as_.is_multiple_of(2)
+        || nv12.len() != l * a * 3 / 2
+    {
+        return None;
+    }
+    let (luma, croma) = nv12.split_at(l * a);
+    let mut saida = Vec::with_capacity(ls * as_ * 3 / 2);
+    for y in 0..as_ {
+        let sy = y * a / as_;
+        saida.extend((0..ls).map(|x| luma[sy * l + x * l / ls]));
+    }
+    for y in (0..as_).step_by(2) {
+        let sy = y * a / as_;
+        for x in (0..ls).step_by(2) {
+            let par = (sy / 2) * l + ((x * l / ls) & !1);
+            saida.extend([croma[par], croma[par + 1]]);
+        }
+    }
+    Some(saida)
+}
+
 #[cfg(test)]
 mod testes {
     use super::*;
+
+    #[test]
+    fn o_nv12_reduzido_guarda_a_luma_e_a_croma_do_vizinho_mais_proximo() {
+        // 8 por 4 para 4 por 2: a luma de cada segundo pixel de cada segunda linha, e um par de croma por bloco de 2 por 2.
+        let luma: Vec<u8> = (0..32).collect();
+        let croma: Vec<u8> = (100..116).collect();
+        let nv12 = [luma, croma].concat();
+        let r = nv12_reduzido(&nv12, 8, 4, 4, 2).unwrap();
+        assert_eq!(r.len(), 4 * 2 * 3 / 2);
+        assert_eq!(&r[..8], &[0, 2, 4, 6, 16, 18, 20, 22]);
+        // A linha de croma 0 do quadro de origem, nos pares das colunas 0 e 4.
+        assert_eq!(&r[8..], &[100, 101, 104, 105]);
+        // No mesmo tamanho, sai o mesmo quadro.
+        assert_eq!(nv12_reduzido(&nv12, 8, 4, 8, 4).unwrap(), nv12);
+        // Tamanho errado, ou saída de lado ímpar, não tem resposta.
+        assert!(nv12_reduzido(&nv12[1..], 8, 4, 4, 2).is_none());
+        assert!(nv12_reduzido(&nv12, 8, 4, 3, 2).is_none());
+    }
+
+    #[test]
+    fn o_quadro_reduzido_em_nv12_da_o_mesmo_rgb_onde_a_croma_e_lisa() {
+        // Com a croma igual no quadro todo, reduzir em NV12 e converter dá o mesmo que converter reduzindo: a diferença
+        // entre os dois caminhos é só a resolução da croma.
+        let mut nv12: Vec<u8> = (0..64u32).map(|i| (i * 3 + 20) as u8).collect();
+        nv12.extend(std::iter::repeat_n([90u8, 200u8], 16).flatten());
+        let direto = nv12_para_rgb(&nv12, 8, 8, 4, 4).unwrap();
+        let pequeno = nv12_reduzido(&nv12, 8, 8, 4, 4).unwrap();
+        assert_eq!(nv12_para_rgb(&pequeno, 4, 4, 4, 4).unwrap(), direto);
+    }
 
     /// Um quadro NV12 de uma cor só.
     fn liso(l: usize, a: usize, y: u8, u: u8, v: u8) -> Vec<u8> {

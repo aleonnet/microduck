@@ -77,6 +77,8 @@ pub struct Servico {
     /// O mixer do robô, se o serviço é o dono dele, e o volume em uso, de 0 a 100.
     pub mixer: Mutex<Option<Box<dyn Controles>>>,
     pub volume: AtomicU32,
+    /// O codificador de hardware do robô, se há um (`[midia] venc`): a imagem da tela sai dele.
+    pub venc: std::sync::OnceLock<Arc<Mutex<crate::venc::Venc>>>,
 }
 
 impl Servico {
@@ -95,6 +97,7 @@ impl Servico {
             nivel_do_microfone: Arc::default(),
             mixer: Mutex::new(None),
             volume: AtomicU32::new(u32::from(crate::mixer::VOLUME_DE_PARTIDA)),
+            venc: std::sync::OnceLock::new(),
         })
     }
 
@@ -404,51 +407,74 @@ where
             let (l, a) = (quadro.largura as usize, quadro.altura as usize);
             let ls = pedida.clamp(PREVIA_MINIMA, l.max(PREVIA_MINIMA)) & !1;
             let as_ = ((ls * a / l.max(1)) & !1).max(2);
-            let q = quadro.clone();
-            let rgb = match q.formato {
-                "NV12" => {
-                    tokio::task::spawn_blocking(move || {
-                        crate::reducao::nv12_para_rgb(&q.dados, l, a, ls, as_)
-                    })
-                    .await?
-                }
-                _ => None,
-            };
-            let Some(rgb) = rgb else {
-                let texto = "the frame is not NV12 of the size it claims";
-                escrever(
-                    &mut escrita,
-                    &erro(pedido.id, proto::code::INTERNAL_ERROR, texto),
-                )
-                .await?;
-                continue;
-            };
             // Em JPEG, se pedido: é o que cabe no Wi-Fi do robô a um ritmo de vídeo.
             let quer = |o: &str| pedido.params.as_ref().map(|p| p[o].clone());
             let em_jpeg = quer("format")
                 .and_then(|f| f.as_str().map(|f| f.eq_ignore_ascii_case("jpeg")))
                 == Some(true);
-            let (formato, rgb) = if em_jpeg {
-                let qualidade = quer("quality")
-                    .and_then(|q| q.as_u64())
-                    .unwrap_or(JPEG_QUALIDADE)
-                    .clamp(JPEG_FAIXA.0, JPEG_FAIXA.1) as u8;
-                let codificado = tokio::task::spawn_blocking(move || {
-                    jpeg_de_rgb(&rgb, ls as u32, as_ as u32, qualidade)
+            let qualidade = quer("quality")
+                .and_then(|q| q.as_u64())
+                .unwrap_or(JPEG_QUALIDADE)
+                .clamp(JPEG_FAIXA.0, JPEG_FAIXA.1) as u8;
+            // Pelo chip do robô, quando ele está ligado e o tamanho pedido é o dele: 2 ms, contra mais de 100 por software
+            // (reduzir a RGB e codificar). A qualidade pedida, de 30 a 90, vira o nível do chip, de 3 a 9. Se o chip não
+            // responde, a imagem sai por software, como antes.
+            let mut do_chip = None;
+            if let (true, Some(venc), "NV12", true) = (
+                em_jpeg,
+                s.venc.get().cloned(),
+                quadro.formato,
+                (ls, as_) == (crate::venc::LARGURA, crate::venc::ALTURA),
+            ) {
+                let q = quadro.clone();
+                do_chip = tokio::task::spawn_blocking(move || {
+                    let nv12 = crate::reducao::nv12_reduzido(&q.dados, l, a, ls, as_)?;
+                    let nivel = u32::from(qualidade).div_ceil(10).min(10);
+                    venc.lock().expect("codificador").jpeg(&nv12, nivel).ok()
                 })
                 .await?;
-                let Some(jpeg) = codificado else {
-                    let texto = "the frame would not encode as JPEG";
-                    escrever(
-                        &mut escrita,
-                        &erro(pedido.id, proto::code::INTERNAL_ERROR, texto),
-                    )
-                    .await?;
-                    continue;
-                };
-                ("JPEG", jpeg)
-            } else {
-                ("RGB", rgb)
+            }
+            let (formato, rgb) = match do_chip {
+                Some(jpeg) => ("JPEG", jpeg),
+                None => {
+                    let q = quadro.clone();
+                    let rgb = match q.formato {
+                        "NV12" => {
+                            tokio::task::spawn_blocking(move || {
+                                crate::reducao::nv12_para_rgb(&q.dados, l, a, ls, as_)
+                            })
+                            .await?
+                        }
+                        _ => None,
+                    };
+                    let Some(rgb) = rgb else {
+                        let texto = "the frame is not NV12 of the size it claims";
+                        escrever(
+                            &mut escrita,
+                            &erro(pedido.id, proto::code::INTERNAL_ERROR, texto),
+                        )
+                        .await?;
+                        continue;
+                    };
+                    if em_jpeg {
+                        let codificado = tokio::task::spawn_blocking(move || {
+                            jpeg_de_rgb(&rgb, ls as u32, as_ as u32, qualidade)
+                        })
+                        .await?;
+                        let Some(jpeg) = codificado else {
+                            let texto = "the frame would not encode as JPEG";
+                            escrever(
+                                &mut escrita,
+                                &erro(pedido.id, proto::code::INTERNAL_ERROR, texto),
+                            )
+                            .await?;
+                            continue;
+                        };
+                        ("JPEG", jpeg)
+                    } else {
+                        ("RGB", rgb)
+                    }
+                }
             };
             let cabecalho = proto::MediaFrameHeader {
                 width: ls as u32,

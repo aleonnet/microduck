@@ -174,6 +174,19 @@ impl Estacao {
         c.write_all(carga).unwrap();
     }
 
+    /// A estação recusa uma mensagem do canal dado, com o motivo.
+    fn recusar(&self, canal: u16, motivo: &str) {
+        let mut c = self.conexao.lock().unwrap();
+        let c = c.as_mut().expect("o S1 ligado");
+        let cab = Cabecalho {
+            tipo: Tipo::Erro,
+            canal,
+            tamanho: motivo.len() as u32,
+        };
+        c.write_all(&cab.bytes()).unwrap();
+        c.write_all(motivo.as_bytes()).unwrap();
+    }
+
     /// Tudo o que chega em `por`.
     fn colher(&self, por: Duration) -> Vec<Recebida> {
         let fim = Instant::now() + por;
@@ -209,8 +222,18 @@ fn porta_livre() -> u16 {
         .port()
 }
 
-/// Sobe a percepção com a câmera de teste (256 por 144) e o teto de ritmo dado.
+/// Sobe a percepção com a câmera de teste (256 por 144) e o teto de ritmo dado, sem codificador.
 fn subir_percepcao(porta_anuncio: u16, ritmo_max: f64, anuncio_vale: Duration) -> Percepcao {
+    subir_percepcao_com(porta_anuncio, ritmo_max, anuncio_vale, None)
+}
+
+/// O mesmo, com o codificador de hardware do robô (ou o de mentira) no socket dado.
+fn subir_percepcao_com(
+    porta_anuncio: u16,
+    ritmo_max: f64,
+    anuncio_vale: Duration,
+    venc: Option<std::path::PathBuf>,
+) -> Percepcao {
     let quadros = Quadros::default();
     let parar = Arc::new(AtomicBool::new(false));
     let (q, p) = (quadros.clone(), parar.clone());
@@ -223,6 +246,7 @@ fn subir_percepcao(porta_anuncio: u16, ritmo_max: f64, anuncio_vale: Duration) -
             porta_anuncio,
             ritmo_max,
             anuncio_vale,
+            venc: venc.map(|caminho| Arc::new(Mutex::new(rms1_mediad::venc::Venc::novo(caminho)))),
         };
         percepcao::rodar(
             cfg,
@@ -564,5 +588,236 @@ fn caixas_com_classe_viram_media_detections_com_o_nome() {
         percepcao::deteccoes_com_classe(&entrega, 1280, 720, 0.35)
             .unwrap_err()
             .contains("51")
+    );
+}
+
+// ---- o quadro codificado pelo chip do S1 (adendo 4, 2026-11-16) ------------------------------------------------------------
+
+/// O `rms1-venc` de mentira: fala o protocolo do socket e anota cada pedido (comando, parâmetro, bytes da carga). O quadro
+/// em H.264 volta começando pelo código de início, e o JPEG por `FF D8`, como os de verdade.
+struct VencFalso {
+    caminho: std::path::PathBuf,
+    pedidos: Arc<Mutex<Vec<(u8, u32, usize)>>>,
+}
+
+impl VencFalso {
+    fn subir() -> Self {
+        use std::os::unix::net::UnixListener;
+        static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let caminho = std::env::temp_dir().join(format!(
+            "rms1-venc-{}-{}.sock",
+            std::process::id(),
+            N.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_file(&caminho);
+        let ouvinte = UnixListener::bind(&caminho).unwrap();
+        let pedidos = Arc::new(Mutex::new(Vec::new()));
+        let anotados = pedidos.clone();
+        std::thread::spawn(move || {
+            for c in ouvinte.incoming() {
+                let Ok(mut c) = c else { return };
+                let mut cab = [0u8; 9];
+                while c.read_exact(&mut cab).is_ok() {
+                    let param = u32::from_le_bytes([cab[1], cab[2], cab[3], cab[4]]);
+                    let tamanho = u32::from_le_bytes([cab[5], cab[6], cab[7], cab[8]]) as usize;
+                    let mut carga = vec![0u8; tamanho];
+                    if c.read_exact(&mut carga).is_err() {
+                        break;
+                    }
+                    anotados.lock().unwrap().push((cab[0], param, tamanho));
+                    let resposta: Vec<u8> = match cab[0] {
+                        1 => [&[0u8, 0, 0, 1][..], b"quadro em h264"].concat(),
+                        2 => [&[0xffu8, 0xd8][..], b"quadro em jpeg"].concat(),
+                        _ => Vec::new(),
+                    };
+                    let mut r = vec![0u8];
+                    r.extend((resposta.len() as u32).to_le_bytes());
+                    r.extend(resposta);
+                    if c.write_all(&r).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        Self { caminho, pedidos }
+    }
+
+    fn pedidos(&self) -> Vec<(u8, u32, usize)> {
+        self.pedidos.lock().unwrap().clone()
+    }
+}
+
+const SO_O_DETECTOR: &str = r#"[{"n":1,"id":"detector","entrega":"caixas","leitor":"nanodet_v8","publica":"media.detections","nota":0.35,"iou":0.5}]"#;
+
+#[test]
+fn com_o_codificador_o_quadro_vai_em_h264_e_o_fluxo_comeca_com_a_conexao() {
+    let porta = porta_livre();
+    let venc = VencFalso::subir();
+    let estacao = Estacao::subir(
+        porta,
+        r#"[{"n":1,"id":"quadro_continuo","formato":"rgb_640x360","prefere":"h264","qualidade":0,"ritmo":10}]"#,
+        SO_O_DETECTOR,
+    );
+    let p = subir_percepcao_com(
+        porta,
+        22.0,
+        Duration::from_secs(3),
+        Some(venc.caminho.clone()),
+    );
+    let quadros: Vec<Recebida> = estacao
+        .colher(Duration::from_millis(900))
+        .into_iter()
+        .filter(|r| r.cab.tipo != Tipo::Medida)
+        .collect();
+    assert!(quadros.len() >= 4, "{} quadros em 0,9 s", quadros.len());
+    assert!(
+        quadros.iter().all(|r| r.cab.tipo == Tipo::EntradaH264
+            && r.cab.canal == 1
+            && r.carga.starts_with(&[0, 0, 0, 1])),
+        "todo quadro vai no tipo de H.264, na entrada do anúncio, como o codificador o fez"
+    );
+    let pedidos = venc.pedidos();
+    // O primeiro pedido é o fluxo novo, com a taxa (0, o máximo do chip) e o ritmo (10) do anúncio; depois, só quadros.
+    assert_eq!(
+        pedidos[0],
+        (3, 10 << 16, 0),
+        "{:?}",
+        &pedidos[..3.min(pedidos.len())]
+    );
+    assert!(
+        pedidos[1..].iter().all(|x| *x == (1, 0, 640 * 360 * 3 / 2)),
+        "{:?}",
+        &pedidos[..4.min(pedidos.len())]
+    );
+    let e = p.estado.lock().unwrap().clone();
+    assert_eq!(
+        (e.format.as_deref(), e.encoder_problem),
+        (Some("h264"), None)
+    );
+}
+
+#[test]
+fn em_jpeg_o_nivel_e_o_do_anuncio_e_nao_ha_fluxo() {
+    let porta = porta_livre();
+    let venc = VencFalso::subir();
+    let estacao = Estacao::subir(
+        porta,
+        r#"[{"n":1,"id":"quadro_continuo","formato":"rgb_640x360","prefere":"jpeg","qualidade":9,"ritmo":10}]"#,
+        SO_O_DETECTOR,
+    );
+    let p = subir_percepcao_com(
+        porta,
+        22.0,
+        Duration::from_secs(3),
+        Some(venc.caminho.clone()),
+    );
+    let quadros: Vec<Recebida> = estacao
+        .colher(Duration::from_millis(700))
+        .into_iter()
+        .filter(|r| r.cab.tipo != Tipo::Medida)
+        .collect();
+    assert!(quadros.len() >= 3);
+    assert!(
+        quadros
+            .iter()
+            .all(|r| r.cab.tipo == Tipo::EntradaJpeg && r.carga.starts_with(&[0xff, 0xd8]))
+    );
+    assert!(
+        venc.pedidos()
+            .iter()
+            .all(|x| *x == (2, 9, 640 * 360 * 3 / 2)),
+        "{:?}",
+        venc.pedidos().first()
+    );
+    assert_eq!(p.estado.lock().unwrap().format.as_deref(), Some("jpeg"));
+}
+
+#[test]
+fn sem_o_codificador_no_ar_o_quadro_vai_cru_e_o_estado_diz_o_motivo() {
+    let porta = porta_livre();
+    let estacao = Estacao::subir(
+        porta,
+        r#"[{"n":1,"id":"quadro_continuo","formato":"rgb_640x360","prefere":"h264","qualidade":0,"ritmo":10}]"#,
+        SO_O_DETECTOR,
+    );
+    // O arquivo dá o socket, e ninguém o atende: o robô sem o rms1-venc no ar.
+    let ausente =
+        std::env::temp_dir().join(format!("rms1-venc-ausente-{}.sock", std::process::id()));
+    let p = subir_percepcao_com(porta, 22.0, Duration::from_secs(3), Some(ausente));
+    let quadros: Vec<Recebida> = estacao
+        .colher(Duration::from_millis(700))
+        .into_iter()
+        .filter(|r| r.cab.tipo != Tipo::Medida)
+        .collect();
+    assert!(quadros.len() >= 3);
+    assert!(
+        quadros
+            .iter()
+            .all(|r| r.cab.tipo == Tipo::Entrada && r.carga.len() == 640 * 360 * 3)
+    );
+    let e = p.estado.lock().unwrap().clone();
+    assert_eq!(e.format.as_deref(), Some("rgb"));
+    assert!(
+        e.encoder_problem
+            .as_deref()
+            .is_some_and(|m| m.contains("rms1-venc")),
+        "{:?}",
+        e.encoder_problem
+    );
+
+    // E o S1 sem codificador no arquivo, com a estação pedindo H.264: cru, e o motivo é outro.
+    let porta = porta_livre();
+    let estacao = Estacao::subir(
+        porta,
+        r#"[{"n":1,"id":"quadro_continuo","formato":"rgb_640x360","prefere":"h264","qualidade":0,"ritmo":10}]"#,
+        SO_O_DETECTOR,
+    );
+    let p = subir_percepcao(porta, 22.0, Duration::from_secs(3));
+    let quadros = estacao.colher(Duration::from_millis(500));
+    assert!(quadros.iter().any(|r| r.cab.tipo == Tipo::Entrada));
+    assert!(
+        p.estado
+            .lock()
+            .unwrap()
+            .encoder_problem
+            .as_deref()
+            .is_some_and(|m| m.contains("[midia] venc"))
+    );
+}
+
+#[test]
+fn a_estacao_que_recusa_faz_o_fluxo_recomecar_no_maximo_uma_vez_por_segundo() {
+    let porta = porta_livre();
+    let venc = VencFalso::subir();
+    let estacao = Estacao::subir(
+        porta,
+        r#"[{"n":1,"id":"quadro_continuo","formato":"rgb_640x360","prefere":"h264","qualidade":4,"ritmo":20}]"#,
+        SO_O_DETECTOR,
+    );
+    let _p = subir_percepcao_com(
+        porta,
+        22.0,
+        Duration::from_secs(3),
+        Some(venc.caminho.clone()),
+    );
+    estacao.colher(Duration::from_millis(400));
+    let fluxos = |v: &VencFalso| v.pedidos().iter().filter(|x| x.0 == 3).count();
+    assert_eq!(fluxos(&venc), 1, "um fluxo só enquanto a estação aceita");
+    assert_eq!(
+        venc.pedidos()[0],
+        (3, 4 | (20 << 16), 0),
+        "a taxa e o ritmo do anúncio"
+    );
+    // A estação recusa em todo quadro, por 2,3 s: o fluxo recomeça, mas não a cada quadro.
+    let fim = Instant::now() + Duration::from_millis(2300);
+    while Instant::now() < fim {
+        estacao.recusar(1, "o quadro em h264 não abriu");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    estacao.colher(Duration::from_millis(100));
+    let n = fluxos(&venc);
+    assert!(
+        (2..=4).contains(&n),
+        "{n} fluxos em 2,3 s de recusas: recomeça, e no máximo um por segundo"
     );
 }

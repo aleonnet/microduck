@@ -36,6 +36,11 @@ pub struct Entrada {
     pub formato: String,
     /// Quantas por segundo: o maior ritmo entre as funções ligadas que a usam.
     pub ritmo: Option<f64>,
+    /// Em que formato a estação prefere o quadro: `cru`, `h264` ou `jpeg` (os dois últimos feitos pelo chip do S1). Uma
+    /// estação de antes disto não diz nada, e recebe o cru.
+    pub prefere: Option<String>,
+    /// A qualidade do formato preferido: a taxa do H.264 em Mb/s (0 = o máximo do chip), ou o nível do JPEG (0 a 10).
+    pub qualidade: Option<f64>,
 }
 
 /// Uma função ligada na estação.
@@ -87,6 +92,10 @@ pub enum Tipo {
     Erro = 3,
     /// Do S1 para a estação, uma vez por segundo: a ida e volta e os quadros por segundo, em JSON.
     Medida = 7,
+    /// Do S1 para a estação: como [`Tipo::Entrada`], com o quadro em H.264, feito pelo chip do S1. Um quadro por mensagem.
+    EntradaH264 = 9,
+    /// Do S1 para a estação: idem, em JPEG.
+    EntradaJpeg = 10,
 }
 
 /// Os 8 bytes antes de cada carga: versão, tipo, canal e tamanho, little-endian.
@@ -117,12 +126,14 @@ impl Cabecalho {
                 b[0]
             ));
         }
-        // Os tipos 4 a 6 só existem dentro da estação: chegando ao S1, são erro de quem mandou.
+        // Os tipos 4 a 6 e o 8 só existem dentro da estação: chegando ao S1, são erro de quem mandou.
         let tipo = match b[1] {
             1 => Tipo::Entrada,
             2 => Tipo::Entrega,
             3 => Tipo::Erro,
             7 => Tipo::Medida,
+            9 => Tipo::EntradaH264,
+            10 => Tipo::EntradaJpeg,
             t => return Err(format!("tipo de mensagem desconhecido: {t}")),
         };
         let tamanho = u32::from_le_bytes([b[4], b[5], b[6], b[7]]);

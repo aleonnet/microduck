@@ -24,6 +24,7 @@ use duck_detect::{Detection, Letterbox};
 use crate::estacao::{self, Anuncio, Cabecalho, Tipo};
 use crate::quadros::Quadros;
 use crate::reducao;
+use crate::venc::Venc;
 
 /// O quadro que vai à estação: 640 por 360, o tamanho que o pipeline fixa para a percepção (e o que a DJI entrega à dela).
 pub const QUADRO_LARGURA: usize = 640;
@@ -135,6 +136,8 @@ pub struct Config {
     pub ritmo_max: f64,
     /// Sem anúncio por este tempo, a estação saiu.
     pub anuncio_vale: Duration,
+    /// O codificador de hardware do S1, se o robô o tem (`[midia] venc`). Sem ele, o quadro vai cru.
+    pub venc: Option<Arc<Mutex<Venc>>>,
 }
 
 /// O que a percepção está fazendo: é o que `s1.media.status` mostra.
@@ -153,6 +156,10 @@ pub struct Estado {
     pub errors: u64,
     /// Do envio do quadro à primeira entrega dele, em milissegundos.
     pub round_trip_ms: Option<f64>,
+    /// Em que formato o último quadro foi: `rgb`, `h264` ou `jpeg`.
+    pub format: Option<String>,
+    /// Por que o quadro foi cru, tendo a estação pedido outro formato.
+    pub encoder_problem: Option<String>,
 }
 
 /// As candidatas da resposta do detector, passadas do formato da estação (cinco números por caixa) para o que
@@ -324,6 +331,8 @@ struct Partilha {
     ultimo_envio: Option<(Instant, u32, u32)>,
     /// Se a ida e volta desse quadro já foi medida: só a primeira entrega dele mede.
     medido: bool,
+    /// A estação recusou uma mensagem: se o quadro vai em H.264, o fluxo recomeça por um quadro inteiro.
+    recusou: bool,
 }
 
 /// Roda até `parar`. `publicar` recebe cada notificação pronta, uma linha JSON.
@@ -345,6 +354,9 @@ pub fn rodar(
     let mut proximo = Instant::now();
     let mut medida_em = Instant::now();
     let mut no_segundo = 0u32;
+    // O fluxo de H.264 em curso: a taxa, os quadros por segundo, e quando começou. `None`: o próximo quadro começa um.
+    let mut fluxo: Option<(u32, u32, Instant)> = None;
+    let mut ultimo_problema: Option<String> = None;
     let mut pacote = [0u8; 65535];
     let dizer = |por_que: Option<&str>, estacao: Option<IpAddr>, ritmo: Option<f64>| {
         let mut e = estado.lock().expect("estado da percepção");
@@ -383,6 +395,7 @@ pub fn rodar(
             .entradas
             .iter()
             .find(|e| e.id == "quadro_continuo" && e.formato == "rgb_640x360")
+            .cloned()
         else {
             dizer(
                 Some("a estação não pede nenhuma entrada que este S1 manda"),
@@ -415,6 +428,7 @@ pub fn rodar(
                         std::thread::spawn(move || ler_entregas(leitura, p, e, pub_));
                     }
                     conexao = Some((c, alvo));
+                    fluxo = None; // numa conexão nova, o H.264 começa por um quadro inteiro
                     proximo = agora;
                     tracing::info!(%alvo, "ligado à estação Hailo");
                 }
@@ -441,22 +455,86 @@ pub fn rodar(
             dizer(Some("a câmera não entregou quadro"), Some(ip), Some(ritmo));
             continue;
         };
-        let Some(rgb) = reducao::nv12_para_rgb(
-            &quadro.dados,
-            quadro.largura as usize,
-            quadro.altura as usize,
-            QUADRO_LARGURA,
-            QUADRO_ALTURA,
-        ) else {
-            dizer(
-                Some("o quadro da câmera não é NV12 do tamanho que diz"),
-                Some(ip),
-                Some(ritmo),
-            );
-            continue;
+        // O formato que a estação prefere, se o chip do S1 o faz; senão o cru, com o motivo à vista.
+        let (l, a) = (quadro.largura as usize, quadro.altura as usize);
+        let mut problema = None;
+        let mut codificado = None;
+        let prefere = entrada.prefere.as_deref().unwrap_or("cru");
+        if let (Some(venc), true) = (&cfg.venc, prefere == "h264" || prefere == "jpeg") {
+            let qualidade = entrada.qualidade.unwrap_or(0.0).clamp(0.0, 100.0) as u32;
+            match reducao::nv12_reduzido(&quadro.dados, l, a, QUADRO_LARGURA, QUADRO_ALTURA) {
+                None => {
+                    problema = Some("o quadro da câmera não é NV12 do tamanho que diz".to_owned())
+                }
+                Some(nv12) => {
+                    let mut v = venc.lock().expect("codificador");
+                    let feito = if prefere == "jpeg" {
+                        fluxo = None;
+                        v.jpeg(&nv12, qualidade).map(|d| (Tipo::EntradaJpeg, d))
+                    } else {
+                        // O fluxo recomeça quando a taxa ou o ritmo mudam, e quando a estação recusou algo: ela pode ter
+                        // perdido o fio. No máximo uma vez por segundo, para um modelo que falha em todo quadro não
+                        // custar um quadro inteiro por quadro.
+                        let recusou =
+                            std::mem::take(&mut partilha.lock().expect("partilha").recusou);
+                        let este = (qualidade, ritmo.round().max(1.0) as u32);
+                        let velho = fluxo.is_some_and(|(q, r, quando): (u32, u32, Instant)| {
+                            (q, r) == este
+                                && !(recusou && quando.elapsed() >= Duration::from_secs(1))
+                        });
+                        let aberto = if velho {
+                            Ok(())
+                        } else {
+                            v.fluxo(este.0, este.1)
+                                .map(|()| fluxo = Some((este.0, este.1, Instant::now())))
+                        };
+                        aberto
+                            .and_then(|()| v.h264(&nv12))
+                            .map(|d| (Tipo::EntradaH264, d))
+                    };
+                    match feito {
+                        Ok(par) => codificado = Some(par),
+                        Err(e) => {
+                            fluxo = None;
+                            problema = Some(e);
+                        }
+                    }
+                }
+            }
+        } else if prefere == "h264" || prefere == "jpeg" {
+            problema = Some("este S1 não tem o codificador ligado ([midia] venc)".to_owned());
+        }
+        let (tipo, carga, formato) = match codificado {
+            Some((Tipo::EntradaJpeg, d)) => (Tipo::EntradaJpeg, d, "jpeg"),
+            Some((t, d)) => (t, d, "h264"),
+            None => {
+                let Some(rgb) =
+                    reducao::nv12_para_rgb(&quadro.dados, l, a, QUADRO_LARGURA, QUADRO_ALTURA)
+                else {
+                    dizer(
+                        Some("o quadro da câmera não é NV12 do tamanho que diz"),
+                        Some(ip),
+                        Some(ritmo),
+                    );
+                    continue;
+                };
+                (Tipo::Entrada, rgb, "rgb")
+            }
         };
+        if problema != ultimo_problema {
+            if let Some(p) = &problema {
+                tracing::warn!(motivo = %p, "o quadro vai cru, e a estação pediu {prefere}");
+            }
+            ultimo_problema = problema.clone();
+        }
+        {
+            let mut e = estado.lock().expect("estado da percepção");
+            e.format = Some(formato.to_owned());
+            e.encoder_problem = problema;
+        }
+        let rgb = carga;
         let cab = Cabecalho {
-            tipo: Tipo::Entrada,
+            tipo,
             canal: entrada.n,
             tamanho: rgb.len() as u32,
         };
@@ -607,9 +685,12 @@ fn ler_entregas(
             Tipo::Erro => {
                 tracing::warn!(canal = c.canal, motivo = %String::from_utf8_lossy(&carga), "a estação recusou uma mensagem");
                 estado.lock().expect("estado da percepção").errors += 1;
+                partilha.lock().expect("partilha").recusou = true;
             }
             // A estação não manda entradas nem medidas ao S1.
-            Tipo::Entrada | Tipo::Medida => estado.lock().expect("estado da percepção").errors += 1,
+            Tipo::Entrada | Tipo::EntradaH264 | Tipo::EntradaJpeg | Tipo::Medida => {
+                estado.lock().expect("estado da percepção").errors += 1
+            }
         }
     }
 }

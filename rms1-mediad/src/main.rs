@@ -273,6 +273,11 @@ fn main() -> ExitCode {
             eprintln!("rms1-mediad: microfone: {e}");
             return ExitCode::FAILURE;
         }
+        // O codificador de hardware do robô, se o arquivo o dá: a percepção e a imagem da tela usam o mesmo, um pedido por vez.
+        if !midia.venc.is_empty() {
+            let _ = servico.venc.set(Arc::new(std::sync::Mutex::new(rms1_mediad::venc::Venc::novo(&midia.venc))));
+            tracing::info!(socket = %midia.venc, "o quadro pode sair do codificador de hardware");
+        }
         // A percepção pela estação: sem estação na rede, só ouve a porta do anúncio. Se nem isso consegue, o serviço
         // segue de pé sem ela, e `s1.media.status` diz por quê.
         let (q, s, p) = (quadros.clone(), servico.clone(), parar.clone());
@@ -283,6 +288,7 @@ fn main() -> ExitCode {
                     porta_anuncio: midia.percepcao.porta_anuncio,
                     ritmo_max: f64::from(midia.percepcao.ritmo_max),
                     anuncio_vale: rms1_mediad::estacao::ANUNCIO_VALE,
+                    venc: s.venc.get().cloned(),
                 };
                 let (estado, deteccoes) = (s.percepcao.clone(), s.deteccoes.clone());
                 // Sem assinante, a detecção não tem para quem ir.

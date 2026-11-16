@@ -43,6 +43,11 @@ mixer = true
 # A porta em que a tela do simulador busca a imagem da câmera, direto pela rede e em JPEG: pelo `adb` um quadro levava mais
 # de 4 s. Por ela só se olha: nenhum comando passa.
 porta_video = 47010
+# O codificador de hardware do S1 (Hantro H1), pelo `rms1-venc`, que a ativação sobe do lado Android do robô: com ele o quadro
+# vai à estação em H.264 ou em JPEG (o que ela pedir no anúncio) e a imagem da tela sai do chip, em 2 a 3 ms por quadro. Por
+# software, no mesmo processador, o JPEG leva de 83 a 89 ms (medido em 2026-11-15). Sem o `rms1-venc` no ar, tudo segue como
+# antes: o quadro vai cru, e `s1.media.status` diz por quê.
+venc = "/run/rms1-venc/venc.sock"
 
 [midia.camera]
 fonte = "s1"

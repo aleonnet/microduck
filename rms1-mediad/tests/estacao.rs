@@ -103,6 +103,6 @@ fn o_malformado_e_o_de_outra_versao_sao_ignorados() {
             .unwrap_err()
             .contains("versão 1")
     );
-    assert!(Cabecalho::ler(&[2, 9, 0, 0, 0, 0, 0, 0]).is_err());
+    assert!(Cabecalho::ler(&[2, 99, 0, 0, 0, 0, 0, 0]).is_err());
     assert!(Cabecalho::ler(&[2, 1, 1, 0, 1, 0, 0, 0x40]).is_err());
 }

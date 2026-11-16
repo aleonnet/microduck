@@ -237,6 +237,9 @@ pub struct Midia {
     /// A porta TCP em que o serviço entrega o quadro reduzido a quem só quer olhar (a tela do simulador), direto pela
     /// rede. Zero: não há porta. Por ela não passa nada que mude o robô.
     pub porta_video: u16,
+    /// O socket do `rms1-venc`, o programa do lado Android do robô que comanda o codificador de hardware (H.264 e JPEG).
+    /// Vazio: não há codificador, e o quadro vai cru à estação e a imagem da tela é codificada por software.
+    pub venc: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -328,6 +331,7 @@ impl Default for Midia {
             percepcao: MidiaPercepcao::default(),
             mixer: false,
             porta_video: 0,
+            venc: String::new(),
         }
     }
 }
