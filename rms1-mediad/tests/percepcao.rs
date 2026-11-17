@@ -168,10 +168,15 @@ impl Estacao {
     }
 
     fn entregar(&self, canal: u16, carga: &[u8]) {
+        self.mandar(Tipo::Entrega, canal, carga);
+    }
+
+    /// A estação manda uma mensagem ao S1.
+    fn mandar(&self, tipo: Tipo, canal: u16, carga: &[u8]) {
         let mut c = self.conexao.lock().unwrap();
         let c = c.as_mut().expect("o S1 ligado");
         let cab = Cabecalho {
-            tipo: Tipo::Entrega,
+            tipo,
             canal,
             tamanho: carga.len() as u32,
         };
@@ -253,6 +258,17 @@ fn subir_percepcao_com(
     anuncio_vale: Duration,
     venc: Option<std::path::PathBuf>,
 ) -> Percepcao {
+    subir_percepcao_inteira(porta_anuncio, ritmo_max, anuncio_vale, venc, None)
+}
+
+/// O mesmo, com a conversa: de onde vêm os trechos de voz, e para onde vai o que a estação responde.
+fn subir_percepcao_inteira(
+    porta_anuncio: u16,
+    ritmo_max: f64,
+    anuncio_vale: Duration,
+    venc: Option<std::path::PathBuf>,
+    conversa: Option<percepcao::Conversa>,
+) -> Percepcao {
     let quadros = Quadros::default();
     let parar = Arc::new(AtomicBool::new(false));
     let (q, p) = (quadros.clone(), parar.clone());
@@ -266,6 +282,7 @@ fn subir_percepcao_com(
             ritmo_max,
             anuncio_vale,
             venc: venc.map(|caminho| Arc::new(Mutex::new(rms1_mediad::venc::Venc::novo(caminho)))),
+            conversa,
         };
         percepcao::rodar(
             cfg,
@@ -1006,4 +1023,151 @@ fn com_a_estacao_atras_o_s1_espera_a_marca_em_vez_de_empilhar_quadros() {
         "o estado diz quantos envios esperaram pela estação"
     );
     assert_eq!(e.errors, 0);
+}
+
+// ---- a voz que vai à estação e o resultado que volta (2026-11-17) ----------------------------------------------------------
+
+const SO_A_VOZ: &str = r#"[{"n":3,"id":"audio_voz","formato":"pcm16_16k"}]"#;
+const QUADRO_E_VOZ: &str = r#"[{"n":1,"id":"quadro_continuo","formato":"rgb_640x360","ritmo":10},{"n":3,"id":"audio_voz","formato":"pcm16_16k"}]"#;
+const SO_PENSAR: &str = r#"[{"n":4,"id":"pensar","entrega":"pedidos_validos"}]"#;
+
+type Publicadas = Arc<Mutex<Vec<String>>>;
+
+/// A percepção com a conversa: por onde o teste diz um trecho de voz, e o que foi publicado a quem assina a conversa.
+fn subir_com_a_conversa(porta: u16) -> (Percepcao, mpsc::Sender<Vec<i16>>, Publicadas) {
+    let (dizer, trechos) = mpsc::channel();
+    let resultados = Arc::new(Mutex::new(Vec::new()));
+    let r = resultados.clone();
+    let conversa = percepcao::Conversa {
+        trechos,
+        publicar: Arc::new(move |linha| r.lock().unwrap().push(linha)),
+    };
+    let p = subir_percepcao_inteira(porta, 22.0, Duration::from_secs(3), None, Some(conversa));
+    (p, dizer, resultados)
+}
+
+#[test]
+fn a_voz_vai_a_estacao_mesmo_sem_quadro_pedido_e_o_resultado_volta_a_quem_assina() {
+    let porta = porta_livre();
+    let estacao = Estacao::subir_com(
+        porta,
+        SO_A_VOZ,
+        SO_PENSAR,
+        r#","atendido":true,"sabe":true"#,
+    );
+    let (p, dizer, resultados) = subir_com_a_conversa(porta);
+    // Ao ligar, o S1 pede a marca dos quadros e diz o que sabe receber; e não manda quadro, que a estação não pediu.
+    let ao_ligar = estacao.colher(Duration::from_millis(700));
+    assert_eq!(
+        ao_ligar.iter().map(|r| r.cab.tipo).collect::<Vec<_>>(),
+        [Tipo::Atendido, Tipo::Sabe],
+        "o que chegou ao ligar"
+    );
+    let sabe: serde_json::Value = serde_json::from_slice(&ao_ligar[1].carga).unwrap();
+    assert_eq!(sabe, serde_json::json!({"recebe": ["resultado"]}));
+    // O trecho de voz vai como a entrada de voz do anúncio, em PCM de 16 bits.
+    dizer.send(vec![1, -2, 300]).unwrap();
+    let voz = estacao
+        .recebidas
+        .recv_timeout(Duration::from_secs(2))
+        .expect("o trecho de voz");
+    assert_eq!((voz.cab.tipo, voz.cab.canal), (Tipo::Entrada, 3));
+    assert_eq!(voz.carga, [1, 0, 0xfe, 0xff, 0x2c, 0x01]);
+    let e = p.estado.lock().unwrap().clone();
+    assert_eq!(
+        (e.idle_reason, e.rate, e.voice_sent, e.frames_sent),
+        (None, None, 1, 0)
+    );
+    // O que a estação responde chega a quem assina a conversa, com a função e o que ela entrega; e não a quem vê as caixas.
+    let fim = br#"{"pedido":7,"funcao":"pensar","o":"fim","resultado":"feito","entrega":{"ferramenta":"stop","parametros":{}}}"#;
+    estacao.mandar(Tipo::Resultado, 4, fim);
+    estacao.mandar(Tipo::Resultado, 9, fim);
+    estacao.mandar(Tipo::Resultado, 4, b"nao e json");
+    std::thread::sleep(Duration::from_millis(300));
+    let linhas = resultados.lock().unwrap().clone();
+    assert_eq!(linhas.len(), 1, "{linhas:?}");
+    let v: serde_json::Value = serde_json::from_str(&linhas[0]).unwrap();
+    assert_eq!(
+        (v["jsonrpc"].as_str(), v["method"].as_str()),
+        (Some("2.0"), Some("s1.station.result"))
+    );
+    assert!(v.get("id").is_none(), "é notificação, sem id");
+    assert_eq!(
+        (
+            v["params"]["function"].as_str(),
+            v["params"]["delivers"].as_str()
+        ),
+        (Some("pensar"), Some("pedidos_validos"))
+    );
+    assert_eq!(v["params"]["event"]["entrega"]["ferramenta"], "stop");
+    assert!(p.publicadas.lock().unwrap().is_empty());
+    let e = p.estado.lock().unwrap().clone();
+    // O resultado de uma função que o anúncio não tem, e o que não é JSON, são contados como erro; a conexão segue.
+    assert_eq!((e.results, e.errors), (1, 2));
+    dizer.send(vec![7]).unwrap();
+    assert!(
+        estacao
+            .recebidas
+            .recv_timeout(Duration::from_secs(2))
+            .is_ok(),
+        "a conexão caiu"
+    );
+}
+
+#[test]
+fn a_estacao_que_nao_diz_que_sabe_nao_recebe_o_aviso_e_a_voz_vai_ao_lado_dos_quadros() {
+    // Uma estação de antes fecharia a conexão ao receber um tipo de mensagem que não conhece.
+    let porta = porta_livre();
+    let estacao = Estacao::subir(porta, QUADRO_E_VOZ, SO_UM_VIGIA);
+    let (p, dizer, _resultados) = subir_com_a_conversa(porta);
+    // Tudo o que chega desde a ligação conta: o aviso, se fosse mandado, seria a primeira mensagem.
+    std::thread::sleep(Duration::from_millis(700));
+    dizer.send(vec![5; 1000]).unwrap();
+    let chegadas = estacao.colher(Duration::from_millis(800));
+    assert!(
+        chegadas.iter().all(|r| r.cab.tipo != Tipo::Sabe),
+        "o S1 só diz o que sabe a quem anuncia que sabe"
+    );
+    let vozes: Vec<&Recebida> = chegadas.iter().filter(|r| r.cab.canal == 3).collect();
+    assert_eq!(vozes.len(), 1);
+    assert_eq!(
+        (vozes[0].cab.tipo, vozes[0].carga.len()),
+        (Tipo::Entrada, 2000)
+    );
+    let quadros = chegadas
+        .iter()
+        .filter(|r| r.cab.tipo == Tipo::Entrada && r.cab.canal == 1)
+        .count();
+    assert!(quadros >= 5, "{quadros} quadros em 0,8 s, a 10 por segundo");
+    let e = p.estado.lock().unwrap().clone();
+    assert_eq!((e.voice_sent, e.rate, e.errors), (1, Some(10.0), 0));
+}
+
+#[test]
+fn o_que_foi_dito_sem_estacao_nao_e_guardado_para_depois() {
+    let porta = porta_livre();
+    let (_p, dizer, _resultados) = subir_com_a_conversa(porta);
+    std::thread::sleep(Duration::from_millis(200));
+    dizer.send(vec![9; 100]).unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    // A estação chega depois: o que foi dito antes já passou, e não vira pedido atrasado.
+    let estacao = Estacao::subir_com(porta, SO_A_VOZ, SO_PENSAR, r#","sabe":true"#);
+    let chegadas = estacao.colher(Duration::from_millis(900));
+    assert!(
+        chegadas.iter().any(|r| r.cab.tipo == Tipo::Sabe),
+        "o S1 não ligou"
+    );
+    assert!(
+        chegadas.iter().all(|r| r.cab.tipo != Tipo::Entrada),
+        "a voz velha foi mandada"
+    );
+    // Sem microfone guardando voz, o S1 não liga a uma estação que só pede a voz.
+    let porta = porta_livre();
+    let estacao = Estacao::subir_com(porta, SO_A_VOZ, SO_PENSAR, r#","sabe":true"#);
+    let p = subir_percepcao(porta, 22.0, Duration::from_secs(3));
+    assert!(estacao.colher(Duration::from_millis(500)).is_empty());
+    assert_eq!(
+        p.estado.lock().unwrap().idle_reason.as_deref(),
+        Some("a estação não pede nenhuma entrada que este S1 manda")
+    );
 }

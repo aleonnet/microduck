@@ -153,10 +153,11 @@ fn o_microfone_do_simulador_ouve_o_que_a_pagina_manda() {
             ouvido: Box::new(|_| {}),
             nivel: n,
             dizer: Box::new(move |m| d.lock().unwrap().push(m)),
+            trecho: Box::new(|_| {}),
         };
         microfone::rodar_simulador(
             &endereco,
-            Trava::nova(Duration::from_millis(200)),
+            microfone::Ouvinte::novo(Trava::nova(Duration::from_millis(200))),
             saidas,
             Duration::from_millis(100),
             p,

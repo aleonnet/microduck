@@ -232,6 +232,8 @@ pub struct Midia {
     /// Depois de o robô tocar um som, por quanto tempo o que o microfone ouve é descartado.
     pub trava_ms: u64,
     pub percepcao: MidiaPercepcao,
+    /// O trecho de voz que o serviço guarda do microfone e manda à estação.
+    pub voz: MidiaVoz,
     /// Se o serviço grava o mixer do chip de áudio ao subir, como a partida da DJI grava. Só no robô, com a DJI parada.
     pub mixer: bool,
     /// A porta TCP em que o serviço entrega o quadro reduzido a quem só quer olhar (a tela do simulador), direto pela
@@ -319,6 +321,40 @@ pub struct MidiaPercepcao {
     pub ritmo_max: u32,
 }
 
+/// Como o serviço corta do microfone o trecho de voz que vai à estação. O nível é medido a cada 32 ms, contra um piso que
+/// acompanha a sala fora da fala. Os dois múltiplos são os do vigia de som do pato (`pet-detect/src/worker.rs`), medidos no
+/// microfone dele; os do S1 se medem no robô.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct MidiaVoz {
+    /// Quanto do som de antes do começo da fala vai junto, para a primeira sílaba não ser cortada.
+    pub folga_ms: u64,
+    /// Quanto de silêncio encerra o trecho.
+    pub silencio_ms: u64,
+    /// O maior trecho: o som que não para é cortado aqui. O contrato da estação aceita até 10 s.
+    pub teto_ms: u64,
+    /// O menor som alto que conta como fala: abaixo disto é estalo ou palma, e não vai.
+    pub minimo_ms: u64,
+    /// Quantas vezes o piso da sala o nível tem de passar para a fala começar.
+    pub entra: f32,
+    /// Abaixo de quantas vezes o piso o nível conta como silêncio.
+    pub sai: f32,
+}
+
+impl Default for MidiaVoz {
+    fn default() -> Self {
+        Self {
+            folga_ms: 300,
+            silencio_ms: 700,
+            teto_ms: 10_000,
+            // O vigia do pato chama de estalo o som de até 0,38 s (a palma e o eco dela).
+            minimo_ms: 400,
+            entra: 6.0,
+            sai: 3.0,
+        }
+    }
+}
+
 impl Default for Midia {
     fn default() -> Self {
         Self {
@@ -329,6 +365,7 @@ impl Default for Midia {
             // A janela do runtime antigo do pato (`microduck_runtime/src/main.rs:2921-2935`). A do S1 se mede no robô.
             trava_ms: 800,
             percepcao: MidiaPercepcao::default(),
+            voz: MidiaVoz::default(),
             mixer: false,
             porta_video: 0,
             venc: String::new(),
@@ -776,6 +813,38 @@ impl Params {
             if m.percepcao.porta_anuncio == 0 {
                 return ruim("midia.percepcao.porta_anuncio não pode ser 0".to_owned());
             }
+            let v = &m.voz;
+            if v.folga_ms > 2000 {
+                return ruim(format!("midia.voz.folga_ms acima de 2000: {}", v.folga_ms));
+            }
+            if !(200..=3000).contains(&v.silencio_ms) {
+                return ruim(format!(
+                    "midia.voz.silencio_ms fora de 200 a 3000: {}",
+                    v.silencio_ms
+                ));
+            }
+            // O teto é o do contrato da estação: trecho de voz de até 10 s.
+            if !(1000..=10_000).contains(&v.teto_ms) {
+                return ruim(format!(
+                    "midia.voz.teto_ms fora de 1000 a 10000: {}",
+                    v.teto_ms
+                ));
+            }
+            if v.minimo_ms >= v.teto_ms {
+                return ruim(format!(
+                    "midia.voz.minimo_ms tem de ficar abaixo do teto ({}): {}",
+                    v.teto_ms, v.minimo_ms
+                ));
+            }
+            if !(v.sai.is_finite() && v.sai >= 1.0) {
+                return ruim(format!("midia.voz.sai tem de ser 1 ou mais: {}", v.sai));
+            }
+            if !(v.entra.is_finite() && v.entra > v.sai) {
+                return ruim(format!(
+                    "midia.voz.entra tem de ficar acima de sai ({}): {}",
+                    v.sai, v.entra
+                ));
+            }
             if m.camera.fonte == FonteCamera::Simulador
                 && m.camera.endereco.parse::<std::net::SocketAddr>().is_err()
             {
@@ -1064,6 +1133,26 @@ mod testes {
             (p.trava_ms, p.microfone.fonte, p.alto_falante.saida),
             (400, FonteMicrofone::Arquivo, SaidaDeSom::Aplay)
         );
+        // A voz que vai à estação: os padrões, e cada valor fora da faixa recusado pelo nome.
+        assert_eq!(
+            (
+                p.voz.folga_ms,
+                p.voz.silencio_ms,
+                p.voz.teto_ms,
+                p.voz.minimo_ms,
+                p.voz.entra,
+                p.voz.sai
+            ),
+            (300, 700, 10_000, 400, 6.0, 3.0)
+        );
+        let p = de("[midia.voz]\nsilencio_ms = 500\nteto_ms = 8000\n")
+            .unwrap()
+            .midia
+            .unwrap();
+        assert_eq!(
+            (p.voz.silencio_ms, p.voz.teto_ms, p.voz.folga_ms),
+            (500, 8000, 300)
+        );
         for (t, nome) in [
             ("[midia]\ntrava = 800\n", "trava"),
             ("[midia]\ntrava_ms = 10001\n", "trava_ms"),
@@ -1093,6 +1182,18 @@ mod testes {
                 "midia.alto_falante.endereco",
             ),
             ("[midia.alto_falante]\nvolume = 5\n", "volume"),
+            ("[midia.voz]\nfolga_ms = 2001\n", "midia.voz.folga_ms"),
+            ("[midia.voz]\nsilencio_ms = 100\n", "midia.voz.silencio_ms"),
+            ("[midia.voz]\nsilencio_ms = 3001\n", "midia.voz.silencio_ms"),
+            ("[midia.voz]\nteto_ms = 500\n", "midia.voz.teto_ms"),
+            ("[midia.voz]\nteto_ms = 10001\n", "midia.voz.teto_ms"),
+            (
+                "[midia.voz]\nminimo_ms = 9000\nteto_ms = 8000\n",
+                "midia.voz.minimo_ms",
+            ),
+            ("[midia.voz]\nentra = 2.0\nsai = 3.0\n", "midia.voz.entra"),
+            ("[midia.voz]\nsai = 0.5\n", "midia.voz.sai"),
+            ("[midia.voz]\nvolume = 1\n", "volume"),
         ] {
             let e = de(t).unwrap_err().to_string();
             assert!(e.contains(nome), "{t}: {e}");

@@ -11,11 +11,17 @@
 //! na placa dele (`mediad/src/detect.rs:11-13`); aqui o Hailo está no Pi.
 //!
 //! Sem estação, nada é mandado, e `s1.media.status` diz por quê. Conexão caída reconecta com espera crescente.
+//!
+//! **A conversa.** O S1 que guarda a voz do microfone ([`Conversa`]) manda cada trecho como a entrada `audio_voz` (PCM de
+//! 16 bits, 16 kHz), mesmo que a estação não peça quadro nenhum. À estação que diz que sabe (`sabe`, no anúncio), ele diz
+//! ao ligar o que recebe ([`Tipo::Sabe`]); e cada acontecimento do pedido que a voz começou lá ([`Tipo::Resultado`]) é
+//! publicado como `s1.station.result`, com a função e o tipo do que ela entrega. O que foi dito sem estação não é guardado.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream, UdpSocket};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -138,6 +144,15 @@ pub struct Config {
     pub anuncio_vale: Duration,
     /// O codificador de hardware do S1, se o robô o tem (`[midia] venc`). Sem ele, o quadro vai cru.
     pub venc: Option<Arc<Mutex<Venc>>>,
+    /// A voz que vai à estação e o que ela responde, se este S1 guarda a voz do microfone.
+    pub conversa: Option<Conversa>,
+}
+
+/// A conversa com a estação: de onde vêm os trechos de voz (PCM de 16 bits, 16 kHz, um canal), e quem recebe cada
+/// notificação `s1.station.result`, uma linha JSON.
+pub struct Conversa {
+    pub trechos: Receiver<Vec<i16>>,
+    pub publicar: Arc<dyn Fn(String) + Send + Sync>,
 }
 
 /// O que a percepção está fazendo: é o que `s1.media.status` mostra.
@@ -162,6 +177,10 @@ pub struct Estado {
     pub encoder_problem: Option<String>,
     /// Quantos envios esperaram a estação alcançar: ela estava com dois quadros ainda sem resposta.
     pub frames_held: u64,
+    /// Trechos de voz mandados à estação.
+    pub voice_sent: u64,
+    /// Acontecimentos de pedidos que a estação mandou de volta.
+    pub results: u64,
 }
 
 /// As candidatas da resposta do detector, passadas do formato da estação (cinco números por caixa) para o que
@@ -391,6 +410,12 @@ pub fn rodar(
 
     while !parar.load(Ordering::Relaxed) {
         let agora = Instant::now();
+        // O que foi dito desde a última volta vai nesta, ou não vai: sem estação ligada, a fala não vira pedido atrasado.
+        let trechos: Vec<Vec<i16>> = cfg
+            .conversa
+            .as_ref()
+            .map(|c| c.trechos.try_iter().collect())
+            .unwrap_or_default();
         while let Ok((n, de)) = udp.recv_from(&mut pacote) {
             if let Some(a) = estacao::ler_anuncio(&pacote[..n], de.ip()) {
                 // Com duas estações na rede, o S1 fica com a que já usa enquanto ela se anuncia: trocar a cada pacote
@@ -415,12 +440,20 @@ pub fn rodar(
         let ip = alvo.ip();
         let anuncio = partilha.lock().expect("partilha").anuncio.clone();
         let Some(anuncio) = anuncio else { continue };
-        let Some(entrada) = anuncio
+        let do_quadro = anuncio
             .entradas
             .iter()
             .find(|e| e.id == "quadro_continuo" && e.formato == "rgb_640x360")
-            .cloned()
-        else {
+            .cloned();
+        // A voz só vai se este S1 a guarda.
+        let da_voz = cfg.conversa.as_ref().and_then(|_| {
+            anuncio
+                .entradas
+                .iter()
+                .find(|e| e.id == "audio_voz" && e.formato == "pcm16_16k")
+                .cloned()
+        });
+        if do_quadro.is_none() && da_voz.is_none() {
             dizer(
                 Some("a estação não pede nenhuma entrada que este S1 manda"),
                 Some(ip),
@@ -428,13 +461,21 @@ pub fn rodar(
             );
             std::thread::sleep(Duration::from_millis(20));
             continue;
-        };
-        let ritmo = entrada.ritmo.unwrap_or(cfg.ritmo_max).min(cfg.ritmo_max);
-        if !(ritmo.is_finite() && ritmo > 0.0) {
+        }
+        let do_quadro = do_quadro.map(|e| {
+            let ritmo = e.ritmo.unwrap_or(cfg.ritmo_max).min(cfg.ritmo_max);
+            (e, ritmo)
+        });
+        let ritmo_vale = do_quadro
+            .as_ref()
+            .is_none_or(|(_, r)| r.is_finite() && *r > 0.0);
+        if !ritmo_vale && da_voz.is_none() {
             dizer(Some("a estação anunciou ritmo zero"), Some(ip), None);
             std::thread::sleep(Duration::from_millis(20));
             continue;
         }
+        // Com o ritmo em zero e a voz pedida, só a voz vai.
+        let do_quadro = do_quadro.filter(|_| ritmo_vale);
         if conexao.as_ref().is_none_or(|(_, a)| *a != alvo) {
             fechar(&mut conexao);
             if agora < tentar_em {
@@ -462,9 +503,23 @@ pub fn rodar(
                         p.proximo = 0;
                         p.frente_medida = false;
                     }
+                    // A estação que diz que sabe mandar o resultado de um pedido recebe, uma vez, o que este S1 sabe receber.
+                    // A que não diz fecharia a conexão ao receber o aviso; e sem ele ela não manda nada de novo.
+                    if cfg.conversa.is_some() && anuncio.sabe {
+                        let aviso = br#"{"recebe":["resultado"]}"#;
+                        let cab = Cabecalho {
+                            tipo: Tipo::Sabe,
+                            canal: 0,
+                            tamanho: aviso.len() as u32,
+                        };
+                        let _ = (&c)
+                            .write_all(&cab.bytes())
+                            .and_then(|()| (&c).write_all(aviso));
+                    }
                     if let Ok(leitura) = c.try_clone() {
                         let (p, e, pub_) = (partilha.clone(), estado.clone(), publicar.clone());
-                        std::thread::spawn(move || ler_entregas(leitura, p, e, pub_));
+                        let conversar = cfg.conversa.as_ref().map(|c| c.publicar.clone());
+                        std::thread::spawn(move || ler_entregas(leitura, p, e, pub_, conversar));
                     }
                     conexao = Some((c, alvo));
                     fluxo = None; // numa conexão nova, o H.264 começa por um quadro inteiro
@@ -484,6 +539,38 @@ pub fn rodar(
                 }
             }
         }
+        if let Some(entrada) = &da_voz {
+            let (c, _) = conexao.as_mut().expect("conexão aberta acima");
+            let mut caiu = false;
+            for trecho in &trechos {
+                let pcm: Vec<u8> = trecho.iter().flat_map(|a| a.to_le_bytes()).collect();
+                let cab = Cabecalho {
+                    tipo: Tipo::Entrada,
+                    canal: entrada.n,
+                    tamanho: pcm.len() as u32,
+                };
+                if c.write_all(&cab.bytes())
+                    .and_then(|()| c.write_all(&pcm))
+                    .is_err()
+                {
+                    caiu = true;
+                    break;
+                }
+                estado.lock().expect("estado da percepção").voice_sent += 1;
+            }
+            if caiu {
+                fechar(&mut conexao);
+                tentar_em = Instant::now() + espera;
+                espera = (espera * 2).min(ESPERA_MAX);
+                continue;
+            }
+        }
+        let Some((entrada, ritmo)) = do_quadro else {
+            // A estação só pede a voz: a ligação fica, e nenhum quadro sai.
+            dizer(None, Some(ip), None);
+            std::thread::sleep(Duration::from_millis(5));
+            continue;
+        };
         if agora < proximo {
             std::thread::sleep((proximo - agora).min(Duration::from_millis(5)));
             continue;
@@ -678,6 +765,7 @@ fn ler_entregas(
     partilha: Arc<Mutex<Partilha>>,
     estado: Arc<Mutex<Estado>>,
     publicar: Arc<impl Fn(String) + Send + Sync + 'static>,
+    conversar: Option<Arc<dyn Fn(String) + Send + Sync>>,
 ) {
     let mut cab = [0u8; Cabecalho::BYTES];
     loop {
@@ -771,7 +859,6 @@ fn ler_entregas(
                 estado.lock().expect("estado da percepção").errors += 1;
                 partilha.lock().expect("partilha").recusou = true;
             }
-            // A estação não manda entradas nem medidas ao S1.
             Tipo::Atendido => {
                 // O quadro marcado sai da fila, com os mais antigos que ele: as entregas seguintes são do quadro seguinte.
                 let mut p = partilha.lock().expect("partilha");
@@ -780,9 +867,36 @@ fn ler_entregas(
                     p.frente_medida = false;
                 }
             }
-            Tipo::Entrada | Tipo::EntradaH264 | Tipo::EntradaJpeg | Tipo::Medida => {
-                estado.lock().expect("estado da percepção").errors += 1
+            Tipo::Resultado => {
+                // Um acontecimento de um pedido que a voz deste S1 começou: vai a quem assina a conversa, com a função e o
+                // tipo do que ela entrega, que é o que o anúncio diz dela.
+                let funcao = partilha
+                    .lock()
+                    .expect("partilha")
+                    .anuncio
+                    .as_ref()
+                    .and_then(|a| a.funcoes.iter().find(|f| f.n == c.canal).cloned());
+                let acontecimento = serde_json::from_slice::<serde_json::Value>(&carga)
+                    .ok()
+                    .filter(serde_json::Value::is_object);
+                match (funcao, acontecimento, &conversar) {
+                    (Some(funcao), Some(acontecimento), Some(conversar)) => {
+                        estado.lock().expect("estado da percepção").results += 1;
+                        conversar(
+                            serde_json::json!({"jsonrpc": "2.0", "method": "s1.station.result", "params": {"function": funcao.id, "delivers": funcao.entrega, "event": acontecimento}})
+                                .to_string(),
+                        );
+                    }
+                    _ => estado.lock().expect("estado da percepção").errors += 1,
+                }
             }
+            // A estação não manda entradas, medidas nem o aviso do que sabe; e a fala este S1 ainda não disse que recebe.
+            Tipo::Entrada
+            | Tipo::EntradaH264
+            | Tipo::EntradaJpeg
+            | Tipo::Medida
+            | Tipo::Sabe
+            | Tipo::Fala => estado.lock().expect("estado da percepção").errors += 1,
         }
     }
 }

@@ -5,7 +5,9 @@
 //! - `robot.sound`, o do contrato, como requisição ou como notificação: é o que o `rms1d` repassa.
 //! - `s1.media.subscribe {"heard": true, "detections": true}`: a conexão passa a receber `s1.audio.heard {"kind"}`, já com
 //!   a trava aplicada, e `media.detections`, no formato do pato, a cada entrega do detector da estação. Cada pedido diz as
-//!   duas assinaturas: a que não vem é desligada.
+//!   duas assinaturas: a que não vem é desligada. Com `"voice": true`, a conexão recebe também `s1.station.result`: cada
+//!   acontecimento de um pedido que a voz do robô começou na estação (o texto ouvido, a resposta enquanto é gerada, o fim
+//!   com o que a função entregou), com a função e o tipo do que ela entrega.
 //! - `s1.media.volume {"volume": 0..100}`: o volume do alto-falante, na conta da DJI, pelo mixer do robô.
 //! - `s1.media.status`: o que o serviço está fazendo.
 //! - `s1.media.preview {"width": 640}`: o quadro reduzido a RGB, para quem só quer olhar (a tela "Sentidos"): o cabeçalho de
@@ -57,6 +59,8 @@ pub fn jpeg_de_rgb(rgb: &[u8], largura: u32, altura: u32, qualidade: u8) -> Opti
 }
 /// Das detecções só a mais nova interessa: a fila do pato (`mediad/src/detect.rs`), 8.
 const DETECCOES_NA_FILA: usize = 8;
+/// Os acontecimentos de um pedido vêm em rajada (um por pedaço da resposta), e nenhum pode faltar a quem os junta.
+const RESULTADOS_NA_FILA: usize = 512;
 
 /// O que as conexões partilham.
 pub struct Servico {
@@ -65,6 +69,8 @@ pub struct Servico {
     pub ouvidos: broadcast::Sender<Ouvido>,
     /// As notificações `media.detections`, prontas, uma linha JSON cada.
     pub deteccoes: broadcast::Sender<Arc<str>>,
+    /// As notificações `s1.station.result`, prontas, uma linha JSON cada.
+    pub resultados: broadcast::Sender<Arc<str>>,
     /// O que a percepção pela estação está fazendo: quem escreve é [`crate::percepcao::rodar`].
     pub percepcao: Arc<Mutex<Estado>>,
     /// Por que a câmera não entrega quadro, se não entrega: quem escreve é a fonte da câmera.
@@ -85,11 +91,13 @@ impl Servico {
     pub fn novo(quadros: Quadros, tocador: Tocador) -> Arc<Self> {
         let (ouvidos, _) = broadcast::channel(OUVIDOS_NA_FILA);
         let (deteccoes, _) = broadcast::channel(DETECCOES_NA_FILA);
+        let (resultados, _) = broadcast::channel(RESULTADOS_NA_FILA);
         Arc::new(Self {
             quadros,
             tocador: Mutex::new(tocador),
             ouvidos,
             deteccoes,
+            resultados,
             percepcao: Arc::default(),
             camera: Arc::default(),
             contagem_da_camera: Arc::default(),
@@ -222,6 +230,7 @@ where
     let mut leitor = BufReader::new(leitura);
     let mut ouvindo: Option<broadcast::Receiver<Ouvido>> = None;
     let mut vendo: Option<broadcast::Receiver<Arc<str>>> = None;
+    let mut conversando: Option<broadcast::Receiver<Arc<str>>> = None;
     // A linha em leitura fica fora do laço: se um evento de som chega no meio dela, o que já foi lido não se perde.
     let mut em_leitura = Vec::new();
     loop {
@@ -251,6 +260,18 @@ where
                     }
                     // Quem ficou para trás perde as velhas, que já não dizem onde o pato está.
                     Err(broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(broadcast::error::RecvError::Closed) => return Ok(()),
+                }
+                continue;
+            }
+            r = receber(&mut conversando) => {
+                match r {
+                    Ok(resultado) => {
+                        escrita.write_all(resultado.as_bytes()).await?;
+                        escrita.write_all(b"\n").await?;
+                        escrita.flush().await?;
+                    }
+                    Err(broadcast::error::RecvError::Lagged(n)) => tracing::warn!(perdidos = n, "o assinante da conversa ficou para trás"),
                     Err(broadcast::error::RecvError::Closed) => return Ok(()),
                 }
                 continue;
@@ -329,6 +350,7 @@ where
             };
             ouvindo = quer("heard").then(|| s.ouvidos.subscribe());
             vendo = quer("detections").then(|| s.deteccoes.subscribe());
+            conversando = quer("voice").then(|| s.resultados.subscribe());
             if pedido.id.is_some() {
                 escrever(
                     &mut escrita,

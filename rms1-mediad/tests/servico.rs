@@ -361,3 +361,32 @@ async fn linha_de<C: tokio::io::AsyncBufRead + Unpin>(leitor: &mut C) -> serde_j
         .unwrap();
     serde_json::from_str(&texto).unwrap()
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn quem_assina_a_conversa_recebe_o_que_a_estacao_respondeu() {
+    let (_pasta, _anota, servico) = montar();
+    let (cliente, servidor_) = UnixStream::pair().unwrap();
+    tokio::spawn(servidor::atender(servidor_, servico.clone()));
+    let mut c = BufReader::new(cliente);
+    let resultado = r#"{"jsonrpc":"2.0","method":"s1.station.result","params":{"function":"pensar","delivers":"pedidos_validos","event":{"o":"fim","resultado":"feito"}}}"#;
+    // Sem assinatura, o resultado não tem para quem ir.
+    assert!(servico.resultados.send(resultado.into()).is_err());
+    c.get_mut()
+        .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"s1.media.subscribe\",\"params\":{\"voice\":true}}\n")
+        .await
+        .unwrap();
+    assert_eq!(linha(&mut c).await["result"]["accepted"], true);
+    servico.resultados.send(resultado.into()).unwrap();
+    let n = linha(&mut c).await;
+    assert_eq!(
+        (
+            n["method"].as_str(),
+            n["params"]["event"]["resultado"].as_str()
+        ),
+        (Some("s1.station.result"), Some("feito")),
+        "{n}"
+    );
+    // Quem assinou só a conversa não recebe as caixas nem o que o robô ouviu.
+    assert!(servico.ouvidos.send(Ouvido::Voz).is_err());
+    assert!(servico.deteccoes.send("{}".into()).is_err());
+}

@@ -106,3 +106,33 @@ fn o_malformado_e_o_de_outra_versao_sao_ignorados() {
     assert!(Cabecalho::ler(&[2, 99, 0, 0, 0, 0, 0, 0]).is_err());
     assert!(Cabecalho::ler(&[2, 1, 1, 0, 1, 0, 0, 0x40]).is_err());
 }
+
+/// A conversa: a estação diz no anúncio que sabe mandar o resultado de um pedido e a fala (`sabe`), e o S1 lê os três tipos
+/// de mensagem que isso traz. O S1 de antes fechava a conexão ao receber um tipo que não conhecia.
+#[test]
+fn le_os_tipos_da_conversa_e_o_que_a_estacao_diz_que_sabe() {
+    let a = estacao::ler_anuncio(ANUNCIO, ip(192, 168, 1, 102)).unwrap();
+    assert!(
+        a.sabe,
+        "a estação gravada diz que sabe mandar o resultado e a fala"
+    );
+    // Uma estação de antes não diz nada, e não recebe o aviso do que o S1 sabe receber.
+    let de_antes = br#"{"rms1_hailo":2,"quadros":47002,"painel":8080,"entradas":[],"funcoes":[],"atendido":true}"#;
+    assert!(
+        !estacao::ler_anuncio(de_antes, ip(192, 168, 1, 102))
+            .unwrap()
+            .sabe
+    );
+    for (numero, tipo) in [(19u8, Tipo::Sabe), (20, Tipo::Resultado), (21, Tipo::Fala)] {
+        let c = Cabecalho::ler(&[2, numero, 3, 0, 5, 0, 0, 0]).expect("um tipo da conversa");
+        assert_eq!(
+            c,
+            Cabecalho {
+                tipo,
+                canal: 3,
+                tamanho: 5
+            }
+        );
+        assert_eq!(c.bytes(), [2, numero, 3, 0, 5, 0, 0, 0]);
+    }
+}

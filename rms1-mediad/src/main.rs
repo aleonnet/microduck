@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use clap::Parser;
 use rms1_mediad::alto_falante::{Aplay, Nula, Saida, Simulador, Tocador};
 use rms1_mediad::camera;
-use rms1_mediad::microfone::{self, BLOCO, Ouvinte};
+use rms1_mediad::microfone::{self, BLOCO, Ouvinte, Voz};
 use rms1_mediad::mixer;
 use rms1_mediad::percepcao;
 use rms1_mediad::quadros::Quadros;
@@ -82,15 +82,28 @@ fn subir_camera_do_robo(
     )
 }
 
+/// Sobe o microfone escolhido. Cada trecho de voz que ele guarda vai a `trechos`: é o que a percepção manda à estação.
 fn subir_microfone(
     m: &Midia,
     trava: Trava,
     servico: Arc<Servico>,
     parar: Arc<AtomicBool>,
+    trechos: std::sync::mpsc::Sender<Vec<i16>>,
 ) -> anyhow::Result<()> {
+    let voz = Voz {
+        folga: Duration::from_millis(m.voz.folga_ms),
+        silencio: Duration::from_millis(m.voz.silencio_ms),
+        teto: Duration::from_millis(m.voz.teto_ms),
+        minimo: Duration::from_millis(m.voz.minimo_ms),
+        entra: m.voz.entra,
+        sai: m.voz.sai,
+    };
+    let mut ouvinte = Ouvinte::com_voz(trava, voz);
     if m.microfone.fonte == FonteMicrofone::Simulador {
         let (s, d) = (servico.clone(), servico.clone());
         let saidas = microfone::Saidas {
+            // Sem a percepção de pé, o trecho não tem para quem ir.
+            trecho: Box::new(move |t| drop(trechos.send(t))),
             // Sem assinante, o evento não tem para quem ir.
             ouvido: Box::new(move |o| drop(s.ouvidos.send(o))),
             nivel: servico.nivel_do_microfone.clone(),
@@ -105,7 +118,7 @@ fn subir_microfone(
         std::thread::Builder::new()
             .name("microfone".into())
             .spawn(move || {
-                microfone::rodar_simulador(&endereco, trava, saidas, RELIGAR_O_MICROFONE, parar)
+                microfone::rodar_simulador(&endereco, ouvinte, saidas, RELIGAR_O_MICROFONE, parar)
             })?;
         return Ok(());
     }
@@ -129,6 +142,8 @@ fn subir_microfone(
         .collect();
         let (s, d) = (servico.clone(), servico.clone());
         let saidas = microfone::Saidas {
+            // Sem a percepção de pé, o trecho não tem para quem ir.
+            trecho: Box::new(move |t| drop(trechos.send(t))),
             // Sem assinante, o evento não tem para quem ir.
             ouvido: Box::new(move |o| drop(s.ouvidos.send(o))),
             nivel: servico.nivel_do_microfone.clone(),
@@ -145,7 +160,7 @@ fn subir_microfone(
                 microfone::rodar_comando(
                     "arecord",
                     &args,
-                    trava,
+                    ouvinte,
                     saidas,
                     RELIGAR_O_MICROFONE,
                     parar,
@@ -163,7 +178,6 @@ fn subir_microfone(
     std::thread::Builder::new()
         .name("microfone".into())
         .spawn(move || {
-            let mut ouvinte = Ouvinte::novo(trava);
             let bloco = Duration::from_secs_f64(BLOCO as f64 / HZ_DO_MICROFONE as f64);
             // Em laço, no ritmo real: o vigia mede a sala no tempo, e a trava também.
             while !parar.load(Ordering::Relaxed) {
@@ -175,6 +189,9 @@ fn subir_microfone(
                     for o in ouvinte.empurrar(pedaco, Instant::now()) {
                         // Sem assinante, o evento não tem para quem ir.
                         let _ = servico.ouvidos.send(o);
+                    }
+                    if let Some(trecho) = ouvinte.trecho() {
+                        let _ = trechos.send(trecho);
                     }
                 }
             }
@@ -269,7 +286,17 @@ fn main() -> ExitCode {
                 });
             }
         }
-        if let Err(e) = subir_microfone(&midia, trava, servico.clone(), parar.clone()) {
+        // A conversa com a estação só existe com um microfone: é dele que sai a voz.
+        let (dizer_trecho, trechos) = std::sync::mpsc::channel();
+        let mut conversa = (midia.microfone.fonte != FonteMicrofone::Nenhuma).then(|| {
+            let s = servico.clone();
+            percepcao::Conversa {
+                trechos,
+                // Sem assinante, o resultado não tem para quem ir.
+                publicar: Arc::new(move |linha: String| drop(s.resultados.send(linha.into()))),
+            }
+        });
+        if let Err(e) = subir_microfone(&midia, trava, servico.clone(), parar.clone(), dizer_trecho) {
             eprintln!("rms1-mediad: microfone: {e}");
             return ExitCode::FAILURE;
         }
@@ -289,6 +316,7 @@ fn main() -> ExitCode {
                     ritmo_max: f64::from(midia.percepcao.ritmo_max),
                     anuncio_vale: rms1_mediad::estacao::ANUNCIO_VALE,
                     venc: s.venc.get().cloned(),
+                    conversa: conversa.take(),
                 };
                 let (estado, deteccoes) = (s.percepcao.clone(), s.deteccoes.clone());
                 // Sem assinante, a detecção não tem para quem ir.

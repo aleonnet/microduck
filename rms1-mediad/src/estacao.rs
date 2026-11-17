@@ -28,6 +28,10 @@ pub struct Anuncio {
     /// A estação sabe marcar cada quadro atendido ([`Tipo::Atendido`]). Uma estação de antes disto não diz nada.
     #[serde(default)]
     pub atendido: bool,
+    /// A estação sabe mandar o resultado de um pedido e a fala ([`Tipo::Resultado`], [`Tipo::Fala`]), a quem disser o que
+    /// recebe ([`Tipo::Sabe`]). Uma estação de antes disto não diz nada, e fecharia a conexão ao receber o aviso.
+    #[serde(default)]
+    pub sabe: bool,
 }
 
 /// Uma entrada que a estação quer receber.
@@ -104,6 +108,15 @@ pub enum Tipo {
     /// pedido, nos 16 bits de baixo. É por ele que o S1 sabe de qual quadro é cada entrega. Só entre um S1 e uma estação que
     /// se entendem: a estação diz no anúncio (`atendido`) que sabe marcar, e só marca para o S1 que pediu.
     Atendido = 11,
+    /// Do S1 para a estação, uma vez ao ligar: JSON `{"recebe": [...]}`, com o que este S1 sabe receber (`resultado`,
+    /// `fala`). Só para a estação que diz no anúncio que sabe (`sabe`).
+    Sabe = 19,
+    /// Da estação para o S1: um acontecimento de um pedido a uma função sob demanda, em JSON (o começo, cada etapa, cada
+    /// pedaço da resposta, o fim com a entrega). O canal é o número da função.
+    Resultado = 20,
+    /// Da estação para o S1: um pedaço do som da fala, PCM de 16 bits, um canal; o canal leva a taxa, em centenas de
+    /// amostras por segundo. Sem carga: a fala acabou, ou foi interrompida.
+    Fala = 21,
 }
 
 /// Os 8 bytes antes de cada carga: versão, tipo, canal e tamanho, little-endian.
@@ -134,7 +147,7 @@ impl Cabecalho {
                 b[0]
             ));
         }
-        // Os tipos 4 a 6 e o 8 só existem dentro da estação: chegando ao S1, são erro de quem mandou.
+        // Os tipos 4 a 6, o 8 e de 12 a 18 só existem dentro da estação: chegando ao S1, são erro de quem mandou.
         let tipo = match b[1] {
             1 => Tipo::Entrada,
             2 => Tipo::Entrega,
@@ -143,6 +156,9 @@ impl Cabecalho {
             9 => Tipo::EntradaH264,
             10 => Tipo::EntradaJpeg,
             11 => Tipo::Atendido,
+            19 => Tipo::Sabe,
+            20 => Tipo::Resultado,
+            21 => Tipo::Fala,
             t => return Err(format!("tipo de mensagem desconhecido: {t}")),
         };
         let tamanho = u32::from_le_bytes([b[4], b[5], b[6], b[7]]);

@@ -1,6 +1,6 @@
 # `rms1-mediad`: o serviço de mídia do S1
 
-Status: em uso no robô e no simulador desde 2026-11-15, com a estação Hailo de verdade. Data: 2026-11-14; atualizado em 2026-11-15. A ativação no robô está em [`../robot/rms1-mediad-no-robo.md`](../robot/rms1-mediad-no-robo.md).
+Status: em uso no robô e no simulador desde 2026-11-15, com a estação Hailo de verdade. Data: 2026-11-14; atualizado em 2026-11-15 e em 2026-11-17 (a voz que vai à estação). A ativação no robô está em [`../robot/rms1-mediad-no-robo.md`](../robot/rms1-mediad-no-robo.md).
 
 O dono único da câmera, do microfone e do alto-falante do S1. No pato a câmera é do `mediad`, e o microfone e o som são do `robotd`. No S1 os três ficam num processo só, fora do `rms1d`, por três razões:
 
@@ -33,14 +33,14 @@ As fontes ficam atrás da mesma interface: a de teste, a do simulador e a do rob
 | `rms1-mediad/src/camera.rs` | As fontes da câmera, atrás da mesma interface: a de teste, a do simulador e a do robô |
 | `rms1-mediad/src/camera_s1.rs` | A câmera do robô, aberta pelos 27 passos do `dji_camera`, com cada resposta do driver conferida com a gravada |
 | `rms1-mediad/src/mixer.rs` | O mixer do chip de áudio do robô: o estado da partida da DJI, gravado e conferido, e o volume na conta da DJI |
-| `rms1-mediad/src/microfone.rs` | O ouvinte: o vigia de som do pato, com a trava. As fontes: arquivo, o `arecord` do robô e o simulador |
+| `rms1-mediad/src/microfone.rs` | O ouvinte: o vigia de som do pato, com a trava, e o guardador do trecho de voz que vai à estação. As fontes: arquivo, o `arecord` do robô e o simulador |
 | `rms1-mediad/src/trava.rs` | A trava contra a própria voz |
 | `rms1-mediad/src/alto_falante.rs` | O tocador: um som por vez, e o `wheee` em três partes. A saída é uma interface (`aplay`, o simulador ou nula) |
 | `rms1-mediad/src/reducao.rs` | O quadro que vai à estação: NV12 reduzido a RGB 640 por 360, sem moldura; e a NV12 640 por 360, para o codificador |
 | `rms1-mediad/src/venc.rs` | O cliente do `rms1-venc`: uma conexão só, partilhada pela percepção e pela imagem da tela |
 | `rms1-mediad/venc/rms1-venc.c` | O programa do lado Android do robô que comanda o codificador de hardware do S1 (Hantro H1): H.264 e JPEG |
 | `rms1-mediad/src/estacao.rs` | O anúncio da estação e o cabeçalho das mensagens |
-| `rms1-mediad/src/percepcao.rs` | A percepção pela estação: segue o anúncio, manda o quadro, lê as entregas, publica |
+| `rms1-mediad/src/percepcao.rs` | A percepção pela estação: segue o anúncio, manda o quadro e a voz, lê as entregas e o resultado dos pedidos, publica |
 | `rms1-mediad/src/servidor.rs` | O socket local |
 | `rms1d-params` | `[midia]` em `rms1d.toml`: o esquema, os padrões e a validação |
 
@@ -63,7 +63,7 @@ Um socket unix, `[midia] socket`, em JSON-RPC, uma linha por mensagem.
 | `hello` | A versão do contrato e a do serviço |
 | `media.frame` | O próximo quadro: uma linha com o cabeçalho do contrato do pato (`MediaFrameHeader`) e, em seguida, exatamente `bytes` bytes crus. A conexão fecha depois dele |
 | `robot.sound` | O do contrato do pato (`tag` e `hold`), como requisição ou notificação |
-| `s1.media.subscribe` | `{"heard": true, "detections": true}`. A conexão passa a receber `s1.audio.heard {"kind"}`, já com a trava aplicada, e `media.detections`. Cada pedido diz as duas assinaturas: a que não vem é desligada |
+| `s1.media.subscribe` | `{"heard": true, "detections": true}`. A conexão passa a receber `s1.audio.heard {"kind"}`, já com a trava aplicada, e `media.detections`. Com `"voice": true`, recebe também `s1.station.result` (a seção da voz, abaixo). Cada pedido diz as assinaturas que quer: a que não vem é desligada |
 | `s1.media.status` | O que o serviço está fazendo: quadros copiados, se há som tocando (`playing`), se o microfone está surdo pela trava (`deaf`: o som e a janela depois dele), e a percepção (`perception`), que diz também em que formato o último quadro foi (`format`: `rgb`, `h264` ou `jpeg`) e, se foi cru com a estação pedindo outro, por quê (`encoder_problem`) |
 | `s1.media.preview` | `{"width": 640, "format": "jpeg", "quality": 70}`. O quadro reduzido, para quem só quer olhar (a mídia do Pilotar, no simulador): o cabeçalho de `media.frame` e os bytes. Sem `format`, vem em RGB (`format: "RGB"`); com `"jpeg"`, em JPEG (`format: "JPEG"`, qualidade de 30 a 90), pelo codificador do `mediad`; com o codificador de hardware ligado e a largura de 640, o JPEG sai do chip (a qualidade vira o nível dele, de 3 a 9), e por software se o chip não responder do pato. A redução e o JPEG são feitos aqui. A conexão fica aberta e serve o pedido seguinte |
 
@@ -85,6 +85,21 @@ O S1 captura, a estação pensa, e o S1 publica o que ela achou. O formato do an
 - **Conexão caída reconecta, com espera crescente.** `s1.media.status` diz por que nada está sendo mandado, quando não está.
 
 Os testes: `rms1-mediad/tests/percepcao.rs`, com uma estação de mentira em 127.0.0.1 e, para o quadro codificado, um `rms1-venc` de mentira. O programa de verdade contra a estação de verdade, com os quadros do chip: `out/2026-11-14-s1-midia/adendo/mediad_estacao.py`, no laboratório.
+
+## A voz que vai à estação
+
+O S1 ouve, a estação entende, e o que ela concluiu volta a quem assina. Vale igual no robô, no simulador e com o microfone de arquivo: os três passam pelo mesmo ouvinte (`microfone.rs`, `Ouvinte`).
+
+- **O trecho de voz é cortado no S1,** pelo guardador que fica ao lado do vigia de som. Não é o vigia quem corta: ele só avisa da voz quando ela termina, e trata o som de mais de 3 s como ruído contínuo, sem avisar (`pet-detect/src/worker.rs`). O guardador mede o nível a cada 32 ms contra um piso que acompanha a sala fora da fala. A fala começa quando o nível passa de `entra` vezes o piso, leva junto o som de `folga_ms` antes, e termina depois de `silencio_ms` abaixo de `sai` vezes o piso, ou no `teto_ms`. O som alto de menos de `minimo_ms` é estalo ou palma, e não vai. O som que não para sai uma vez, cortado no teto, e o piso sobe até ele.
+- **Os números são os de `[midia.voz]`** em `rms1d.toml`: `folga_ms` 300, `silencio_ms` 700, `teto_ms` 10000 (o contrato da estação aceita até 10 s), `minimo_ms` 400, `entra` 6, `sai` 3. Os dois múltiplos e o mínimo são os do vigia do pato, medidos no microfone dele; os do S1 se medem no robô.
+- **A trava contra a própria voz vale igual.** Com o robô tocando som, e na janela depois dele, o trecho em curso é largado: seria a voz do robô, ou uma fala coberta por ela.
+- **O trecho vai como a entrada `audio_voz` do anúncio,** em PCM de 16 bits, 16 kHz, um canal (`pcm16_16k`), pela mesma conexão dos quadros. A ligação com a estação existe quando o anúncio pede o quadro ou a voz: com a estação pedindo só a voz, nenhum quadro sai. A voz não entra na conta dos quadros que esperam a marca da estação. Sem microfone (`fonte = "nenhuma"`), o S1 não guarda voz nem liga a uma estação que só pede a voz.
+- **O que foi dito sem estação ligada não é guardado:** não vira pedido atrasado.
+- **O S1 diz o que sabe receber.** À estação que anuncia `sabe`, ele manda ao ligar a mensagem de tipo 19 com `{"recebe": ["resultado"]}`. A estação só manda mensagem de tipo novo a quem disse isso: um S1 de antes fecharia a conexão ao recebê-la. À estação que não anuncia `sabe`, o S1 não manda o aviso.
+- **O resultado volta como `s1.station.result`.** Cada acontecimento do pedido que a voz começou na estação (mensagem de tipo 20, no canal da função) é publicado a quem assinou `voice`, numa linha: `{"jsonrpc": "2.0", "method": "s1.station.result", "params": {"function", "delivers", "event"}}`. `function` é a função da estação que rodou; `delivers`, o tipo do que ela entrega, como o anúncio diz; `event` é o acontecimento como a estação o manda: `o` vale `comecou`, `pulada`, `pedaco` (um pedaço da resposta, em `texto`), `terminou` (com `entrega` e `medidas` da etapa) ou `fim` (com `resultado`, `entrega` e `ms`). O texto ouvido é a `entrega` da etapa que transcreve; o pedido validado é a `entrega` do `fim` da função que entrega `pedidos_validos`. O serviço não interpreta nada disso: quem age é quem assina.
+- **`s1.media.status`** conta, em `perception`, os trechos mandados (`voice_sent`) e os acontecimentos recebidos (`results`).
+
+Os testes: `rms1-mediad/tests/microfone.rs` (a fala sai inteira com a folga, a palma não sai, a frase longa sai, o teto, a própria voz), `tests/percepcao.rs` (a voz vai sem quadro pedido, o aviso só a quem anuncia que sabe, o resultado publicado, a voz velha não vai), `tests/servico.rs` (a assinatura) e `tests/estacao.rs` (os tipos 19 a 21). A contraprova, com quatro defeitos plantados e reprovados, está no laboratório, em `out/2026-11-17-estacao-conversa/contraprova-voz-s1.txt`.
 
 ## O codificador de hardware
 

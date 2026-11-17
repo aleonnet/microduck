@@ -2,7 +2,13 @@
 //!
 //! O vigia é o do `pet-detect` (`pet_detect::worker::SoundSentry`): um envelope de RMS com piso que se adapta, que diz
 //! `Noise` para um estalo e `Voice` para uma fala. Aqui não há classificador de carinho: o do pato não serve ao S1.
+//!
+//! **O trecho de voz** que vai à estação é cortado aqui, ao lado do vigia, e não por ele: o vigia só avisa da voz quando ela
+//! termina, e trata o som de mais de 3 s como ruído contínuo, sem avisar (`pet-detect/src/worker.rs`). O guardador mede o
+//! nível a cada 32 ms contra um piso que acompanha a sala: a fala começa quando o nível passa de um múltiplo do piso, leva
+//! junto o som de pouco antes, e termina no silêncio ou no teto. Os números são os de `[midia.voz]`.
 
+use std::collections::VecDeque;
 use std::io::Read;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -30,10 +36,138 @@ impl Ouvido {
     }
 }
 
-/// O ouvido do robô: o vigia sobre as amostras de qualquer fonte, com a trava.
+/// Como cortar do microfone o trecho de voz: os números de `[midia.voz]`.
+#[derive(Debug, Clone, Copy)]
+pub struct Voz {
+    /// Quanto do som de antes do começo da fala vai junto.
+    pub folga: Duration,
+    /// Quanto de silêncio encerra o trecho.
+    pub silencio: Duration,
+    /// O maior trecho.
+    pub teto: Duration,
+    /// O menor som alto que conta como fala.
+    pub minimo: Duration,
+    /// Quantas vezes o piso o nível tem de passar para a fala começar, e abaixo de quantas conta como silêncio.
+    pub entra: f32,
+    pub sai: f32,
+}
+
+/// De quanto em quanto o guardador mede o nível: 32 ms a 16 kHz, o quadro do vigia.
+const QUADRO: usize = 512;
+
+fn amostras_em(d: Duration) -> usize {
+    (d.as_millis() as usize) * 16
+}
+
+/// Guarda o trecho de voz em curso. Fora da fala, guarda só o som de pouco antes.
+struct Guardador {
+    cfg: Voz,
+    /// O nível da sala fora da fala. Começa no do vigia.
+    piso: f32,
+    /// As amostras que ainda não fecham um quadro.
+    resto: Vec<i16>,
+    /// O som de antes: as últimas amostras fora da fala, até a folga.
+    antes: VecDeque<i16>,
+    /// A fala em curso.
+    trecho: Option<Vec<i16>>,
+    /// No trecho em curso: quantos quadros foram de som alto, e quantos de silêncio vieram em seguida.
+    altos: usize,
+    quietos: usize,
+    /// O trecho que terminou, à espera de quem o leve.
+    pronto: Option<Vec<i16>>,
+}
+
+impl Guardador {
+    fn novo(cfg: Voz) -> Self {
+        Self {
+            cfg,
+            piso: 0.003,
+            resto: Vec::with_capacity(QUADRO),
+            antes: VecDeque::new(),
+            trecho: None,
+            altos: 0,
+            quietos: 0,
+            pronto: None,
+        }
+    }
+
+    /// Recebe um bloco. Com `surdo` (o robô está tocando som, ou acabou de tocar), o que está em curso é largado: seria a
+    /// voz do próprio robô, ou uma fala coberta por ela.
+    fn empurrar(&mut self, amostras: &[f32], surdo: bool) {
+        if surdo {
+            self.resto.clear();
+            self.antes.clear();
+            self.trecho = None;
+            return;
+        }
+        for a in amostras {
+            self.resto
+                .push((a * 32768.0).clamp(-32768.0, 32767.0) as i16);
+            if self.resto.len() == QUADRO {
+                let quadro = std::mem::replace(&mut self.resto, Vec::with_capacity(QUADRO));
+                self.quadro(&quadro);
+            }
+        }
+    }
+
+    fn quadro(&mut self, quadro: &[i16]) {
+        let nivel = (quadro
+            .iter()
+            .map(|a| {
+                let x = f32::from(*a) / 32768.0;
+                x * x
+            })
+            .sum::<f32>()
+            / quadro.len() as f32)
+            .sqrt();
+        // Os mínimos absolutos são os do vigia: sem eles, um múltiplo de um piso quase zero dispararia no silêncio.
+        let entra = (self.piso * self.cfg.entra).max(0.002);
+        let sai = (self.piso * self.cfg.sai).max(0.0012);
+        let Some(trecho) = self.trecho.as_mut() else {
+            if nivel > entra {
+                let mut novo: Vec<i16> = self.antes.drain(..).collect();
+                novo.extend_from_slice(quadro);
+                self.trecho = Some(novo);
+                (self.altos, self.quietos) = (1, 0);
+            } else {
+                // O piso só acompanha a sala fora da fala, no passo do vigia (cerca de 6 s).
+                self.piso = 0.995 * self.piso + 0.005 * nivel;
+                self.antes.extend(quadro);
+                let sobra = self.antes.len().saturating_sub(amostras_em(self.cfg.folga));
+                self.antes.drain(..sobra);
+            }
+            return;
+        };
+        trecho.extend_from_slice(quadro);
+        if nivel < sai {
+            self.quietos += 1;
+        } else {
+            self.quietos = 0;
+            self.altos += 1;
+        }
+        let teto = amostras_em(self.cfg.teto);
+        let no_teto = trecho.len() >= teto;
+        if !no_teto && self.quietos * QUADRO < amostras_em(self.cfg.silencio) {
+            return;
+        }
+        let mut fala = self.trecho.take().expect("o trecho em curso");
+        fala.truncate(teto);
+        if no_teto {
+            // O som que não para deixa de contar como fala: o piso sobe até ele, como o vigia faz com o ruído contínuo.
+            self.piso = self.piso.max(nivel * 0.5);
+        }
+        // O som alto curto é estalo ou palma, e não vai.
+        if self.altos * QUADRO >= amostras_em(self.cfg.minimo) {
+            self.pronto = Some(fala);
+        }
+    }
+}
+
+/// O ouvido do robô: o vigia sobre as amostras de qualquer fonte, com a trava; e, se pedido, o guardador do trecho de voz.
 pub struct Ouvinte {
     vigia: SoundSentry,
     trava: Trava,
+    voz: Option<Guardador>,
 }
 
 impl Ouvinte {
@@ -41,7 +175,21 @@ impl Ouvinte {
         Self {
             vigia: SoundSentry::new(),
             trava,
+            voz: None,
         }
+    }
+
+    /// O ouvinte que também guarda o trecho de voz, para a estação.
+    pub fn com_voz(trava: Trava, voz: Voz) -> Self {
+        Self {
+            voz: Some(Guardador::novo(voz)),
+            ..Self::novo(trava)
+        }
+    }
+
+    /// O trecho de voz que terminou no último bloco, se terminou um: PCM de 16 bits, 16 kHz, um canal.
+    pub fn trecho(&mut self) -> Option<Vec<i16>> {
+        self.voz.as_mut().and_then(|g| g.pronto.take())
     }
 
     /// Entrega ao vigia um bloco de amostras a 16 kHz, mono, de -1 a 1, ouvido em `agora`, e devolve o que saiu.
@@ -49,7 +197,11 @@ impl Ouvinte {
         // O vigia ouve sempre, para o piso dele acompanhar a sala; o que a trava descarta é o evento.
         let mut eventos = Vec::new();
         self.vigia.push(amostras, false, &mut eventos);
-        if self.trava.vale(agora) {
+        let surdo = self.trava.vale(agora);
+        if let Some(guardador) = self.voz.as_mut() {
+            guardador.empurrar(amostras, surdo);
+        }
+        if surdo {
             return Vec::new();
         }
         eventos
@@ -84,6 +236,8 @@ pub struct Saidas {
     /// O nível do último bloco, como os bits de um `f32`.
     pub nivel: Arc<AtomicU32>,
     pub dizer: Box<dyn Fn(Option<String>) + Send>,
+    /// Cada trecho de voz que terminou, se o ouvinte guarda voz.
+    pub trecho: Box<dyn Fn(Vec<i16>) + Send>,
 }
 
 /// Passa pelo ouvinte os blocos lidos de `saida`, até ela acabar ou `parar` valer. Devolve quantos blocos ouviu. Uma fonte
@@ -131,6 +285,9 @@ fn ouvir_fluxo(
         for o in ouvinte.empurrar(&amostras, Instant::now()) {
             (saidas.ouvido)(o);
         }
+        if let Some(trecho) = ouvinte.trecho() {
+            (saidas.trecho)(trecho);
+        }
     }
     blocos
 }
@@ -141,12 +298,11 @@ fn ouvir_fluxo(
 pub fn rodar_comando(
     programa: &str,
     args: &[String],
-    trava: Trava,
+    mut ouvinte: Ouvinte,
     saidas: Saidas,
     espera: Duration,
     parar: Arc<AtomicBool>,
 ) {
-    let mut ouvinte = Ouvinte::novo(trava);
     while !parar.load(Ordering::Relaxed) {
         let filho = Command::new(programa)
             .args(args)
@@ -189,13 +345,12 @@ const SILENCIO: Duration = Duration::from_millis(400);
 /// depois de `espera`, e o motivo vai a `dizer`. Página calada não é defeito: o nível fica em zero.
 pub fn rodar_simulador(
     endereco: &str,
-    trava: Trava,
+    mut ouvinte: Ouvinte,
     saidas: Saidas,
     espera: Duration,
     parar: Arc<AtomicBool>,
 ) {
     use std::io::Write;
-    let mut ouvinte = Ouvinte::novo(trava);
     while !parar.load(Ordering::Relaxed) {
         let ligada = std::net::TcpStream::connect(endereco).and_then(|mut c| {
             c.set_read_timeout(Some(SILENCIO))?;
