@@ -224,8 +224,8 @@ fn voz() -> Voz {
         silencio: Duration::from_millis(700),
         teto: Duration::from_secs(10),
         minimo: Duration::from_millis(400),
-        entra: 6.0,
-        sai: 3.0,
+        entra: 3.0,
+        sai: 2.0,
     }
 }
 
@@ -269,6 +269,23 @@ fn a_fala_sai_inteira_com_a_folga_de_antes_e_a_palma_nao_sai() {
     // O ouvinte que não guarda voz não entrega trecho nenhum.
     let mut sem = Ouvinte::novo(Trava::nova(Duration::from_millis(800)));
     assert!(trechos(&mut sem, &palma_e_fala(), Instant::now()).is_empty());
+}
+
+/// A sala e a fala medidas no S1 em 2026-11-18, com o ar-condicionado ligado: o silêncio em 0,0023 e a fala normal, a meio
+/// metro, perto de 0,012, umas cinco vezes o silêncio. Com o corte em seis vezes, essa fala não saía.
+#[test]
+fn a_fala_normal_a_cinco_vezes_o_silencio_da_sala_sai_inteira() {
+    let mut s = 11u32;
+    // O ruído uniforme de amplitude `a` tem nível `a / raiz de 3`.
+    let (sala, fala) = (0.0023 * 3f32.sqrt(), 0.012 * 3f32.sqrt());
+    let mut a = ruido(sala, 12.0, &mut s);
+    a.extend(ruido(fala, 1.5, &mut s));
+    a.extend(ruido(sala, 1.5, &mut s));
+    let mut ouvinte = Ouvinte::com_voz(Trava::nova(Duration::from_millis(800)), voz());
+    let saiu = trechos(&mut ouvinte, &a, Instant::now());
+    assert_eq!(saiu.len(), 1, "a fala de 1,5 s sai, e só ela: {:?}", saiu.iter().map(Vec::len).collect::<Vec<_>>());
+    // A folga de antes (0,3 s), a fala (1,5 s) e o silêncio que a encerra (0,7 s): 2,5 s, com a folga de dois quadros.
+    assert!((39_000..=41_500).contains(&saiu[0].len()), "{} amostras", saiu[0].len());
 }
 
 #[test]

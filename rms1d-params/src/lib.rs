@@ -349,8 +349,10 @@ impl Default for MidiaVoz {
             teto_ms: 10_000,
             // O vigia do pato chama de estalo o som de até 0,38 s (a palma e o eco dela).
             minimo_ms: 400,
-            entra: 6.0,
-            sai: 3.0,
+            // Medido no S1 em 2026-11-18, com o ar-condicionado ligado: o silêncio em 0,0023 e a fala normal a meio metro em
+            // 0,009 a 0,023, de quatro a dez vezes o silêncio. Com 6 e 3, a maior parte da fala ficava de fora.
+            entra: 3.0,
+            sai: 2.0,
         }
     }
 }
@@ -1143,7 +1145,7 @@ mod testes {
                 p.voz.entra,
                 p.voz.sai
             ),
-            (300, 700, 10_000, 400, 6.0, 3.0)
+            (300, 700, 10_000, 400, 3.0, 2.0)
         );
         let p = de("[midia.voz]\nsilencio_ms = 500\nteto_ms = 8000\n")
             .unwrap()
