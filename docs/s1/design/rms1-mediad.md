@@ -35,7 +35,7 @@ As fontes ficam atrás da mesma interface: a de teste, a do simulador e a do rob
 | `rms1-mediad/src/mixer.rs` | O mixer do chip de áudio do robô: o estado da partida da DJI, gravado e conferido, e o volume na conta da DJI |
 | `rms1-mediad/src/microfone.rs` | O ouvinte: o vigia de som do pato, com a trava, e o guardador do trecho de voz que vai à estação. As fontes: arquivo, o `arecord` do robô e o simulador |
 | `rms1-mediad/src/trava.rs` | A trava contra a própria voz |
-| `rms1-mediad/src/alto_falante.rs` | O tocador: um som por vez, e o `wheee` em três partes. A saída é uma interface (`aplay`, o simulador ou nula) |
+| `rms1-mediad/src/alto_falante.rs` | O tocador: um som por vez, o `wheee` em três partes, e a fala da estação num fluxo. A saída é uma interface (`aplay`, o simulador ou nula) |
 | `rms1-mediad/src/reducao.rs` | O quadro que vai à estação: NV12 reduzido a RGB 640 por 360, sem moldura; e a NV12 640 por 360, para o codificador |
 | `rms1-mediad/src/venc.rs` | O cliente do `rms1-venc`: uma conexão só, partilhada pela percepção e pela imagem da tela |
 | `rms1-mediad/venc/rms1-venc.c` | O programa do lado Android do robô que comanda o codificador de hardware do S1 (Hantro H1): H.264 e JPEG |
@@ -95,11 +95,26 @@ O S1 ouve, a estação entende, e o que ela concluiu volta a quem assina. Vale i
 - **A trava contra a própria voz vale igual.** Com o robô tocando som, e na janela depois dele, o trecho em curso é largado: seria a voz do robô, ou uma fala coberta por ela.
 - **O trecho vai como a entrada `audio_voz` do anúncio,** em PCM de 16 bits, 16 kHz, um canal (`pcm16_16k`), pela mesma conexão dos quadros. A ligação com a estação existe quando o anúncio pede o quadro ou a voz: com a estação pedindo só a voz, nenhum quadro sai. A voz não entra na conta dos quadros que esperam a marca da estação. Sem microfone (`fonte = "nenhuma"`), o S1 não guarda voz nem liga a uma estação que só pede a voz.
 - **O que foi dito sem estação ligada não é guardado:** não vira pedido atrasado.
-- **O S1 diz o que sabe receber.** À estação que anuncia `sabe`, ele manda ao ligar a mensagem de tipo 19 com `{"recebe": ["resultado"]}`. A estação só manda mensagem de tipo novo a quem disse isso: um S1 de antes fecharia a conexão ao recebê-la. À estação que não anuncia `sabe`, o S1 não manda o aviso.
+- **O S1 diz o que sabe receber.** À estação que anuncia `sabe`, ele manda ao ligar a mensagem de tipo 19 com `{"recebe": ["resultado"]}` (e `"fala"`, com alto-falante: a seção seguinte). A estação só manda mensagem de tipo novo a quem disse isso: um S1 de antes fecharia a conexão ao recebê-la. À estação que não anuncia `sabe`, o S1 não manda o aviso.
 - **O resultado volta como `s1.station.result`.** Cada acontecimento do pedido que a voz começou na estação (mensagem de tipo 20, no canal da função) é publicado a quem assinou `voice`, numa linha: `{"jsonrpc": "2.0", "method": "s1.station.result", "params": {"function", "delivers", "event"}}`. `function` é a função da estação que rodou; `delivers`, o tipo do que ela entrega, como o anúncio diz; `event` é o acontecimento como a estação o manda: `o` vale `comecou`, `pulada`, `pedaco` (um pedaço da resposta, em `texto`), `terminou` (com `entrega` e `medidas` da etapa) ou `fim` (com `resultado`, `entrega` e `ms`). O texto ouvido é a `entrega` da etapa que transcreve; o pedido validado é a `entrega` do `fim` da função que entrega `pedidos_validos`. O serviço não interpreta nada disso: quem age é quem assina.
 - **`s1.media.status`** conta, em `perception`, os trechos mandados (`voice_sent`) e os acontecimentos recebidos (`results`).
 
 Os testes: `rms1-mediad/tests/microfone.rs` (a fala sai inteira com a folga, a palma não sai, a frase longa sai, o teto, a própria voz), `tests/percepcao.rs` (a voz vai sem quadro pedido, o aviso só a quem anuncia que sabe, o resultado publicado, a voz velha não vai), `tests/servico.rs` (a assinatura) e `tests/estacao.rs` (os tipos 19 a 21). A contraprova, com quatro defeitos plantados e reprovados, está no laboratório, em `out/2026-11-17-estacao-conversa/contraprova-voz-s1.txt`.
+
+## A fala que vem da estação
+
+A estação fala, e o S1 toca. Vale igual no robô (`aplay`) e no simulador (a página): os dois são a mesma saída de som (`alto_falante.rs`, `Saida::abrir_fluxo`).
+
+- **O S1 com alto-falante diz que recebe a fala.** À estação que anuncia `sabe`, ele manda ao ligar `{"recebe": ["resultado", "fala"]}` (só `"fala"`, sem microfone; com a saída de som `nula`, não diz). Para ouvir a fala, ele liga à estação mesmo que ela não peça nada que ele mande.
+- **Cada pedaço chega como mensagem de tipo 21:** PCM de 16 bits, um canal de som, com a taxa em amostras por segundo no canal da mensagem (22.050 nas vozes do Piper). A mensagem sem carga diz que a fala acabou (canal 0) ou foi interrompida (canal 1). É toda fala da estação, e não só a do pedido que este S1 começou; o sinal de vida dela chega do mesmo jeito, como uma fala curta.
+- **A fala é um som como os outros** (`Tocador::falar`, `fim_da_fala`): o primeiro pedaço corta o que estiver tocando e abre um fluxo na taxa dela; os seguintes vão no mesmo fluxo, por uma linha de execução que só escreve; acabada, o que foi escrito toca até o fim; interrompida, para agora. Um som novo a corta, e o que ainda chegar dela é descartado até a estação dizer que acabou. Durante o `wheee`, é descartada inteira.
+- **A trava contra a própria voz vale enquanto a fala toca,** e na janela depois dela: o S1 não manda à estação o que ele mesmo disse.
+- **A conexão que cai no meio de uma fala** encerra a fala no tocador: o que chegou toca até o fim, e o microfone não fica surdo à espera do resto.
+- **`s1.media.status`** conta, em `perception`, os pedaços recebidos (`speech_received`).
+
+Os testes: `rms1-mediad/tests/alto_falante.rs` (um fluxo só na taxa da fala, o fim sem corte, a interrupção, o som novo que descarta o resto, o `wheee`) e `tests/percepcao.rs` (o aviso do que recebe, a ordem e a taxa dos pedaços, a fala a quem não disse que a recebe, a conexão que cai). A contraprova, com seis defeitos plantados, e a prova com a estação de verdade (`FALA NO S1 PROVADA`: o `rms1-mediad` num Mac, com o alto-falante do simulador de mentira) estão em `out/2026-11-17-estacao-conversa/` do laboratório.
+
+**O que falta provar** (2026-11-18): o som saindo pelo alto-falante do robô de verdade, e a trava com a fala, na sessão com o robô.
 
 ## O codificador de hardware
 

@@ -114,8 +114,8 @@ pub enum Tipo {
     /// Da estação para o S1: um acontecimento de um pedido a uma função sob demanda, em JSON (o começo, cada etapa, cada
     /// pedaço da resposta, o fim com a entrega). O canal é o número da função.
     Resultado = 20,
-    /// Da estação para o S1: um pedaço do som da fala, PCM de 16 bits, um canal; o canal leva a taxa, em centenas de
-    /// amostras por segundo. Sem carga: a fala acabou, ou foi interrompida.
+    /// Da estação para o S1: um pedaço do som da fala, PCM de 16 bits, um canal de som; o canal da mensagem leva a taxa, em
+    /// amostras por segundo. Sem carga: a fala acabou (canal 0) ou foi interrompida (canal 1).
     Fala = 21,
 }
 

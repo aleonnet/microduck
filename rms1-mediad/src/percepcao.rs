@@ -16,6 +16,11 @@
 //! 16 bits, 16 kHz), mesmo que a estação não peça quadro nenhum. À estação que diz que sabe (`sabe`, no anúncio), ele diz
 //! ao ligar o que recebe ([`Tipo::Sabe`]); e cada acontecimento do pedido que a voz começou lá ([`Tipo::Resultado`]) é
 //! publicado como `s1.station.result`, com a função e o tipo do que ela entrega. O que foi dito sem estação não é guardado.
+//!
+//! **A fala.** O S1 com alto-falante ([`Config::fala`]) diz à estação que recebe a fala, e cada pedaço dela
+//! ([`Tipo::Fala`]: PCM de 16 bits, um canal, com a taxa no canal da mensagem) vai a quem toca, na ordem em que chega; a
+//! mensagem sem carga diz que a fala acabou (canal 0) ou foi interrompida (canal 1). Para ouvir a fala, o S1 liga à estação
+//! mesmo que ela não peça nada que ele mande. É toda fala da estação, e não só a do pedido que este S1 começou.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::io::{Read, Write};
@@ -146,6 +151,17 @@ pub struct Config {
     pub venc: Option<Arc<Mutex<Venc>>>,
     /// A voz que vai à estação e o que ela responde, se este S1 guarda a voz do microfone.
     pub conversa: Option<Conversa>,
+    /// Quem toca a fala que a estação manda, se este S1 tem alto-falante.
+    pub fala: Option<Arc<dyn Fn(Som) + Send + Sync>>,
+}
+
+/// O que a estação manda tocar.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Som {
+    /// Um pedaço da fala: PCM de 16 bits, um canal, a `hz` amostras por segundo.
+    Pedaco { hz: u32, pcm: Vec<u8> },
+    /// A fala acabou; ou foi interrompida, e para agora.
+    Fim { interrompida: bool },
 }
 
 /// A conversa com a estação: de onde vêm os trechos de voz (PCM de 16 bits, 16 kHz, um canal), e quem recebe cada
@@ -181,6 +197,8 @@ pub struct Estado {
     pub voice_sent: u64,
     /// Acontecimentos de pedidos que a estação mandou de volta.
     pub results: u64,
+    /// Pedaços de fala que a estação mandou tocar.
+    pub speech_received: u64,
 }
 
 /// As candidatas da resposta do detector, passadas do formato da estação (cinco números por caixa) para o que
@@ -453,7 +471,9 @@ pub fn rodar(
                 .find(|e| e.id == "audio_voz" && e.formato == "pcm16_16k")
                 .cloned()
         });
-        if do_quadro.is_none() && da_voz.is_none() {
+        // Para ouvir a fala, a ligação vale mesmo sem nada a mandar; só com a estação que diz que a manda.
+        let ouve_a_fala = cfg.fala.is_some() && anuncio.sabe;
+        if do_quadro.is_none() && da_voz.is_none() && !ouve_a_fala {
             dizer(
                 Some("a estação não pede nenhuma entrada que este S1 manda"),
                 Some(ip),
@@ -469,7 +489,7 @@ pub fn rodar(
         let ritmo_vale = do_quadro
             .as_ref()
             .is_none_or(|(_, r)| r.is_finite() && *r > 0.0);
-        if !ritmo_vale && da_voz.is_none() {
+        if !ritmo_vale && da_voz.is_none() && !ouve_a_fala {
             dizer(Some("a estação anunciou ritmo zero"), Some(ip), None);
             std::thread::sleep(Duration::from_millis(20));
             continue;
@@ -505,8 +525,16 @@ pub fn rodar(
                     }
                     // A estação que diz que sabe mandar o resultado de um pedido recebe, uma vez, o que este S1 sabe receber.
                     // A que não diz fecharia a conexão ao receber o aviso; e sem ele ela não manda nada de novo.
-                    if cfg.conversa.is_some() && anuncio.sabe {
-                        let aviso = br#"{"recebe":["resultado"]}"#;
+                    let recebe: Vec<&str> = [
+                        cfg.conversa.is_some().then_some("resultado"),
+                        cfg.fala.is_some().then_some("fala"),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .collect();
+                    if !recebe.is_empty() && anuncio.sabe {
+                        let aviso = serde_json::json!({"recebe": recebe}).to_string();
+                        let aviso = aviso.as_bytes();
                         let cab = Cabecalho {
                             tipo: Tipo::Sabe,
                             canal: 0,
@@ -519,7 +547,10 @@ pub fn rodar(
                     if let Ok(leitura) = c.try_clone() {
                         let (p, e, pub_) = (partilha.clone(), estado.clone(), publicar.clone());
                         let conversar = cfg.conversa.as_ref().map(|c| c.publicar.clone());
-                        std::thread::spawn(move || ler_entregas(leitura, p, e, pub_, conversar));
+                        let falar = cfg.fala.clone();
+                        std::thread::spawn(move || {
+                            ler_entregas(leitura, p, e, pub_, conversar, falar)
+                        });
                     }
                     conexao = Some((c, alvo));
                     fluxo = None; // numa conexão nova, o H.264 começa por um quadro inteiro
@@ -566,7 +597,7 @@ pub fn rodar(
             }
         }
         let Some((entrada, ritmo)) = do_quadro else {
-            // A estação só pede a voz: a ligação fica, e nenhum quadro sai.
+            // A estação só pede a voz, ou só fala: a ligação fica, e nenhum quadro sai.
             dizer(None, Some(ip), None);
             std::thread::sleep(Duration::from_millis(5));
             continue;
@@ -766,7 +797,20 @@ fn ler_entregas(
     estado: Arc<Mutex<Estado>>,
     publicar: Arc<impl Fn(String) + Send + Sync + 'static>,
     conversar: Option<Arc<dyn Fn(String) + Send + Sync>>,
+    falar: Option<Arc<dyn Fn(Som) + Send + Sync>>,
 ) {
+    // A conexão que cai no meio de uma fala não deixa o alto-falante à espera do resto: o que chegou toca até o fim.
+    struct FalaEmCurso(bool, Option<Arc<dyn Fn(Som) + Send + Sync>>);
+    impl Drop for FalaEmCurso {
+        fn drop(&mut self) {
+            if let (true, Some(falar)) = (self.0, &self.1) {
+                falar(Som::Fim {
+                    interrompida: false,
+                });
+            }
+        }
+    }
+    let mut em_curso = FalaEmCurso(false, falar.clone());
     let mut cab = [0u8; Cabecalho::BYTES];
     loop {
         if conexao.read_exact(&mut cab).is_err() {
@@ -890,13 +934,28 @@ fn ler_entregas(
                     _ => estado.lock().expect("estado da percepção").errors += 1,
                 }
             }
-            // A estação não manda entradas, medidas nem o aviso do que sabe; e a fala este S1 ainda não disse que recebe.
-            Tipo::Entrada
-            | Tipo::EntradaH264
-            | Tipo::EntradaJpeg
-            | Tipo::Medida
-            | Tipo::Sabe
-            | Tipo::Fala => estado.lock().expect("estado da percepção").errors += 1,
+            Tipo::Fala => match &falar {
+                Some(falar) if carga.is_empty() => {
+                    em_curso.0 = false;
+                    falar(Som::Fim {
+                        interrompida: c.canal == 1,
+                    });
+                }
+                Some(falar) => {
+                    em_curso.0 = true;
+                    estado.lock().expect("estado da percepção").speech_received += 1;
+                    falar(Som::Pedaco {
+                        hz: u32::from(c.canal),
+                        pcm: carga,
+                    });
+                }
+                // Este S1 não disse que recebe a fala: é erro de quem mandou.
+                None => estado.lock().expect("estado da percepção").errors += 1,
+            },
+            // A estação não manda entradas, medidas nem o aviso do que sabe.
+            Tipo::Entrada | Tipo::EntradaH264 | Tipo::EntradaJpeg | Tipo::Medida | Tipo::Sabe => {
+                estado.lock().expect("estado da percepção").errors += 1
+            }
         }
     }
 }

@@ -7,6 +7,11 @@
 //!   quem diz `hold: false` corta onde está; o pedido que só deixou de chegar por 300 ms (`robotd/src/intents.rs:119`) pousa,
 //!   tocando o fim. Durante o `wheee`, um som avulso é descartado, e não enfileirado.
 //!
+//! - **A fala que vem da estação Hailo vai num fluxo só,** na taxa que a estação diz, pedaço a pedaço conforme chega
+//!   ([`Tocador::falar`]), e acaba quando a estação diz ([`Tocador::fim_da_fala`]). Ela é um som como os outros: corta o que
+//!   estiver tocando, e um som novo a corta; cortada, o que ainda chegar dela é descartado. Durante o `wheee`, é descartada
+//!   inteira.
+//!
 //! O que não veio: o teremim e o coral, que o S1 não tem. O que é daqui: a saída é uma interface ([`Saida`]), para o robô
 //! (`aplay`), o simulador e o teste tocarem pelo mesmo tocador; e o tocador avisa a [`Trava`] quando começa e quando para.
 
@@ -40,6 +45,16 @@ pub trait Saida: Send {
     ) -> std::io::Result<(Box<dyn Write + Send>, Box<dyn Tocando>)>;
 }
 
+/// A fala da estação, do primeiro pedaço ao fim.
+enum Fala {
+    /// Nenhuma em curso: o próximo pedaço começa uma.
+    Nenhuma,
+    /// Tocando: a taxa, e por onde os pedaços vão a quem escreve no fluxo.
+    Tocando(u32, std::sync::mpsc::Sender<Vec<u8>>),
+    /// Cortada por outro som, ou chegada no meio do `wheee`: o que ainda vier dela não toca.
+    Descartada,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Passeio {
     Fora,
@@ -53,6 +68,7 @@ pub struct Tocador {
     trava: Trava,
     atual: Option<Box<dyn Tocando>>,
     passeio: Passeio,
+    fala: Fala,
     /// O laço do `wheee` segue enquanto isto vale. Apagar sem cortar o som é o que faz o fim tocar.
     seguro: Arc<AtomicBool>,
     renovado_em: Option<Instant>,
@@ -67,6 +83,7 @@ impl Tocador {
             trava,
             atual: None,
             passeio: Passeio::Fora,
+            fala: Fala::Nenhuma,
             seguro: Arc::new(AtomicBool::new(false)),
             renovado_em: None,
             avisou_banco: false,
@@ -92,6 +109,71 @@ impl Tocador {
             }
             Err(e) => tracing::debug!(erro = %e, tag, "a saída de som recusou"),
         }
+    }
+
+    /// Um pedaço da fala da estação: PCM de 16 bits, um canal, a `hz` amostras por segundo. O primeiro pedaço corta o que
+    /// estiver tocando e abre o fluxo; os seguintes vão atrás, por uma linha de execução que só escreve, para a saída cheia
+    /// não segurar quem chama.
+    pub fn falar(&mut self, hz: u32, pcm: &[u8], agora: Instant) {
+        match &self.fala {
+            Fala::Descartada => return,
+            Fala::Tocando(taxa, pedacos) if *taxa == hz => {
+                if pedacos.send(pcm.to_vec()).is_err() {
+                    self.fala = Fala::Descartada;
+                }
+                return;
+            }
+            // Outra taxa no meio é outra fala.
+            Fala::Tocando(..) => self.fala = Fala::Nenhuma,
+            Fala::Nenhuma => {}
+        }
+        if self.passeio != Passeio::Fora {
+            tracing::debug!("fala descartada: o wheee está com a saída");
+            self.fala = Fala::Descartada;
+            return;
+        }
+        self.cortar(agora);
+        let (mut escrita, som) = match self.saida.abrir_fluxo(hz) {
+            Ok(par) => par,
+            Err(e) => {
+                tracing::debug!(erro = %e, "a saída de som recusou a fala");
+                self.fala = Fala::Descartada;
+                return;
+            }
+        };
+        let (pedacos, chegam) = std::sync::mpsc::channel::<Vec<u8>>();
+        let lancado = std::thread::Builder::new()
+            .name("fala".into())
+            .spawn(move || {
+                // Sai quando a fala acaba (quem manda os pedaços some) ou quando o som é cortado (a escrita falha). Ao
+                // sair, o fluxo fecha, e o que já foi escrito toca até o fim.
+                for pedaco in chegam {
+                    if escrita.write_all(&pedaco).is_err() {
+                        return;
+                    }
+                }
+                let _ = escrita.flush();
+            });
+        if let Err(e) = lancado {
+            tracing::error!(erro = %e, "sem thread para a fala");
+            let mut som = som;
+            som.cortar();
+            self.fala = Fala::Descartada;
+            return;
+        }
+        let _ = pedacos.send(pcm.to_vec());
+        self.atual = Some(som);
+        self.fala = Fala::Tocando(hz, pedacos);
+        self.trava.comecou();
+    }
+
+    /// A fala da estação acabou: inteira, e o que foi escrito toca até o fim; ou interrompida, e para agora.
+    pub fn fim_da_fala(&mut self, interrompida: bool, agora: Instant) {
+        // Interrompida, o som é cortado antes de o fluxo fechar: fechado primeiro, o que já foi escrito ainda tocaria.
+        if interrompida && matches!(self.fala, Fala::Tocando(..)) {
+            self.cortar(agora);
+        }
+        self.fala = Fala::Nenhuma;
     }
 
     /// O `wheee`: `true` começa ou renova o pedido; `false` corta onde está.
@@ -122,6 +204,10 @@ impl Tocador {
         if self.atual.as_mut().is_some_and(|som| som.terminou()) {
             self.atual = None;
             self.passeio = Passeio::Fora;
+            // A saída parou sozinha com a fala ainda chegando: o resto dela não abre outro fluxo.
+            if matches!(self.fala, Fala::Tocando(..)) {
+                self.fala = Fala::Descartada;
+            }
             self.trava.terminou(agora);
         }
     }
@@ -141,6 +227,11 @@ impl Tocador {
                 som.cortar();
             }
             self.trava.terminou(agora);
+        }
+        // A fala cortada por outro som não volta: o que ainda chegar dela é descartado, até a estação dizer que acabou. Só
+        // depois do corte o fluxo dela fecha.
+        if matches!(self.fala, Fala::Tocando(..)) {
+            self.fala = Fala::Descartada;
         }
     }
 

@@ -22,6 +22,8 @@ struct Anotacoes {
     fatos: Arc<Mutex<Vec<Fato>>>,
     /// O que foi escrito no fluxo do `wheee`.
     fluxo: Arc<Mutex<Vec<u8>>>,
+    /// A taxa de cada fluxo aberto.
+    taxas: Arc<Mutex<Vec<u32>>>,
     /// Quantos sons estão vivos ao mesmo tempo, e o máximo que já estiveram.
     vivos: Arc<Mutex<(u32, u32)>>,
 }
@@ -119,8 +121,9 @@ impl Saida for SaidaFalsa {
     }
     fn abrir_fluxo(
         &mut self,
-        _hz: u32,
+        hz: u32,
     ) -> std::io::Result<(Box<dyn Write + Send>, Box<dyn Tocando>)> {
+        self.0.taxas.lock().unwrap().push(hz);
         self.0.fatos.lock().unwrap().push(Fato::AbriuFluxo);
         self.0.entrou();
         let fechado = Arc::new(AtomicBool::new(false));
@@ -306,4 +309,106 @@ fn wheee_pousa_ou_corta() {
 
 fn tocador_tocando(a: &Anotacoes) -> bool {
     a.vivos.lock().unwrap().0 > 0
+}
+
+// ---- a fala que vem da estação (2026-11-18) -------------------------------------------------------------------------------
+
+/// `n` amostras de valor `v`, em PCM de 16 bits.
+fn pcm(v: i16, n: usize) -> Vec<u8> {
+    std::iter::repeat_n(v.to_le_bytes(), n).flatten().collect()
+}
+
+#[test]
+fn a_fala_toca_num_fluxo_so_na_taxa_dela_e_termina_sozinha() {
+    let (_pasta, a, trava, mut tocador) = montar();
+    let t = Instant::now();
+    tocador.falar(22_050, &pcm(0x0101, 400), t);
+    assert!(trava.vale(t), "com a fala tocando, a trava vale");
+    tocador.falar(22_050, &pcm(0x0202, 400), t);
+    // Os pedaços de uma fala vão no mesmo fluxo, na ordem, na taxa que a estação disse.
+    assert_eq!(a.fatos(), [Fato::AbriuFluxo]);
+    assert_eq!(*a.taxas.lock().unwrap(), [22_050]);
+    let inteira = [pcm(0x0101, 400), pcm(0x0202, 400)].concat();
+    ate(
+        &mut tocador,
+        || *a.fluxo.lock().unwrap() == inteira,
+        "os dois pedaços da fala no fluxo",
+    );
+    assert!(tocador.tocando(), "a fala acabou antes de a estação dizer");
+    // A fala acabou: o fluxo fecha, o som termina sozinho, e ninguém o corta.
+    tocador.fim_da_fala(false, Instant::now());
+    ate(
+        &mut tocador,
+        || !tocador_tocando(&a),
+        "a fala terminar depois do fim",
+    );
+    tocador.tique(Instant::now());
+    assert!(!tocador.tocando());
+    assert!(
+        !a.fatos().contains(&Fato::CortouFluxo),
+        "acabar não é cortar"
+    );
+    assert!(
+        trava.vale(Instant::now()),
+        "logo depois da fala, a janela da trava ainda vale"
+    );
+    // A fala seguinte abre outro fluxo.
+    tocador.falar(16_000, &pcm(0x0303, 100), Instant::now());
+    assert_eq!(*a.taxas.lock().unwrap(), [22_050, 16_000]);
+    assert_eq!(a.vivos.lock().unwrap().1, 1, "duas falas ao mesmo tempo");
+    tocador.fim_da_fala(true, Instant::now());
+}
+
+#[test]
+fn a_fala_interrompida_e_cortada_e_o_som_novo_descarta_o_resto_dela() {
+    // Interrompida na estação: para agora.
+    let (_pasta, a, _trava, mut tocador) = montar();
+    tocador.falar(22_050, &pcm(0x0101, 400), Instant::now());
+    tocador.fim_da_fala(true, Instant::now());
+    assert_eq!(a.fatos(), [Fato::AbriuFluxo, Fato::CortouFluxo]);
+    assert!(!tocador.tocando());
+
+    // Um som do banco corta a fala, e o que ainda chegar dela é descartado: não corta o som novo nem toca depois.
+    let (_pasta, a, _trava, mut tocador) = montar();
+    tocador.falar(22_050, &pcm(0x0101, 400), Instant::now());
+    tocador.tocar("chirp", Instant::now());
+    tocador.falar(22_050, &pcm(0x0202, 400), Instant::now());
+    assert_eq!(
+        a.fatos(),
+        [
+            Fato::AbriuFluxo,
+            Fato::CortouFluxo,
+            Fato::Tocou("chirp".into())
+        ]
+    );
+    std::thread::sleep(Duration::from_millis(50));
+    assert!(
+        !contem(&a.fluxo.lock().unwrap(), 0x0202),
+        "o resto da fala cortada tocou"
+    );
+    // O fim dessa fala não mexe no som que a cortou; e a fala seguinte toca.
+    tocador.fim_da_fala(false, Instant::now());
+    assert_eq!(a.fatos().len(), 3, "o fim da fala cortada mexeu na saída");
+    tocador.falar(22_050, &pcm(0x0303, 100), Instant::now());
+    assert_eq!(
+        &a.fatos()[3..],
+        [Fato::Cortou("chirp".into()), Fato::AbriuFluxo]
+    );
+    assert_eq!(a.vivos.lock().unwrap().1, 1, "dois sons ao mesmo tempo");
+    tocador.fim_da_fala(true, Instant::now());
+
+    // Durante o `wheee`, a fala é descartada inteira, como o som avulso.
+    let (_pasta, a, _trava, mut tocador) = montar();
+    tocador.wheee(true, Instant::now());
+    let antes = a.fatos().len();
+    tocador.falar(22_050, &pcm(0x0101, 400), Instant::now());
+    tocador.wheee(false, Instant::now());
+    tocador.falar(22_050, &pcm(0x0202, 400), Instant::now());
+    tocador.fim_da_fala(false, Instant::now());
+    assert_eq!(
+        &a.fatos()[antes..],
+        [Fato::CortouFluxo],
+        "a fala que chegou no wheee mexeu na saída"
+    );
+    assert!(!contem(&a.fluxo.lock().unwrap(), 0x0202));
 }

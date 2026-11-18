@@ -246,6 +246,8 @@ fn main() -> ExitCode {
             SaidaDeSom::Nula => Box::new(Nula),
             SaidaDeSom::Simulador => Box::new(Simulador { endereco: midia.alto_falante.endereco.clone() }),
         };
+        // Sem saída de som, o S1 não diz à estação que recebe a fala.
+        let tem_alto_falante = midia.alto_falante.saida != SaidaDeSom::Nula;
         let tocador = Tocador::novo(PathBuf::from(&midia.alto_falante.banco), saida, trava.clone());
         let quadros = Quadros::default();
         let servico = Servico::novo(quadros.clone(), tocador);
@@ -317,6 +319,17 @@ fn main() -> ExitCode {
                     anuncio_vale: rms1_mediad::estacao::ANUNCIO_VALE,
                     venc: s.venc.get().cloned(),
                     conversa: conversa.take(),
+                    // A fala da estação vai ao tocador, que é quem tem a saída de som e avisa a trava.
+                    fala: tem_alto_falante.then(|| {
+                        let s = s.clone();
+                        Arc::new(move |som: percepcao::Som| {
+                            let mut tocador = s.tocador.lock().expect("trava do tocador");
+                            match som {
+                                percepcao::Som::Pedaco { hz, pcm } => tocador.falar(hz, &pcm, Instant::now()),
+                                percepcao::Som::Fim { interrompida } => tocador.fim_da_fala(interrompida, Instant::now()),
+                            }
+                        }) as Arc<dyn Fn(percepcao::Som) + Send + Sync>
+                    }),
                 };
                 let (estado, deteccoes) = (s.percepcao.clone(), s.deteccoes.clone());
                 // Sem assinante, a detecção não tem para quem ir.

@@ -258,16 +258,18 @@ fn subir_percepcao_com(
     anuncio_vale: Duration,
     venc: Option<std::path::PathBuf>,
 ) -> Percepcao {
-    subir_percepcao_inteira(porta_anuncio, ritmo_max, anuncio_vale, venc, None)
+    subir_percepcao_inteira(porta_anuncio, ritmo_max, anuncio_vale, venc, None, None)
 }
 
-/// O mesmo, com a conversa: de onde vêm os trechos de voz, e para onde vai o que a estação responde.
+/// O mesmo, com a conversa (de onde vêm os trechos de voz, e para onde vai o que a estação responde) e com quem toca a
+/// fala da estação.
 fn subir_percepcao_inteira(
     porta_anuncio: u16,
     ritmo_max: f64,
     anuncio_vale: Duration,
     venc: Option<std::path::PathBuf>,
     conversa: Option<percepcao::Conversa>,
+    fala: Option<Arc<dyn Fn(percepcao::Som) + Send + Sync>>,
 ) -> Percepcao {
     let quadros = Quadros::default();
     let parar = Arc::new(AtomicBool::new(false));
@@ -283,6 +285,7 @@ fn subir_percepcao_inteira(
             anuncio_vale,
             venc: venc.map(|caminho| Arc::new(Mutex::new(rms1_mediad::venc::Venc::novo(caminho)))),
             conversa,
+            fala,
         };
         percepcao::rodar(
             cfg,
@@ -1042,7 +1045,14 @@ fn subir_com_a_conversa(porta: u16) -> (Percepcao, mpsc::Sender<Vec<i16>>, Publi
         trechos,
         publicar: Arc::new(move |linha| r.lock().unwrap().push(linha)),
     };
-    let p = subir_percepcao_inteira(porta, 22.0, Duration::from_secs(3), None, Some(conversa));
+    let p = subir_percepcao_inteira(
+        porta,
+        22.0,
+        Duration::from_secs(3),
+        None,
+        Some(conversa),
+        None,
+    );
     (p, dizer, resultados)
 }
 
@@ -1104,6 +1114,11 @@ fn a_voz_vai_a_estacao_mesmo_sem_quadro_pedido_e_o_resultado_volta_a_quem_assina
     let e = p.estado.lock().unwrap().clone();
     // O resultado de uma função que o anúncio não tem, e o que não é JSON, são contados como erro; a conexão segue.
     assert_eq!((e.results, e.errors), (1, 2));
+    // Este S1 não disse que recebe a fala: se ela chegar, é erro de quem mandou, e nada toca.
+    estacao.mandar(Tipo::Fala, 22_050, &[1, 0]);
+    std::thread::sleep(Duration::from_millis(200));
+    let e = p.estado.lock().unwrap().clone();
+    assert_eq!((e.speech_received, e.errors), (0, 3));
     dizer.send(vec![7]).unwrap();
     assert!(
         estacao
@@ -1165,6 +1180,127 @@ fn o_que_foi_dito_sem_estacao_nao_e_guardado_para_depois() {
     let porta = porta_livre();
     let estacao = Estacao::subir_com(porta, SO_A_VOZ, SO_PENSAR, r#","sabe":true"#);
     let p = subir_percepcao(porta, 22.0, Duration::from_secs(3));
+    assert!(estacao.colher(Duration::from_millis(500)).is_empty());
+    assert_eq!(
+        p.estado.lock().unwrap().idle_reason.as_deref(),
+        Some("a estação não pede nenhuma entrada que este S1 manda")
+    );
+}
+
+// ---- a fala que vem da estação (2026-11-18) -------------------------------------------------------------------------------
+
+type Sons = Arc<Mutex<Vec<percepcao::Som>>>;
+
+/// A percepção de um S1 com alto-falante: o que a estação mandou tocar, na ordem. Com `com_microfone`, tem também a conversa.
+fn subir_com_a_fala(porta: u16, com_microfone: bool) -> (Percepcao, Sons) {
+    let sons: Sons = Arc::new(Mutex::new(Vec::new()));
+    let s = sons.clone();
+    let conversa = com_microfone.then(|| percepcao::Conversa {
+        // Ninguém diz nada: quem diria os trechos já saiu.
+        trechos: mpsc::channel::<Vec<i16>>().1,
+        publicar: Arc::new(|_| {}),
+    });
+    let p = subir_percepcao_inteira(
+        porta,
+        22.0,
+        Duration::from_secs(3),
+        None,
+        conversa,
+        Some(Arc::new(move |som| s.lock().unwrap().push(som))),
+    );
+    (p, sons)
+}
+
+#[test]
+fn a_fala_da_estacao_vai_a_quem_toca_na_taxa_e_na_ordem_em_que_chega() {
+    use percepcao::Som;
+    let porta = porta_livre();
+    // A estação não pede nada que este S1 mande: ele liga assim mesmo, para ouvir o que ela fala.
+    let estacao = Estacao::subir_com(porta, "[]", SO_PENSAR, r#","sabe":true"#);
+    let (p, sons) = subir_com_a_fala(porta, false);
+    let ao_ligar = estacao.colher(Duration::from_millis(700));
+    assert_eq!(
+        ao_ligar.iter().map(|r| r.cab.tipo).collect::<Vec<_>>(),
+        [Tipo::Sabe],
+        "o que chegou ao ligar"
+    );
+    let sabe: serde_json::Value = serde_json::from_slice(&ao_ligar[0].carga).unwrap();
+    assert_eq!(sabe, serde_json::json!({"recebe": ["fala"]}));
+    // O canal leva a taxa; a mensagem sem carga diz que a fala acabou (canal 0) ou foi interrompida (canal 1).
+    estacao.mandar(Tipo::Fala, 22_050, &[1, 0, 2, 0]);
+    estacao.mandar(Tipo::Fala, 22_050, &[3, 0]);
+    estacao.mandar(Tipo::Fala, 0, &[]);
+    estacao.mandar(Tipo::Fala, 16_000, &[4, 0]);
+    estacao.mandar(Tipo::Fala, 1, &[]);
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(
+        *sons.lock().unwrap(),
+        [
+            Som::Pedaco {
+                hz: 22_050,
+                pcm: vec![1, 0, 2, 0]
+            },
+            Som::Pedaco {
+                hz: 22_050,
+                pcm: vec![3, 0]
+            },
+            Som::Fim {
+                interrompida: false
+            },
+            Som::Pedaco {
+                hz: 16_000,
+                pcm: vec![4, 0]
+            },
+            Som::Fim { interrompida: true },
+        ]
+    );
+    let e = p.estado.lock().unwrap().clone();
+    assert_eq!(
+        (e.speech_received, e.errors, e.idle_reason, e.frames_sent),
+        (3, 0, None, 0)
+    );
+    // A conexão cai no meio de uma fala: quem toca fica sabendo que ela acabou, ou o microfone ficaria surdo à espera.
+    estacao.mandar(Tipo::Fala, 22_050, &[5, 0]);
+    std::thread::sleep(Duration::from_millis(200));
+    estacao
+        .conexao
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .shutdown(std::net::Shutdown::Both)
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(
+        sons.lock().unwrap()[5..7],
+        [
+            Som::Pedaco {
+                hz: 22_050,
+                pcm: vec![5, 0]
+            },
+            Som::Fim {
+                interrompida: false
+            },
+        ]
+    );
+}
+
+#[test]
+fn o_s1_com_microfone_e_alto_falante_diz_que_recebe_o_resultado_e_a_fala() {
+    let porta = porta_livre();
+    let estacao = Estacao::subir_com(porta, SO_A_VOZ, SO_PENSAR, r#","sabe":true"#);
+    let (_p, _sons) = subir_com_a_fala(porta, true);
+    let ao_ligar = estacao.colher(Duration::from_millis(700));
+    let sabe: Vec<serde_json::Value> = ao_ligar
+        .iter()
+        .filter(|r| r.cab.tipo == Tipo::Sabe)
+        .map(|r| serde_json::from_slice(&r.carga).unwrap())
+        .collect();
+    assert_eq!(sabe, [serde_json::json!({"recebe": ["resultado", "fala"]})]);
+    // A estação de antes, que não diz que sabe, não recebe o aviso; e sem nada a mandar a ela, o S1 nem liga.
+    let porta = porta_livre();
+    let estacao = Estacao::subir(porta, "[]", SO_PENSAR);
+    let (p, _sons) = subir_com_a_fala(porta, false);
     assert!(estacao.colher(Duration::from_millis(500)).is_empty());
     assert_eq!(
         p.estado.lock().unwrap().idle_reason.as_deref(),
