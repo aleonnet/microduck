@@ -118,7 +118,8 @@ pub enum Tipo {
     /// amostras por segundo. Sem carga: a fala acabou (canal 0) ou foi interrompida (canal 1).
     Fala = 21,
     /// Da estação para o S1: um pedido validado, para o corpo cumprir, em JSON: `{"pedido": número, "ferramenta": nome,
-    /// "parametros": {...}}`. Venha ele da voz do robô ou do painel.
+    /// "parametros": {...}}`, venha ele da voz do robô ou do painel; ou a ordem de largar um pedido em curso: `{"pedido":
+    /// número, "cancelar": true}`.
     Pedido = 22,
     /// Do S1 para a estação: como o pedido terminou no corpo, em JSON: `{"pedido": número, "ferramenta": nome, "como":
     /// "cumprida" | "vencida" | "interrompida" | "recusada", "motivo": texto}`.

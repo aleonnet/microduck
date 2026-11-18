@@ -122,6 +122,7 @@ A estação valida um pedido, e o corpo o cumpre. Quem cumpre é o `rms1-agente`
 
 - **O S1 diz que recebe o pedido:** `"pedido"` entra no `{"recebe": [...]}` do aviso, e a ligação com a estação que anuncia `sabe` vale mesmo sem nada a mandar.
 - **O pedido chega como mensagem de tipo 22,** em JSON: `{"pedido": número, "ferramenta": nome, "parametros": {...}}`. Vale para o pedido que nasceu da voz do robô e para o que nasceu no painel da estação. O serviço o publica como `s1.station.request {"request", "tool", "params"}` a quem assinou `requests`.
+- **A ordem de largar um pedido** (a estação o interrompeu, ou o teto dela venceu) chega pela mesma mensagem, `{"pedido": número, "cancelar": true}`, e vai a quem assina como `s1.station.request {"request", "cancel": true}`.
 - **Sem ninguém assinando,** o serviço responde na hora à estação que o pedido foi recusado ("nenhum agente ligado ao rms1-mediad"): ela não fica à espera.
 - **O desfecho volta como mensagem de tipo 23:** `{"pedido", "ferramenta", "como", "motivo"}`, com `como` em `cumprida`, `vencida`, `interrompida` ou `recusada`. Quem o diz é o agente, por `s1.station.outcome {"request", "tool", "outcome", "reason"}` no socket. O desfecho dito sem estação ligada não é guardado.
 - **`s1.media.status`** conta, em `perception`, os pedidos recebidos (`requests`) e os desfechos mandados (`outcomes`).

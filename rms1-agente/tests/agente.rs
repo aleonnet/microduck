@@ -454,3 +454,24 @@ fn procurar_varre_com_a_torre_e_para_quando_acha() {
     assert_eq!(desfechos(&fim), [("search".to_owned(), Como::Vencida)]);
     assert_eq!(ao_corpo(&fim)[0].1, json!({"action": "stop"}));
 }
+
+#[test]
+fn a_estacao_manda_largar_o_pedido_em_curso() {
+    let mut a = agente();
+    let t0 = Instant::now();
+    a.corpo(armado_em(0.0, 0.0), t0);
+    a.pedido(
+        pedido("move", json!({"direction": "forward", "meters": 2.0})),
+        t0,
+    );
+    // A ordem de largar outro pedido não mexe no que está em curso.
+    assert!(a.largar(9, t0 + ms(200)).is_empty());
+    assert_eq!(a.em_curso(), Some("move"));
+    // A do pedido em curso para o corpo, e ele termina interrompido.
+    let acoes = a.largar(7, t0 + ms(300));
+    assert_eq!(ao_corpo(&acoes), [("robot.stop".to_owned(), Value::Null)]);
+    assert_eq!(desfechos(&acoes), [("move".to_owned(), Como::Interrompida)]);
+    assert!(a.tique(t0 + ms(500)).is_empty());
+    // Sem nada em curso, não há o que largar.
+    assert!(a.largar(7, t0 + ms(600)).is_empty());
+}

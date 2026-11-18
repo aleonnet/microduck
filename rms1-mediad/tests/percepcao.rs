@@ -1390,9 +1390,19 @@ fn o_pedido_da_estacao_vai_ao_agente_e_o_desfecho_volta_a_ela() {
         (volta.cab.tipo, volta.cab.canal, volta.carga.as_slice()),
         (Tipo::Desfecho, 0, desfecho.as_bytes())
     );
+    // A estação manda largar o pedido (ela o interrompeu, ou o teto dela venceu): a ordem vai a quem assina, sem ferramenta.
+    estacao.mandar(Tipo::Pedido, 0, br#"{"pedido":41,"cancelar":true}"#);
+    std::thread::sleep(Duration::from_millis(300));
+    let linhas = pedidos.lock().unwrap().clone();
+    assert_eq!(linhas.len(), 2, "{linhas:?}");
+    let v: serde_json::Value = serde_json::from_str(&linhas[1]).unwrap();
+    assert_eq!(
+        v,
+        serde_json::json!({"jsonrpc": "2.0", "method": "s1.station.request", "params": {"request": 41, "cancel": true}})
+    );
     let e = p.estado.lock().unwrap().clone();
     // O pedido que não é JSON, e o que não diz o número, são contados como erro; a conexão segue.
-    assert_eq!((e.requests, e.outcomes, e.errors), (1, 1, 2));
+    assert_eq!((e.requests, e.outcomes, e.errors), (2, 1, 2));
 
     // Sem agente assinando, o pedido é recusado na hora, dizendo por quê: a estação não fica à espera.
     let porta = porta_livre();
@@ -1415,4 +1425,7 @@ fn o_pedido_da_estacao_vai_ao_agente_e_o_desfecho_volta_a_ela() {
         (Some(41), Some("move"), Some("recusada"))
     );
     assert!(d["motivo"].as_str().unwrap().contains("agente"), "{d}");
+    // A ordem de largar, sem agente, não tem o que largar: nada volta.
+    estacao.mandar(Tipo::Pedido, 0, br#"{"pedido":41,"cancelar":true}"#);
+    assert!(estacao.colher(Duration::from_millis(400)).is_empty());
 }

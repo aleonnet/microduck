@@ -1,6 +1,6 @@
 //! Os dois sockets locais do agente.
 //!
-//! - **O do `rms1-mediad`:** o agente assina os pedidos que a estação manda cumprir (`s1.station.request`) e as detecções
+//! - **O do `rms1-mediad`:** o agente assina os pedidos que a estação manda cumprir, ou largar (`s1.station.request`), e as detecções
 //!   (`media.detections`), e manda de volta como cada pedido terminou (`s1.station.outcome`), que o `rms1-mediad` leva à
 //!   estação.
 //! - **O do `rms1d`:** o agente assina o estado do corpo (`robot.state`) e manda os pedidos (`robot.move`, `robot.stop`,
@@ -44,6 +44,8 @@ enum Chegou {
     Corpo(Corpo),
     CorpoCaiu,
     Pedido(Pedido),
+    /// A estação mandou largar o pedido deste número.
+    Largar(u64),
     Deteccoes(Vec<Caixa>),
 }
 
@@ -171,6 +173,9 @@ pub async fn rodar(cfg: Config) {
         a_midia.clone(),
         chegou,
         |v| match v["method"].as_str()? {
+            "s1.station.request" if v["params"]["cancel"] == true => {
+                v["params"]["request"].as_u64().map(Chegou::Largar)
+            }
             "s1.station.request" => pedido_de(&v["params"]).map(Chegou::Pedido),
             "media.detections" => caixas_de(&v["params"]).map(Chegou::Deteccoes),
             _ => None,
@@ -197,6 +202,7 @@ pub async fn rodar(cfg: Config) {
                         tracing::info!(pedido = p.numero, ferramenta = p.ferramenta, "a estação mandou cumprir");
                         agente.pedido(p, agora)
                     }
+                    Some(Chegou::Largar(numero)) => agente.largar(numero, agora),
                     Some(Chegou::Deteccoes(caixas)) => agente.deteccoes(&caixas, agora),
                     None => return,
                 }

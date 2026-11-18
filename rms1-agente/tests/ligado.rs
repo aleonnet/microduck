@@ -162,6 +162,22 @@ async fn as_deteccoes_guiam_a_torre_e_o_corpo_que_cai_interrompe() {
         b.corpo.com("robot.subscribe").len() > assinaturas
     })
     .await;
+    // A estação manda largar um pedido em curso: o corpo para, e o desfecho diz que foi interrompido.
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    b.midia.notificar(
+        "s1.station.request",
+        json!({"request": 53, "tool": "move", "params": {"direction": "forward", "meters": 2.0}}),
+    );
+    ate("o corpo receber o pedido de andar", || {
+        !b.corpo.com("robot.move").is_empty()
+    })
+    .await;
+    let paradas = b.corpo.com("robot.stop").len();
+    b.midia
+        .notificar("s1.station.request", json!({"request": 53, "cancel": true}));
+    ate("o desfecho do pedido 53", || b.desfecho(53).is_some()).await;
+    assert_eq!(b.desfecho(53).unwrap()["outcome"], "interrompida");
+    assert_eq!(b.corpo.com("robot.stop").len(), paradas + 1);
     // O detector de patos não diz rótulo: a caixa dele é um pato.
     tokio::time::sleep(Duration::from_millis(150)).await;
     b.midia.notificar(

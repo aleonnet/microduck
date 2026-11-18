@@ -1016,19 +1016,23 @@ fn ler_entregas(
                 None => estado.lock().expect("estado da percepção").errors += 1,
             },
             Tipo::Pedido => {
-                let pedido = serde_json::from_slice::<serde_json::Value>(&carga)
-                    .ok()
-                    .and_then(|v| {
-                        Some((
-                            v["pedido"].as_u64()?,
-                            v["ferramenta"].as_str()?.to_owned(),
-                            v,
-                        ))
-                    });
-                match (pedido, &cumprir) {
-                    (Some((numero, ferramenta, v)), Some((pedir, devolver))) => {
+                let v = serde_json::from_slice::<serde_json::Value>(&carga).ok();
+                let numero = v.as_ref().and_then(|v| v["pedido"].as_u64());
+                let largar = v.as_ref().is_some_and(|v| v["cancelar"] == true);
+                let ferramenta = v
+                    .as_ref()
+                    .and_then(|v| v["ferramenta"].as_str())
+                    .map(str::to_owned);
+                match (numero, largar, ferramenta, &cumprir) {
+                    // A ordem de largar um pedido: vai a quem assina; sem ninguém, não há o que largar.
+                    (Some(numero), true, _, Some((pedir, _))) => {
                         estado.lock().expect("estado da percepção").requests += 1;
-                        let params = match v["parametros"].as_object() {
+                        let linha = serde_json::json!({"jsonrpc": "2.0", "method": "s1.station.request", "params": {"request": numero, "cancel": true}});
+                        pedir(linha.to_string());
+                    }
+                    (Some(numero), false, Some(ferramenta), Some((pedir, devolver))) => {
+                        estado.lock().expect("estado da percepção").requests += 1;
+                        let params = match v.as_ref().and_then(|v| v["parametros"].as_object()) {
                             Some(p) => serde_json::Value::Object(p.clone()),
                             None => serde_json::json!({}),
                         };

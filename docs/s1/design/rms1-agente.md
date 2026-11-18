@@ -31,6 +31,7 @@ Cada ligação religa sozinha. O `rms1-mediad` e a estação: [`rms1-mediad.md`]
 - **Toda habilidade termina, e diz como:** `cumprida`, `vencida` (o teto da tabela), `interrompida` ou `recusada`, com o motivo em texto.
 - **O pedido contínuo é renovado** a cada `renovar_ms` (100). O `rms1d` zera o corpo sem pedido novo por `[seguranca] prazo_ms` (500): se o agente cair, o robô para sozinho. Ao subir, o agente confere que cabem duas renovações no prazo e que a velocidade da tabela cabe no corpo, e não sobe se não couberem.
 - **Sem o estado do corpo por `corpo_vale_ms` (1000),** o `rms1d` saiu: o pedido é recusado, e a habilidade em curso é largada.
+- **A estação pode mandar largar um pedido** (ela o interrompeu, ou o teto dela venceu): se é o que está em curso, o corpo para, e ele termina interrompido.
 - **Sem agente ligado,** o `rms1-mediad` recusa o pedido na hora, e a estação não fica à espera.
 
 ## As habilidades

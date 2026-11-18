@@ -395,6 +395,20 @@ impl Agente {
         acoes
     }
 
+    /// A estação mandou largar o pedido de número `numero` (ela o interrompeu, ou o teto dela venceu): se é o que está em
+    /// curso, o corpo para, e ele termina interrompido.
+    pub fn largar(&mut self, numero: u64, _agora: Instant) -> Vec<Acao> {
+        let mut acoes = Vec::new();
+        if self.curso.as_ref().is_some_and(|c| c.numero == numero) {
+            self.encerrar(
+                Como::Interrompida,
+                "a estação mandou largar o pedido",
+                &mut acoes,
+            );
+        }
+        acoes
+    }
+
     /// A cada tique: renova o pedido contínuo, e termina a habilidade que chegou, venceu ou perdeu o corpo.
     pub fn tique(&mut self, agora: Instant) -> Vec<Acao> {
         let mut acoes = Vec::new();
