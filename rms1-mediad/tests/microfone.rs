@@ -378,3 +378,26 @@ fn a_propria_voz_nao_vira_trecho() {
         saiu.iter().map(Vec::len).collect::<Vec<_>>()
     );
 }
+
+/// A fala de alguém que já ia pelo meio quando a trava abriu: o que sobra dela não é uma frase, e mandado à estação vira texto
+/// sem pé nem cabeça (visto pela bancada de voz do laboratório em 2026-11-18: "e do outro."). O guardador só volta a
+/// armar depois de ouvir a sala quieta; a fala seguinte sai inteira.
+#[test]
+fn a_fala_que_ia_pelo_meio_quando_a_trava_abre_nao_sai_pela_metade() {
+    let trava = Trava::nova(Duration::from_millis(800));
+    let mut ouvinte = Ouvinte::com_voz(trava.clone(), voz());
+    let t0 = Instant::now();
+    let mut s = 31u32;
+    // A sala, uma fala de 2,5 s que começa aos 4 s, a sala, e outra fala, de 1 s, aos 8,5 s.
+    let mut a = ruido(0.001, 4.0, &mut s);
+    a.extend(ruido(0.2, 2.5, &mut s));
+    a.extend(ruido(0.001, 2.0, &mut s));
+    a.extend(ruido(0.2, 1.0, &mut s));
+    a.extend(ruido(0.001, 2.5, &mut s));
+    // O robô toca até os 4,2 s: a trava vale até os 5 s, e abre com a primeira fala ainda em curso, faltando um segundo e meio.
+    trava.comecou();
+    trava.terminou(t0 + Duration::from_millis(4200));
+    let saiu = trechos(&mut ouvinte, &a, t0);
+    assert_eq!(saiu.len(), 1, "só a segunda fala sai: {:?}", saiu.iter().map(Vec::len).collect::<Vec<_>>());
+    assert!((15_000..17_500).contains(&altas(&saiu[0])), "e sai inteira, com 1 s de som alto: {}", altas(&saiu[0]));
+}

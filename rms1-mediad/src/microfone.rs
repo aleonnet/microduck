@@ -75,7 +75,13 @@ struct Guardador {
     quietos: usize,
     /// O trecho que terminou, à espera de quem o leve.
     pronto: Option<Vec<i16>>,
+    /// Depois de ficar surdo, o guardador só volta a armar quando ouve a sala quieta por um tempo: a fala de alguém que já
+    /// ia pelo meio quando a trava abriu não é uma frase. Aqui, quantos quadros quietos seguidos já ouviu; `None` é armado.
+    quieto_antes: Option<usize>,
 }
+
+/// Quanto de sala quieta o guardador ouve, depois de surdo, antes de voltar a armar.
+const QUIETO_PARA_ARMAR: Duration = Duration::from_millis(300);
 
 impl Guardador {
     fn novo(cfg: Voz) -> Self {
@@ -88,6 +94,7 @@ impl Guardador {
             altos: 0,
             quietos: 0,
             pronto: None,
+            quieto_antes: None,
         }
     }
 
@@ -98,6 +105,7 @@ impl Guardador {
             self.resto.clear();
             self.antes.clear();
             self.trecho = None;
+            self.quieto_antes = Some(0);
             return;
         }
         for a in amostras {
@@ -123,6 +131,15 @@ impl Guardador {
         // Os mínimos absolutos são os do vigia: sem eles, um múltiplo de um piso quase zero dispararia no silêncio.
         let entra = (self.piso * self.cfg.entra).max(0.002);
         let sai = (self.piso * self.cfg.sai).max(0.0012);
+        // Saindo de surdo: espera a sala quieta. O som de antes segue sendo guardado, para a frase seguinte sair com a folga.
+        if let Some(quietos) = self.quieto_antes {
+            let quietos = if nivel < sai { quietos + 1 } else { 0 };
+            self.quieto_antes = (quietos * QUADRO < amostras_em(QUIETO_PARA_ARMAR)).then_some(quietos);
+            self.antes.extend(quadro);
+            let sobra = self.antes.len().saturating_sub(amostras_em(self.cfg.folga));
+            self.antes.drain(..sobra);
+            return;
+        }
         let Some(trecho) = self.trecho.as_mut() else {
             if nivel > entra {
                 let mut novo: Vec<i16> = self.antes.drain(..).collect();

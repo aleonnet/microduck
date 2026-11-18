@@ -101,6 +101,8 @@ O S1 ouve, a estação entende, e o que ela concluiu volta a quem assina. Vale i
 
 Os testes: `rms1-mediad/tests/microfone.rs` (a fala sai inteira com a folga, a palma não sai, a frase longa sai, o teto, a própria voz), `tests/percepcao.rs` (a voz vai sem quadro pedido, o aviso só a quem anuncia que sabe, o resultado publicado, a voz velha não vai), `tests/servico.rs` (a assinatura) e `tests/estacao.rs` (os tipos 19 a 21). A contraprova, com quatro defeitos plantados e reprovados, está no laboratório, em `out/2026-11-17-estacao-conversa/contraprova-voz-s1.txt`.
 
+- **Depois de surdo, o guardador só volta a armar com a sala quieta por 0,3 s.** A fala de alguém que já ia pelo meio quando a trava abriu não é uma frase: mandada à estação, virava texto sem pé nem cabeça (visto pela bancada de voz do laboratório, 2026-11-18). O som de antes segue guardado, e a frase seguinte sai com a folga dela.
+
 ## A fala que vem da estação
 
 A estação fala, e o S1 toca. Vale igual no robô (`aplay`) e no simulador (a página): os dois são a mesma saída de som (`alto_falante.rs`, `Saida::abrir_fluxo`).
