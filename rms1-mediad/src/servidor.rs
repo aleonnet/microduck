@@ -8,6 +8,10 @@
 //!   duas assinaturas: a que não vem é desligada. Com `"voice": true`, a conexão recebe também `s1.station.result`: cada
 //!   acontecimento de um pedido que a voz do robô começou na estação (o texto ouvido, a resposta enquanto é gerada, o fim
 //!   com o que a função entregou), com a função e o tipo do que ela entrega.
+//!   Com `"requests": true`, recebe `s1.station.request {"request", "tool", "params"}`: cada pedido validado que a estação
+//!   manda o corpo cumprir. É a assinatura do agente.
+//! - `s1.station.outcome {"request", "tool", "outcome", "reason"}`: como o pedido terminou no corpo (`cumprida`, `vencida`,
+//!   `interrompida` ou `recusada`), que o serviço leva de volta à estação.
 //! - `s1.media.volume {"volume": 0..100}`: o volume do alto-falante, na conta da DJI, pelo mixer do robô.
 //! - `s1.media.status`: o que o serviço está fazendo.
 //! - `s1.media.preview {"width": 640}`: o quadro reduzido a RGB, para quem só quer olhar (a tela "Sentidos"): o cabeçalho de
@@ -62,6 +66,11 @@ const DETECCOES_NA_FILA: usize = 8;
 /// Os acontecimentos de um pedido vêm em rajada (um por pedaço da resposta), e nenhum pode faltar a quem os junta.
 const RESULTADOS_NA_FILA: usize = 512;
 
+/// Os pedidos a cumprir vêm um por vez; quem fica para trás deste tanto não está cumprindo nada.
+const PEDIDOS_NA_FILA: usize = 16;
+/// Como um pedido pode terminar no corpo.
+const DESFECHOS: [&str; 4] = ["cumprida", "vencida", "interrompida", "recusada"];
+
 /// O que as conexões partilham.
 pub struct Servico {
     pub quadros: Quadros,
@@ -71,6 +80,10 @@ pub struct Servico {
     pub deteccoes: broadcast::Sender<Arc<str>>,
     /// As notificações `s1.station.result`, prontas, uma linha JSON cada.
     pub resultados: broadcast::Sender<Arc<str>>,
+    /// As notificações `s1.station.request`, prontas, uma linha JSON cada: os pedidos que a estação manda cumprir.
+    pub pedidos: broadcast::Sender<Arc<str>>,
+    /// Por onde o desfecho de um pedido vai à estação: quem lê é [`crate::percepcao::rodar`]. Vazio sem a percepção.
+    pub desfechos: std::sync::OnceLock<std::sync::mpsc::Sender<String>>,
     /// O que a percepção pela estação está fazendo: quem escreve é [`crate::percepcao::rodar`].
     pub percepcao: Arc<Mutex<Estado>>,
     /// Por que a câmera não entrega quadro, se não entrega: quem escreve é a fonte da câmera.
@@ -92,12 +105,15 @@ impl Servico {
         let (ouvidos, _) = broadcast::channel(OUVIDOS_NA_FILA);
         let (deteccoes, _) = broadcast::channel(DETECCOES_NA_FILA);
         let (resultados, _) = broadcast::channel(RESULTADOS_NA_FILA);
+        let (pedidos, _) = broadcast::channel(PEDIDOS_NA_FILA);
         Arc::new(Self {
             quadros,
             tocador: Mutex::new(tocador),
             ouvidos,
             deteccoes,
             resultados,
+            pedidos,
+            desfechos: std::sync::OnceLock::new(),
             percepcao: Arc::default(),
             camera: Arc::default(),
             contagem_da_camera: Arc::default(),
@@ -231,6 +247,7 @@ where
     let mut ouvindo: Option<broadcast::Receiver<Ouvido>> = None;
     let mut vendo: Option<broadcast::Receiver<Arc<str>>> = None;
     let mut conversando: Option<broadcast::Receiver<Arc<str>>> = None;
+    let mut cumprindo: Option<broadcast::Receiver<Arc<str>>> = None;
     // A linha em leitura fica fora do laço: se um evento de som chega no meio dela, o que já foi lido não se perde.
     let mut em_leitura = Vec::new();
     loop {
@@ -260,6 +277,18 @@ where
                     }
                     // Quem ficou para trás perde as velhas, que já não dizem onde o pato está.
                     Err(broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(broadcast::error::RecvError::Closed) => return Ok(()),
+                }
+                continue;
+            }
+            p = receber(&mut cumprindo) => {
+                match p {
+                    Ok(pedido) => {
+                        escrita.write_all(pedido.as_bytes()).await?;
+                        escrita.write_all(b"\n").await?;
+                        escrita.flush().await?;
+                    }
+                    Err(broadcast::error::RecvError::Lagged(n)) => tracing::warn!(perdidos = n, "o agente ficou para trás dos pedidos"),
                     Err(broadcast::error::RecvError::Closed) => return Ok(()),
                 }
                 continue;
@@ -351,12 +380,49 @@ where
             ouvindo = quer("heard").then(|| s.ouvidos.subscribe());
             vendo = quer("detections").then(|| s.deteccoes.subscribe());
             conversando = quer("voice").then(|| s.resultados.subscribe());
+            cumprindo = quer("requests").then(|| s.pedidos.subscribe());
             if pedido.id.is_some() {
                 escrever(
                     &mut escrita,
                     &proto::Response::ok(pedido.id, &proto::IntentResult::accepted()),
                 )
                 .await?;
+            }
+            continue;
+        }
+        if metodo == "s1.station.outcome" {
+            let p = pedido.params.as_ref();
+            let campo = |nome: &str| p.and_then(|p| p[nome].as_str());
+            let lido = match (
+                p.and_then(|p| p["request"].as_u64()),
+                campo("tool"),
+                campo("outcome").filter(|o| DESFECHOS.contains(o)),
+            ) {
+                (None, _, _) => Err("request must be the number of the station's request"),
+                (_, None, _) => Err("tool must be the name of the tool"),
+                (_, _, None) => Err("outcome must be cumprida, vencida, interrompida or recusada"),
+                (Some(numero), Some(ferramenta), Some(como)) => Ok(
+                    serde_json::json!({"pedido": numero, "ferramenta": ferramenta, "como": como, "motivo": campo("reason").unwrap_or("")}),
+                ),
+            };
+            let resposta = match lido {
+                Err(texto) => erro(pedido.id.clone(), proto::code::INVALID_PARAMS, texto),
+                Ok(desfecho) => {
+                    // Sem a percepção de pé, o desfecho não tem para onde ir.
+                    let foi = s
+                        .desfechos
+                        .get()
+                        .is_some_and(|d| d.send(desfecho.to_string()).is_ok());
+                    let r = if foi {
+                        proto::IntentResult::accepted()
+                    } else {
+                        proto::IntentResult::refused("rms1-mediad is not linked to the station")
+                    };
+                    proto::Response::ok(pedido.id.clone(), &r)
+                }
+            };
+            if pedido.id.is_some() {
+                escrever(&mut escrita, &resposta).await?;
             }
             continue;
         }

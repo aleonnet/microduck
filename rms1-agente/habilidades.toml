@@ -1,0 +1,74 @@
+# As habilidades do agente do S1: para cada ferramenta que a estação valida, o que o agente pede ao `rms1d`, o limite, e
+# quando termina. Os nomes das ferramentas e dos parâmetros são os da estação (`tools/hailo/catalogo/funcoes_de_prova.json`,
+# no laboratório).
+#
+# Os números daqui são de partida, e se sintonizam com o robô: nenhum foi medido nele ainda (2026-11-18).
+
+[geral]
+# De quanto em quanto o pedido contínuo (andar, girar a torre) é renovado. O `rms1d` zera o corpo sem pedido novo por
+# `[seguranca] prazo_ms` (500): tem de caber duas renovações nesse prazo.
+renovar_ms = 100
+# Sem o estado do corpo por este tempo, o `rms1d` saiu: o agente recusa o pedido, e larga a habilidade em curso.
+corpo_vale_ms = 1000
+
+# Parar: nunca é barrado, e encerra a habilidade em curso.
+[[habilidade]]
+faz = "parar"
+ferramenta = "stop"
+
+# Mover: anda numa direção por uma distância. Com o corpo dizendo onde está, termina pela distância; sem isso, pelo tempo
+# da distância na velocidade daqui. Vence no teto: o tempo da distância vezes `folga`, mais um segundo.
+[[habilidade]]
+faz = "mover"
+ferramenta = "move"
+direcao = "direction"
+metros = "meters"
+velocidade = 0.3
+folga = 2.0
+# O que cada direção é no corpo: x à frente, y à esquerda.
+[habilidade.direcoes]
+forward = [1.0, 0.0]
+back = [-1.0, 0.0]
+left = [0.0, 1.0]
+right = [0.0, -1.0]
+
+# Olhar: gira a torre até o alvo ficar no meio do quadro. A velocidade é `ganho` graus por segundo com o alvo na borda do
+# quadro, e cai até zero no meio. Termina com o alvo a menos de `tolerancia` (fração do quadro) do meio por `seguidas`
+# detecções; vence em `teto_s` sem conseguir.
+[[habilidade]]
+faz = "olhar"
+ferramenta = "look_at"
+alvo = "target"
+ganho = 60.0
+tolerancia = 0.08
+seguidas = 3
+teto_s = 8.0
+
+# Procurar: varre com a torre, `lado_s` para cada lado de onde começou, a `varredura` graus por segundo, até o alvo
+# aparecer numa detecção; vence em `teto_s` sem achar.
+[[habilidade]]
+faz = "procurar"
+ferramenta = "search"
+alvo = "target"
+varredura = 40.0
+lado_s = 2.0
+teto_s = 20.0
+
+# Palavras do pedido que querem dizer um rótulo do detector. Fora daqui, o alvo casa com a detecção cujo rótulo tem uma
+# palavra do pedido ("ball" casa com "sports ball").
+[alvos]
+me = "person"
+you = "person"
+human = "person"
+someone = "person"
+somebody = "person"
+people = "person"
+man = "person"
+woman = "person"
+kid = "person"
+child = "person"
+phone = "cell phone"
+sofa = "couch"
+television = "tv"
+plant = "potted plant"
+table = "dining table"

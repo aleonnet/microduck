@@ -21,6 +21,10 @@
 //! ([`Tipo::Fala`]: PCM de 16 bits, um canal, com a taxa no canal da mensagem) vai a quem toca, na ordem em que chega; a
 //! mensagem sem carga diz que a fala acabou (canal 0) ou foi interrompida (canal 1). Para ouvir a fala, o S1 liga à estação
 //! mesmo que ela não peça nada que ele mande. É toda fala da estação, e não só a do pedido que este S1 começou.
+//!
+//! **O pedido a cumprir.** O S1 com quem cumpra pedidos ([`Config::agente`]) diz à estação que recebe o pedido; cada pedido
+//! validado que ela manda ([`Tipo::Pedido`]) é publicado como `s1.station.request`, e o desfecho que o agente diz volta a
+//! ela ([`Tipo::Desfecho`]). Sem ninguém assinando os pedidos, a recusa volta na hora: a estação não fica à espera.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::io::{Read, Write};
@@ -153,6 +157,18 @@ pub struct Config {
     pub conversa: Option<Conversa>,
     /// Quem toca a fala que a estação manda, se este S1 tem alto-falante.
     pub fala: Option<Arc<dyn Fn(Som) + Send + Sync>>,
+    /// Quem cumpre no corpo o pedido que a estação manda.
+    pub agente: Option<Agente>,
+}
+
+/// O caminho até quem cumpre os pedidos da estação.
+pub struct Agente {
+    /// Recebe cada notificação `s1.station.request`, uma linha JSON, e diz se alguém a recebeu.
+    pub pedir: Arc<dyn Fn(String) -> bool + Send + Sync>,
+    /// De onde vêm os desfechos, cada um o JSON que a estação lê.
+    pub desfechos: Receiver<String>,
+    /// Por onde entra em `desfechos` a recusa do pedido que ninguém recebeu.
+    pub devolver: std::sync::mpsc::Sender<String>,
 }
 
 /// O que a estação manda tocar.
@@ -199,6 +215,9 @@ pub struct Estado {
     pub results: u64,
     /// Pedaços de fala que a estação mandou tocar.
     pub speech_received: u64,
+    /// Pedidos que a estação mandou cumprir, e desfechos mandados de volta.
+    pub requests: u64,
+    pub outcomes: u64,
 }
 
 /// As candidatas da resposta do detector, passadas do formato da estação (cinco números por caixa) para o que
@@ -471,8 +490,15 @@ pub fn rodar(
                 .find(|e| e.id == "audio_voz" && e.formato == "pcm16_16k")
                 .cloned()
         });
-        // Para ouvir a fala, a ligação vale mesmo sem nada a mandar; só com a estação que diz que a manda.
-        let ouve_a_fala = cfg.fala.is_some() && anuncio.sabe;
+        // Para ouvir a fala e para cumprir pedidos, a ligação vale mesmo sem nada a mandar; só com a estação que diz que
+        // os manda.
+        let ouve_a_fala = (cfg.fala.is_some() || cfg.agente.is_some()) && anuncio.sabe;
+        // O que o agente disse desde a última volta vai nesta, ou não vai: desfecho sem estação ligada não é guardado.
+        let desfechos: Vec<String> = cfg
+            .agente
+            .as_ref()
+            .map(|a| a.desfechos.try_iter().collect())
+            .unwrap_or_default();
         if do_quadro.is_none() && da_voz.is_none() && !ouve_a_fala {
             dizer(
                 Some("a estação não pede nenhuma entrada que este S1 manda"),
@@ -528,6 +554,7 @@ pub fn rodar(
                     let recebe: Vec<&str> = [
                         cfg.conversa.is_some().then_some("resultado"),
                         cfg.fala.is_some().then_some("fala"),
+                        cfg.agente.is_some().then_some("pedido"),
                     ]
                     .into_iter()
                     .flatten()
@@ -548,8 +575,12 @@ pub fn rodar(
                         let (p, e, pub_) = (partilha.clone(), estado.clone(), publicar.clone());
                         let conversar = cfg.conversa.as_ref().map(|c| c.publicar.clone());
                         let falar = cfg.fala.clone();
+                        let cumprir = cfg
+                            .agente
+                            .as_ref()
+                            .map(|a| (a.pedir.clone(), a.devolver.clone()));
                         std::thread::spawn(move || {
-                            ler_entregas(leitura, p, e, pub_, conversar, falar)
+                            ler_entregas(leitura, p, e, pub_, conversar, falar, cumprir)
                         });
                     }
                     conexao = Some((c, alvo));
@@ -568,6 +599,31 @@ pub fn rodar(
                     espera = (espera * 2).min(ESPERA_MAX);
                     continue;
                 }
+            }
+        }
+        if !desfechos.is_empty() {
+            let (c, _) = conexao.as_mut().expect("conexão aberta acima");
+            let mut caiu = false;
+            for desfecho in &desfechos {
+                let cab = Cabecalho {
+                    tipo: Tipo::Desfecho,
+                    canal: 0,
+                    tamanho: desfecho.len() as u32,
+                };
+                if c.write_all(&cab.bytes())
+                    .and_then(|()| c.write_all(desfecho.as_bytes()))
+                    .is_err()
+                {
+                    caiu = true;
+                    break;
+                }
+                estado.lock().expect("estado da percepção").outcomes += 1;
+            }
+            if caiu {
+                fechar(&mut conexao);
+                tentar_em = Instant::now() + espera;
+                espera = (espera * 2).min(ESPERA_MAX);
+                continue;
             }
         }
         if let Some(entrada) = &da_voz {
@@ -790,6 +846,12 @@ fn ouvir(porta: u16) -> std::io::Result<UdpSocket> {
     Ok(s)
 }
 
+/// Quem recebe o pedido a cumprir, e por onde volta a recusa do que ninguém recebeu.
+type Cumprir = (
+    Arc<dyn Fn(String) -> bool + Send + Sync>,
+    std::sync::mpsc::Sender<String>,
+);
+
 /// Lê o que a estação manda, até a conexão fechar.
 fn ler_entregas(
     mut conexao: TcpStream,
@@ -798,6 +860,7 @@ fn ler_entregas(
     publicar: Arc<impl Fn(String) + Send + Sync + 'static>,
     conversar: Option<Arc<dyn Fn(String) + Send + Sync>>,
     falar: Option<Arc<dyn Fn(Som) + Send + Sync>>,
+    cumprir: Option<Cumprir>,
 ) {
     // A conexão que cai no meio de uma fala não deixa o alto-falante à espera do resto: o que chegou toca até o fim.
     struct FalaEmCurso(bool, Option<Arc<dyn Fn(Som) + Send + Sync>>);
@@ -952,10 +1015,41 @@ fn ler_entregas(
                 // Este S1 não disse que recebe a fala: é erro de quem mandou.
                 None => estado.lock().expect("estado da percepção").errors += 1,
             },
-            // A estação não manda entradas, medidas nem o aviso do que sabe.
-            Tipo::Entrada | Tipo::EntradaH264 | Tipo::EntradaJpeg | Tipo::Medida | Tipo::Sabe => {
-                estado.lock().expect("estado da percepção").errors += 1
+            Tipo::Pedido => {
+                let pedido = serde_json::from_slice::<serde_json::Value>(&carga)
+                    .ok()
+                    .and_then(|v| {
+                        Some((
+                            v["pedido"].as_u64()?,
+                            v["ferramenta"].as_str()?.to_owned(),
+                            v,
+                        ))
+                    });
+                match (pedido, &cumprir) {
+                    (Some((numero, ferramenta, v)), Some((pedir, devolver))) => {
+                        estado.lock().expect("estado da percepção").requests += 1;
+                        let params = match v["parametros"].as_object() {
+                            Some(p) => serde_json::Value::Object(p.clone()),
+                            None => serde_json::json!({}),
+                        };
+                        let linha = serde_json::json!({"jsonrpc": "2.0", "method": "s1.station.request", "params": {"request": numero, "tool": ferramenta, "params": params}});
+                        if !pedir(linha.to_string()) {
+                            // Ninguém assina os pedidos: a recusa volta já, pelo mesmo caminho dos desfechos.
+                            let recusa = serde_json::json!({"pedido": numero, "ferramenta": ferramenta, "como": "recusada", "motivo": "nenhum agente ligado ao rms1-mediad"});
+                            let _ = devolver.send(recusa.to_string());
+                        }
+                    }
+                    // O pedido que não se lê, ou a um S1 que não disse que cumpre: é erro de quem mandou.
+                    _ => estado.lock().expect("estado da percepção").errors += 1,
+                }
             }
+            // A estação não manda entradas, medidas, o aviso do que sabe nem desfechos.
+            Tipo::Entrada
+            | Tipo::EntradaH264
+            | Tipo::EntradaJpeg
+            | Tipo::Medida
+            | Tipo::Sabe
+            | Tipo::Desfecho => estado.lock().expect("estado da percepção").errors += 1,
         }
     }
 }

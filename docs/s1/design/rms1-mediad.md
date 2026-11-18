@@ -116,6 +116,16 @@ Os testes: `rms1-mediad/tests/alto_falante.rs` (um fluxo só na taxa da fala, o 
 
 **O que falta provar** (2026-11-18): o som saindo pelo alto-falante do robô de verdade, e a trava com a fala, na sessão com o robô.
 
+## O pedido que a estação manda cumprir
+
+A estação valida um pedido, e o corpo o cumpre. Quem cumpre é o `rms1-agente` ([`rms1-agente.md`](rms1-agente.md)); o `rms1-mediad` é o caminho entre os dois, porque é ele quem fala com a estação.
+
+- **O S1 diz que recebe o pedido:** `"pedido"` entra no `{"recebe": [...]}` do aviso, e a ligação com a estação que anuncia `sabe` vale mesmo sem nada a mandar.
+- **O pedido chega como mensagem de tipo 22,** em JSON: `{"pedido": número, "ferramenta": nome, "parametros": {...}}`. Vale para o pedido que nasceu da voz do robô e para o que nasceu no painel da estação. O serviço o publica como `s1.station.request {"request", "tool", "params"}` a quem assinou `requests`.
+- **Sem ninguém assinando,** o serviço responde na hora à estação que o pedido foi recusado ("nenhum agente ligado ao rms1-mediad"): ela não fica à espera.
+- **O desfecho volta como mensagem de tipo 23:** `{"pedido", "ferramenta", "como", "motivo"}`, com `como` em `cumprida`, `vencida`, `interrompida` ou `recusada`. Quem o diz é o agente, por `s1.station.outcome {"request", "tool", "outcome", "reason"}` no socket. O desfecho dito sem estação ligada não é guardado.
+- **`s1.media.status`** conta, em `perception`, os pedidos recebidos (`requests`) e os desfechos mandados (`outcomes`).
+
 ## O codificador de hardware
 
 O chip do S1 codifica H.264 e JPEG (Hantro H1), e as bibliotecas dele são do Android do robô: o `rms1-mediad`, que roda no chroot, não as carrega. Quem as chama é o `rms1-venc` (`rms1-mediad/venc/rms1-venc.c`), um programa do lado Android, compilado com o NDK por `sh rms1-mediad/venc/compila.sh` (que confere cada símbolo importado contra as bibliotecas do próprio robô). Os dois conversam por um socket de domínio Unix que os dois lados enxergam: `[midia] venc`, no robô `/run/rms1-venc/venc.sock`, que de fora do chroot é `/data/debian/run/rms1-venc/venc.sock`.

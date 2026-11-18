@@ -302,6 +302,18 @@ fn main() -> ExitCode {
             eprintln!("rms1-mediad: microfone: {e}");
             return ExitCode::FAILURE;
         }
+        // O caminho de quem cumpre os pedidos da estação: o pedido vai a quem assina `requests` no socket, e o desfecho
+        // volta por aqui. Sem ninguém assinando, a percepção recusa o pedido na hora.
+        let (devolver, desfechos) = std::sync::mpsc::channel();
+        let _ = servico.desfechos.set(devolver.clone());
+        let mut agente = Some({
+            let s = servico.clone();
+            percepcao::Agente {
+                pedir: Arc::new(move |linha: String| s.pedidos.send(linha.into()).is_ok()),
+                desfechos,
+                devolver,
+            }
+        });
         // O codificador de hardware do robô, se o arquivo o dá: a percepção e a imagem da tela usam o mesmo, um pedido por vez.
         if !midia.venc.is_empty() {
             let _ = servico.venc.set(Arc::new(std::sync::Mutex::new(rms1_mediad::venc::Venc::novo(&midia.venc))));
@@ -330,6 +342,7 @@ fn main() -> ExitCode {
                             }
                         }) as Arc<dyn Fn(percepcao::Som) + Send + Sync>
                     }),
+                    agente: agente.take(),
                 };
                 let (estado, deteccoes) = (s.percepcao.clone(), s.deteccoes.clone());
                 // Sem assinante, a detecção não tem para quem ir.

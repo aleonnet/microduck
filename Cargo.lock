@@ -4023,6 +4023,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "rms1-agente"
+version = "0.18.3"
+dependencies = [
+ "clap",
+ "duck-ipc-proto",
+ "rms1-control",
+ "rms1d",
+ "rms1d-params",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "toml 0.9.12+spec-1.1.0",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "rms1-control"
 version = "0.18.3"
 dependencies = [

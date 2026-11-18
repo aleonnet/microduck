@@ -258,7 +258,15 @@ fn subir_percepcao_com(
     anuncio_vale: Duration,
     venc: Option<std::path::PathBuf>,
 ) -> Percepcao {
-    subir_percepcao_inteira(porta_anuncio, ritmo_max, anuncio_vale, venc, None, None)
+    subir_percepcao_inteira(
+        porta_anuncio,
+        ritmo_max,
+        anuncio_vale,
+        venc,
+        None,
+        None,
+        None,
+    )
 }
 
 /// O mesmo, com a conversa (de onde vêm os trechos de voz, e para onde vai o que a estação responde) e com quem toca a
@@ -270,6 +278,7 @@ fn subir_percepcao_inteira(
     venc: Option<std::path::PathBuf>,
     conversa: Option<percepcao::Conversa>,
     fala: Option<Arc<dyn Fn(percepcao::Som) + Send + Sync>>,
+    agente: Option<percepcao::Agente>,
 ) -> Percepcao {
     let quadros = Quadros::default();
     let parar = Arc::new(AtomicBool::new(false));
@@ -286,6 +295,7 @@ fn subir_percepcao_inteira(
             venc: venc.map(|caminho| Arc::new(Mutex::new(rms1_mediad::venc::Venc::novo(caminho)))),
             conversa,
             fala,
+            agente,
         };
         percepcao::rodar(
             cfg,
@@ -1052,6 +1062,7 @@ fn subir_com_a_conversa(porta: u16) -> (Percepcao, mpsc::Sender<Vec<i16>>, Publi
         None,
         Some(conversa),
         None,
+        None,
     );
     (p, dizer, resultados)
 }
@@ -1207,6 +1218,7 @@ fn subir_com_a_fala(porta: u16, com_microfone: bool) -> (Percepcao, Sons) {
         None,
         conversa,
         Some(Arc::new(move |som| s.lock().unwrap().push(som))),
+        None,
     );
     (p, sons)
 }
@@ -1306,4 +1318,101 @@ fn o_s1_com_microfone_e_alto_falante_diz_que_recebe_o_resultado_e_a_fala() {
         p.estado.lock().unwrap().idle_reason.as_deref(),
         Some("a estação não pede nenhuma entrada que este S1 manda")
     );
+}
+
+// ---- o pedido que a estação manda cumprir, e o desfecho que volta (2026-11-18) ------------------------------------------
+
+/// A percepção de um S1 com agente: os pedidos que chegaram a ele, e por onde o teste diz um desfecho. Com `ha_agente`
+/// falso, ninguém assina os pedidos.
+fn subir_com_o_agente(
+    porta: u16,
+    ha_agente: bool,
+) -> (Percepcao, Publicadas, mpsc::Sender<String>) {
+    let pedidos: Publicadas = Arc::new(Mutex::new(Vec::new()));
+    let p = pedidos.clone();
+    let (devolver, desfechos) = mpsc::channel();
+    let agente = percepcao::Agente {
+        pedir: Arc::new(move |linha| {
+            p.lock().unwrap().push(linha);
+            ha_agente
+        }),
+        desfechos,
+        devolver: devolver.clone(),
+    };
+    let p = subir_percepcao_inteira(
+        porta,
+        22.0,
+        Duration::from_secs(3),
+        None,
+        None,
+        None,
+        Some(agente),
+    );
+    (p, pedidos, devolver)
+}
+
+#[test]
+fn o_pedido_da_estacao_vai_ao_agente_e_o_desfecho_volta_a_ela() {
+    let porta = porta_livre();
+    // A estação não pede nada que este S1 mande: ele liga assim mesmo, para cumprir o que ela pedir.
+    let estacao = Estacao::subir_com(porta, "[]", SO_PENSAR, r#","sabe":true"#);
+    let (p, pedidos, devolver) = subir_com_o_agente(porta, true);
+    let ao_ligar = estacao.colher(Duration::from_millis(700));
+    assert_eq!(
+        ao_ligar.iter().map(|r| r.cab.tipo).collect::<Vec<_>>(),
+        [Tipo::Sabe],
+        "o que chegou ao ligar"
+    );
+    let sabe: serde_json::Value = serde_json::from_slice(&ao_ligar[0].carga).unwrap();
+    assert_eq!(sabe, serde_json::json!({"recebe": ["pedido"]}));
+    // O pedido chega a quem assina, com o número dele na estação, a ferramenta e os parâmetros.
+    let pedido =
+        br#"{"pedido":41,"ferramenta":"move","parametros":{"direction":"forward","meters":0.5}}"#;
+    estacao.mandar(Tipo::Pedido, 0, pedido);
+    estacao.mandar(Tipo::Pedido, 0, b"nao e json");
+    estacao.mandar(Tipo::Pedido, 0, br#"{"ferramenta":"move"}"#);
+    std::thread::sleep(Duration::from_millis(300));
+    let linhas = pedidos.lock().unwrap().clone();
+    assert_eq!(linhas.len(), 1, "{linhas:?}");
+    let v: serde_json::Value = serde_json::from_str(&linhas[0]).unwrap();
+    assert_eq!(
+        v,
+        serde_json::json!({"jsonrpc": "2.0", "method": "s1.station.request", "params": {"request": 41, "tool": "move", "params": {"direction": "forward", "meters": 0.5}}})
+    );
+    // O desfecho que o agente diz volta à estação como chegou.
+    let desfecho = r#"{"pedido":41,"ferramenta":"move","como":"cumprida","motivo":"andei 0.50 m"}"#;
+    devolver.send(desfecho.to_owned()).unwrap();
+    let volta = estacao
+        .recebidas
+        .recv_timeout(Duration::from_secs(2))
+        .expect("o desfecho");
+    assert_eq!(
+        (volta.cab.tipo, volta.cab.canal, volta.carga.as_slice()),
+        (Tipo::Desfecho, 0, desfecho.as_bytes())
+    );
+    let e = p.estado.lock().unwrap().clone();
+    // O pedido que não é JSON, e o que não diz o número, são contados como erro; a conexão segue.
+    assert_eq!((e.requests, e.outcomes, e.errors), (1, 1, 2));
+
+    // Sem agente assinando, o pedido é recusado na hora, dizendo por quê: a estação não fica à espera.
+    let porta = porta_livre();
+    let estacao = Estacao::subir_com(porta, "[]", SO_PENSAR, r#","sabe":true"#);
+    let (_p, _pedidos, _devolver) = subir_com_o_agente(porta, false);
+    assert_eq!(estacao.colher(Duration::from_millis(700)).len(), 1);
+    estacao.mandar(Tipo::Pedido, 0, pedido);
+    let volta = estacao
+        .recebidas
+        .recv_timeout(Duration::from_secs(2))
+        .expect("a recusa");
+    let d: serde_json::Value = serde_json::from_slice(&volta.carga).unwrap();
+    assert_eq!(volta.cab.tipo, Tipo::Desfecho);
+    assert_eq!(
+        (
+            d["pedido"].as_u64(),
+            d["ferramenta"].as_str(),
+            d["como"].as_str()
+        ),
+        (Some(41), Some("move"), Some("recusada"))
+    );
+    assert!(d["motivo"].as_str().unwrap().contains("agente"), "{d}");
 }

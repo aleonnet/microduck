@@ -28,8 +28,8 @@ pub struct Anuncio {
     /// A estação sabe marcar cada quadro atendido ([`Tipo::Atendido`]). Uma estação de antes disto não diz nada.
     #[serde(default)]
     pub atendido: bool,
-    /// A estação sabe mandar o resultado de um pedido e a fala ([`Tipo::Resultado`], [`Tipo::Fala`]), a quem disser o que
-    /// recebe ([`Tipo::Sabe`]). Uma estação de antes disto não diz nada, e fecharia a conexão ao receber o aviso.
+    /// A estação sabe mandar o resultado de um pedido, a fala e o pedido a cumprir ([`Tipo::Resultado`], [`Tipo::Fala`],
+    /// [`Tipo::Pedido`]), a quem disser o que recebe ([`Tipo::Sabe`]). Uma estação de antes disto não diz nada, e fecharia a conexão ao receber o aviso.
     #[serde(default)]
     pub sabe: bool,
 }
@@ -109,7 +109,7 @@ pub enum Tipo {
     /// se entendem: a estação diz no anúncio (`atendido`) que sabe marcar, e só marca para o S1 que pediu.
     Atendido = 11,
     /// Do S1 para a estação, uma vez ao ligar: JSON `{"recebe": [...]}`, com o que este S1 sabe receber (`resultado`,
-    /// `fala`). Só para a estação que diz no anúncio que sabe (`sabe`).
+    /// `fala`, `pedido`). Só para a estação que diz no anúncio que sabe (`sabe`).
     Sabe = 19,
     /// Da estação para o S1: um acontecimento de um pedido a uma função sob demanda, em JSON (o começo, cada etapa, cada
     /// pedaço da resposta, o fim com a entrega). O canal é o número da função.
@@ -117,6 +117,12 @@ pub enum Tipo {
     /// Da estação para o S1: um pedaço do som da fala, PCM de 16 bits, um canal de som; o canal da mensagem leva a taxa, em
     /// amostras por segundo. Sem carga: a fala acabou (canal 0) ou foi interrompida (canal 1).
     Fala = 21,
+    /// Da estação para o S1: um pedido validado, para o corpo cumprir, em JSON: `{"pedido": número, "ferramenta": nome,
+    /// "parametros": {...}}`. Venha ele da voz do robô ou do painel.
+    Pedido = 22,
+    /// Do S1 para a estação: como o pedido terminou no corpo, em JSON: `{"pedido": número, "ferramenta": nome, "como":
+    /// "cumprida" | "vencida" | "interrompida" | "recusada", "motivo": texto}`.
+    Desfecho = 23,
 }
 
 /// Os 8 bytes antes de cada carga: versão, tipo, canal e tamanho, little-endian.
@@ -159,6 +165,8 @@ impl Cabecalho {
             19 => Tipo::Sabe,
             20 => Tipo::Resultado,
             21 => Tipo::Fala,
+            22 => Tipo::Pedido,
+            23 => Tipo::Desfecho,
             t => return Err(format!("tipo de mensagem desconhecido: {t}")),
         };
         let tamanho = u32::from_le_bytes([b[4], b[5], b[6], b[7]]);

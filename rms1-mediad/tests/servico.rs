@@ -390,3 +390,66 @@ async fn quem_assina_a_conversa_recebe_o_que_a_estacao_respondeu() {
     assert!(servico.ouvidos.send(Ouvido::Voz).is_err());
     assert!(servico.deteccoes.send("{}".into()).is_err());
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn quem_assina_os_pedidos_recebe_o_que_a_estacao_manda_cumprir_e_diz_o_desfecho() {
+    let (_pasta, _anota, servico) = montar();
+    let (devolver, desfechos) = std::sync::mpsc::channel::<String>();
+    let (cliente, servidor_) = UnixStream::pair().unwrap();
+    tokio::spawn(servidor::atender(servidor_, servico.clone()));
+    let mut c = BufReader::new(cliente);
+    let pedido = r#"{"jsonrpc":"2.0","method":"s1.station.request","params":{"request":41,"tool":"move","params":{"direction":"forward","meters":0.5}}}"#;
+    // Sem assinatura, o pedido não tem para quem ir: é como o serviço sabe que não há agente.
+    assert!(servico.pedidos.send(pedido.into()).is_err());
+    c.get_mut()
+        .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"s1.media.subscribe\",\"params\":{\"requests\":true}}\n")
+        .await
+        .unwrap();
+    assert_eq!(linha(&mut c).await["result"]["accepted"], true);
+    servico.pedidos.send(pedido.into()).unwrap();
+    let n = linha(&mut c).await;
+    assert_eq!(
+        (n["method"].as_str(), n["params"]["tool"].as_str()),
+        (Some("s1.station.request"), Some("move")),
+        "{n}"
+    );
+    // Sem a ligação com a estação, o desfecho não tem para onde ir, e quem o disse fica sabendo.
+    let desfecho = b"{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"s1.station.outcome\",\"params\":{\"request\":41,\"tool\":\"move\",\"outcome\":\"cumprida\",\"reason\":\"andei 0.50 m\"}}\n";
+    c.get_mut().write_all(desfecho).await.unwrap();
+    let r = linha(&mut c).await;
+    assert_eq!(r["result"]["accepted"], false, "{r}");
+    // Com ela, o desfecho vai como a estação o lê.
+    servico.desfechos.set(devolver).unwrap();
+    c.get_mut().write_all(desfecho).await.unwrap();
+    assert_eq!(linha(&mut c).await["result"]["accepted"], true);
+    let d: serde_json::Value =
+        serde_json::from_str(&desfechos.recv_timeout(Duration::from_secs(2)).unwrap()).unwrap();
+    assert_eq!(
+        d,
+        serde_json::json!({"pedido": 41, "ferramenta": "move", "como": "cumprida", "motivo": "andei 0.50 m"})
+    );
+    // O desfecho sem o número do pedido, ou com um desfecho que não existe, é recusado dizendo o que falta.
+    for (errado, palavra) in [
+        (
+            "{\"tool\":\"move\",\"outcome\":\"cumprida\",\"reason\":\"\"}",
+            "request",
+        ),
+        (
+            "{\"request\":41,\"tool\":\"move\",\"outcome\":\"talvez\",\"reason\":\"\"}",
+            "outcome",
+        ),
+    ] {
+        let pedido = format!(
+            "{{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"s1.station.outcome\",\"params\":{errado}}}\n"
+        );
+        c.get_mut().write_all(pedido.as_bytes()).await.unwrap();
+        let r = linha(&mut c).await;
+        assert!(
+            r["error"]["message"]
+                .as_str()
+                .is_some_and(|m| m.contains(palavra)),
+            "{palavra}: {r}"
+        );
+    }
+    assert!(desfechos.try_recv().is_err());
+}

@@ -17,6 +17,7 @@ One page owns a mechanism, and the others link to it. When two pages disagree, t
 | [`design/rms1-mediad.md`](design/rms1-mediad.md) | `rms1-mediad`, o serviço de mídia: a câmera, o microfone e o alto-falante com um dono só, o socket, e a percepção pela estação Hailo |
 | [`robot/rms1d-pontos-de-controle.md`](robot/rms1d-pontos-de-controle.md) | Cada ponto de controle das etapas 1 e 2, e a comparação com o `s1d` |
 | [`robot/rms1d-roteiro-chassi-torre.md`](robot/rms1d-roteiro-chassi-torre.md) | O roteiro da prova, no simulador e no robô |
+| [`design/rms1-agente.md`](design/rms1-agente.md) | `rms1-agente`, quem cumpre no corpo o pedido que a estação Hailo validou: as habilidades, as regras, e o caminho do pedido e do desfecho |
 | [`robot/rms1-mediad-no-robo.md`](robot/rms1-mediad-no-robo.md) | O `rms1-mediad` no robô: o que a ativação faz pela mídia, o que o arquivo liga, a volta, e o que não se faz |
 | [`robot/s1-commands.md`](robot/s1-commands.md) | Every command: the frame, the test, the proof on the robot, what reaches it, what is missing. Open defects. The base for wiring commands to the console and the pad. |
 | [`robot/s1-bench.md`](robot/s1-bench.md) | Running it from a Mac, from a cold robot, with what each step has really proved. |
