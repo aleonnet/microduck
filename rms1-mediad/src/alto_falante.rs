@@ -386,6 +386,69 @@ fn ler_wav_pcm(caminho: &Path) -> Option<(u32, Vec<u8>)> {
     None
 }
 
+/// A taxa em que a saída do robô abre, sempre: a da captura (`deploy/s1/asound.conf`) e a que a DJI usa no alto-falante.
+/// Medido no S1 em 2026-11-18: o chip de som tem um relógio só, e tocar em outra taxa muda a da captura junto; o microfone,
+/// lido como 48 kHz, passou a entregar 16 mil amostras por segundo, e tudo o que o robô ouvia saía três vezes acelerado.
+pub const HZ_DA_SAIDA: u32 = 48_000;
+
+/// Leva PCM de 16 bits, um canal, de `hz` para [`HZ_DA_SAIDA`], por interpolação linear, conforme o som chega.
+pub struct Reamostra<W: Write> {
+    saida: W,
+    /// Quanto do som de entrada cada amostra de saída avança.
+    passo: f64,
+    /// Onde a próxima amostra de saída cai, entre a amostra anterior (0) e a atual (1).
+    onde: f64,
+    anterior: Option<i16>,
+    /// O byte que sobrou de uma amostra partida entre dois pedaços.
+    meio: Option<u8>,
+}
+
+impl<W: Write> Reamostra<W> {
+    pub fn nova(saida: W, hz: u32) -> Self {
+        Self { saida, passo: f64::from(hz.max(1)) / f64::from(HZ_DA_SAIDA), onde: 0.0, anterior: None, meio: None }
+    }
+
+    pub fn into_inner(self) -> W {
+        self.saida
+    }
+}
+
+impl<W: Write> Write for Reamostra<W> {
+    fn write(&mut self, pedaco: &[u8]) -> std::io::Result<usize> {
+        let mut fora = Vec::with_capacity((pedaco.len() as f64 / self.passo) as usize + 8);
+        let mut bytes = pedaco.iter().copied();
+        loop {
+            let Some(baixo) = self.meio.take().or_else(|| bytes.next()) else { break };
+            let Some(alto) = bytes.next() else {
+                self.meio = Some(baixo);
+                break;
+            };
+            let atual = i16::from_le_bytes([baixo, alto]);
+            if (self.passo - 1.0).abs() < f64::EPSILON {
+                fora.extend_from_slice(&atual.to_le_bytes());
+                continue;
+            }
+            let Some(anterior) = self.anterior.replace(atual) else {
+                fora.extend_from_slice(&atual.to_le_bytes());
+                self.onde = self.passo;
+                continue;
+            };
+            while self.onde < 1.0 {
+                let v = f64::from(anterior) + (f64::from(atual) - f64::from(anterior)) * self.onde;
+                fora.extend_from_slice(&(v.round() as i16).to_le_bytes());
+                self.onde += self.passo;
+            }
+            self.onde -= 1.0;
+        }
+        self.saida.write_all(&fora)?;
+        Ok(pedaco.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.saida.flush()
+    }
+}
+
 /// A saída do robô: um `aplay` por som, como no pato.
 pub struct Aplay {
     pub dispositivo: String,
@@ -406,6 +469,15 @@ impl Tocando for Processo {
 impl Saida for Aplay {
     fn tocar_arquivo(&mut self, wav: &Path) -> std::io::Result<Box<dyn Tocando>> {
         use std::process::{Command, Stdio};
+        // O arquivo do banco vai pelo mesmo caminho do fluxo, para sair na taxa da captura qualquer que seja a dele.
+        if let Some((hz, pcm)) = ler_wav_pcm(wav) {
+            let (mut escrita, tocando) = self.abrir_fluxo(hz)?;
+            std::thread::spawn(move || {
+                let _ = escrita.write_all(&pcm);
+                let _ = escrita.flush();
+            });
+            return Ok(tocando);
+        }
         let filho = Command::new("aplay")
             .args(["-q", "-D", &self.dispositivo])
             .arg(wav)
@@ -433,7 +505,7 @@ impl Saida for Aplay {
                 "-c",
                 "1",
             ])
-            .args(["-r", &hz.to_string(), "--buffer-time=120000"])
+            .args(["-r", &HZ_DA_SAIDA.to_string(), "--buffer-time=120000"])
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -442,7 +514,7 @@ impl Saida for Aplay {
             .stdin
             .take()
             .ok_or_else(|| std::io::Error::other("aplay sem entrada"))?;
-        Ok((Box::new(entrada), Box::new(Processo(filho))))
+        Ok((Box::new(Reamostra::nova(entrada, hz)), Box::new(Processo(filho))))
     }
 }
 

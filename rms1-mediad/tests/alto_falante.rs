@@ -412,3 +412,42 @@ fn a_fala_interrompida_e_cortada_e_o_som_novo_descarta_o_resto_dela() {
     );
     assert!(!contem(&a.fluxo.lock().unwrap(), 0x0202));
 }
+
+// ---- a saída sempre a 48 kHz (2026-11-18) -----------------------------------------------------------------------------------
+// Medido no S1: tocar numa taxa que não é a da captura muda o relógio do chip de som, e o microfone, lido como 48 kHz, passa
+// a entregar 16 mil amostras por segundo, três vezes acelerado. A saída abre sempre na taxa da captura, e o som é reamostrado.
+
+fn reamostrado(hz: u32, amostras: &[i16], pedacos: &[usize]) -> Vec<i16> {
+    use std::io::Write;
+    let bytes: Vec<u8> = amostras.iter().flat_map(|a| a.to_le_bytes()).collect();
+    let mut r = rms1_mediad::alto_falante::Reamostra::nova(Vec::new(), hz);
+    let mut resto = &bytes[..];
+    for n in pedacos.iter().cycle() {
+        if resto.is_empty() {
+            break;
+        }
+        let n = (*n).min(resto.len());
+        r.write_all(&resto[..n]).unwrap();
+        resto = &resto[n..];
+    }
+    r.flush().unwrap();
+    r.into_inner().chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])).collect()
+}
+
+#[test]
+fn o_som_de_outra_taxa_sai_na_taxa_da_captura_com_a_mesma_duracao() {
+    let um_segundo: Vec<i16> = (0..22_050).map(|i| ((i as f32 * 0.05).sin() * 10_000.0) as i16).collect();
+    let saiu = reamostrado(22_050, &um_segundo, &[4096]);
+    assert!((47_990..=48_010).contains(&saiu.len()), "1 s a 22050 Hz vira 1 s a 48000 Hz: {} amostras", saiu.len());
+    // O sinal é o mesmo, mais devagar: a amostra do meio vale o que o seno vale naquele instante.
+    let no_meio = ((24_000.0f32 * 22_050.0 / 48_000.0) * 0.05).sin() * 10_000.0;
+    assert!((f32::from(saiu[24_000]) - no_meio).abs() < 300.0, "{} contra {no_meio}", saiu[24_000]);
+    assert!(saiu.iter().all(|a| a.unsigned_abs() <= 10_001), "a reamostragem não passa do sinal");
+}
+
+#[test]
+fn a_reamostragem_nao_depende_de_como_o_som_chega_em_pedacos() {
+    let som: Vec<i16> = (0..5_000).map(|i| ((i as f32 * 0.11).sin() * 8_000.0) as i16).collect();
+    assert_eq!(reamostrado(28_665, &som, &[10_000]), reamostrado(28_665, &som, &[1, 3, 7, 501]), "pedaços ímpares dão o mesmo som");
+    assert_eq!(reamostrado(48_000, &som, &[333]), som, "na taxa da captura, o som passa como veio");
+}

@@ -116,6 +116,8 @@ Os testes: `rms1-mediad/tests/alto_falante.rs` (um fluxo só na taxa da fala, o 
 
 **O que falta provar** (2026-11-18): o som saindo pelo alto-falante do robô de verdade, e a trava com a fala, na sessão com o robô.
 
+- **A saída abre sempre a 48 kHz, a taxa da captura.** O chip de som do S1 tem um relógio só. Medido em 2026-11-18: com a saída aberta a 22050 Hz, o microfone, lido como 48 kHz, passou a entregar 16 mil amostras por segundo (`/proc/asound/card0/pcm0c/sub0/status`, o `hw_ptr` contra o relógio), e tudo o que o robô ouvia depois do primeiro som saía três vezes acelerado. Todo som (a fala, o sinal, o `wheee` e os arquivos do banco) passa por `Reamostra`, que o leva a 48 kHz por interpolação linear, e o `aplay` abre sempre nessa taxa.
+
 ## O pedido que a estação manda cumprir
 
 A estação valida um pedido, e o corpo o cumpre. Quem cumpre é o `rms1-agente` ([`rms1-agente.md`](rms1-agente.md)); o `rms1-mediad` é o caminho entre os dois, porque é ele quem fala com a estação.
