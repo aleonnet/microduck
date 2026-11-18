@@ -288,6 +288,23 @@ fn a_fala_normal_a_cinco_vezes_o_silencio_da_sala_sai_inteira() {
     assert!((39_000..=41_500).contains(&saiu[0].len()), "{} amostras", saiu[0].len());
 }
 
+/// A frase com uma pausa de um segundo no meio: com o silêncio de 0,7 s saía em dois trechos, e o segundo, sem o nome de
+/// chamada, era recusado pela estação. Com 1,2 s (o padrão desde 2026-11-18), sai num só.
+#[test]
+fn a_pausa_de_um_segundo_no_meio_da_frase_nao_a_corta_em_duas() {
+    let mut s = 23u32;
+    let mut a = ruido(0.001, 3.0, &mut s);
+    a.extend(ruido(0.2, 0.8, &mut s));
+    a.extend(ruido(0.001, 1.0, &mut s));
+    a.extend(ruido(0.2, 0.8, &mut s));
+    a.extend(ruido(0.001, 2.0, &mut s));
+    let com = |silencio_ms: u64| {
+        let cfg = Voz { silencio: Duration::from_millis(silencio_ms), ..voz() };
+        trechos(&mut Ouvinte::com_voz(Trava::nova(Duration::from_millis(800)), cfg), &a, Instant::now()).len()
+    };
+    assert_eq!((com(700), com(1200)), (2, 1), "com 0,7 s a pausa corta a frase; com 1,2 s, não");
+}
+
 #[test]
 fn a_frase_longa_sai_inteira_e_o_que_passa_do_teto_e_cortado_nele() {
     // Cinco segundos de fala: o vigia de som trata mais de 3 s como ruído contínuo e não avisa. O trecho sai assim mesmo.

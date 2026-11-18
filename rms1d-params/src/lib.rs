@@ -345,7 +345,9 @@ impl Default for MidiaVoz {
     fn default() -> Self {
         Self {
             folga_ms: 300,
-            silencio_ms: 700,
+            // Pedido do dono em 2026-11-18, ao falar com o robô: a pausa no meio da frase a cortava em duas. Com 1,2 s a
+            // pausa comum cabe; o custo é a resposta sair meio segundo mais tarde.
+            silencio_ms: 1200,
             teto_ms: 10_000,
             // O vigia do pato chama de estalo o som de até 0,38 s (a palma e o eco dela).
             minimo_ms: 400,
@@ -1145,7 +1147,7 @@ mod testes {
                 p.voz.entra,
                 p.voz.sai
             ),
-            (300, 700, 10_000, 400, 3.0, 2.0)
+            (300, 1200, 10_000, 400, 3.0, 2.0)
         );
         let p = de("[midia.voz]\nsilencio_ms = 500\nteto_ms = 8000\n")
             .unwrap()
