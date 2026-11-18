@@ -179,13 +179,17 @@ fn subir_microfone(
         .name("microfone".into())
         .spawn(move || {
             let bloco = Duration::from_secs_f64(BLOCO as f64 / HZ_DO_MICROFONE as f64);
-            // Em laço, no ritmo real: o vigia mede a sala no tempo, e a trava também.
+            // Em laço, no ritmo real: o vigia mede a sala no tempo, e a trava também. Cada bloco tem a sua hora, contada do
+            // começo: dormir um bloco por vez somava o tempo de cada volta, e o som atrasava 3% (10 s em 5 minutos, medido
+            // pela bancada de voz do laboratório em 2026-11-18).
+            let (comeco, mut blocos) = (Instant::now(), 0u32);
             while !parar.load(Ordering::Relaxed) {
                 for pedaco in amostras.chunks(BLOCO) {
                     if parar.load(Ordering::Relaxed) {
                         return;
                     }
-                    std::thread::sleep(bloco);
+                    blocos += 1;
+                    std::thread::sleep((comeco + bloco * blocos).saturating_duration_since(Instant::now()));
                     for o in ouvinte.empurrar(pedaco, Instant::now()) {
                         // Sem assinante, o evento não tem para quem ir.
                         let _ = servico.ouvidos.send(o);
