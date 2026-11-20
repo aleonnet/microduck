@@ -3,9 +3,9 @@
 use std::sync::Arc;
 
 use duck_ipc_proto as proto;
-use rms1_control::{Intencoes, Saude};
+use rms1_control::{FonteId, Intencoes, Saude};
 use rms1d::respostas::{
-    Contexto, aplicar_taxa_da_torre, mira, olhar, responder, saude_do_contrato,
+    Contexto, Controle, aplicar_taxa_da_torre, mira, olhar, responder, saude_do_contrato,
     sensibilidade_das_placas,
 };
 use rms1d_params::Params;
@@ -23,7 +23,7 @@ fn contexto() -> Contexto {
 fn toda_chamada_do_contrato_responde() {
     let c = contexto();
     for call in proto::test_support::every_call() {
-        let r = responder(&c, proto::Id::Number(7), &call);
+        let r = responder(&c, FonteId::SEM_NOME, proto::Id::Number(7), &call);
         assert_eq!(r.id, Some(proto::Id::Number(7)), "{}", call.method());
     }
 }
@@ -39,7 +39,7 @@ fn o_que_responde_documento_e_erro_e_nao_recusa() {
         proto::Call::RobotVolume,
         proto::Call::RobotSetVolume(proto::VolumeParams { volume: 40 }),
     ] {
-        let r = responder(&c, proto::Id::Number(1), &call);
+        let r = responder(&c, FonteId::SEM_NOME, proto::Id::Number(1), &call);
         let v = serde_json::to_value(&r).unwrap();
         assert!(v["result"].is_null(), "{}: {v}", call.method());
         assert_eq!(v["error"]["code"], proto::code::METHOD_NOT_FOUND, "{v}");
@@ -53,9 +53,14 @@ fn seguro_para_reiniciar_usa_o_prazo_do_arquivo() {
         let mut c = contexto();
         c.params.seguranca.prazo_ms = prazo_ms;
         c.intencoes.pedir_armar(true);
-        c.intencoes.pedir_twist([0.5, 0.0, 0.0]);
+        c.intencoes.pedir_twist(FonteId::SEM_NOME, [0.5, 0.0, 0.0]);
         std::thread::sleep(std::time::Duration::from_millis(300));
-        let r = responder(&c, proto::Id::Number(1), &proto::Call::RobotSafeToRestart);
+        let r = responder(
+            &c,
+            FonteId::SEM_NOME,
+            proto::Id::Number(1),
+            &proto::Call::RobotSafeToRestart,
+        );
         serde_json::to_value(&r).unwrap()["result"]["safe"].clone()
     };
     assert_eq!(seguro(3000), false, "ainda dentro do prazo");
@@ -172,7 +177,7 @@ fn simulador_sem_pagina_segue_saudavel() {
 fn sem_pacote_nao_ha_bateria_nem_corpo() {
     let c = contexto();
     assert!(saude_do_contrato(&c).battery.is_none());
-    let v = rms1d::respostas::estado_s1(None, None, false);
+    let v = rms1d::respostas::estado_s1(None, None, false, &Controle::default());
     assert_eq!(v["link"]["state"], "off");
     assert!(v["body"].is_null());
 }
@@ -229,7 +234,7 @@ fn o_calculo_proprio_sai_em_estimate_e_nao_muda_o_robot_state() {
         infravermelho: [0; 2],
         estimativa: Some(calc),
     };
-    let s = rms1d::respostas::estado_s1(Some(&amostra), Some(10), true);
+    let s = rms1d::respostas::estado_s1(Some(&amostra), Some(10), true, &Controle::default());
     assert_eq!(s["estimate"]["picked_up"], true);
     assert_eq!(
         s["estimate"]["velocity_body"],
@@ -254,6 +259,10 @@ fn o_calculo_proprio_sai_em_estimate_e_nao_muda_o_robot_state() {
         corpo: Some(Arc::new(amostra)),
         corpo_recente: true,
         idade_pacote_ms: Some(10),
+        dono_rodas: None,
+        dono_torre: None,
+        fonte_do_pedido: None,
+        autonomia: false,
     };
     let r = rms1d::respostas::estado_do_contrato(&estado);
     assert!(
@@ -273,6 +282,7 @@ fn skill_de_modo_chega_as_intencoes() {
     let c = contexto();
     let r = responder(
         &c,
+        FonteId::SEM_NOME,
         proto::Id::Number(1),
         &proto::Call::RobotDo(proto::DoParams {
             skill: "torre_segue_chassi".to_owned(),
@@ -328,13 +338,15 @@ fn a_origem_nao_tem_direcao_e_olha_em_frente() {
 #[test]
 fn velocidade_da_torre_so_aceita_o_previsto() {
     let c = contexto();
-    let pede = |v: serde_json::Value| aplicar_taxa_da_torre(&c.intencoes, Some(&v));
+    let pede = |v: serde_json::Value| {
+        aplicar_taxa_da_torre(&c.intencoes, FonteId::SEM_NOME, Some(&v), true)
+    };
     assert!(pede(serde_json::json!({"action": "speed", "yaw": 30.0, "pitch": -10.0})).is_ok());
     assert!(pede(serde_json::json!({"action": "stop"})).is_ok());
     assert!(pede(serde_json::json!({"action": "speed", "yaw": "muito", "pitch": 0.0})).is_err());
     assert!(pede(serde_json::json!({"action": "speed", "yaw": 30.0})).is_err());
     assert!(pede(serde_json::json!({"action": "girar"})).is_err());
-    assert!(aplicar_taxa_da_torre(&c.intencoes, None).is_err());
+    assert!(aplicar_taxa_da_torre(&c.intencoes, FonteId::SEM_NOME, None, true).is_err());
 }
 
 /// `s1.armor`: nível inteiro de 0 a 10, a faixa da DJI; sem nível, responde o atual, o do arquivo até alguém pedir.

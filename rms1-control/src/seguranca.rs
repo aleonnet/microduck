@@ -9,7 +9,8 @@
 //!   cancelar, assinar e responder, e nada mais cabe em [`Pedido`]) e, uma vez, a sensibilidade das placas, que a DJI
 //!   manda pela central que paramos ([`Seguranca::ajustar_placas`]).
 //! - **Sem comando dentro do prazo, as rodas zeram.** A torre fica: uma torre parada é inofensiva, e uma
-//!   velocidade velha leva o robô à parede.
+//!   velocidade velha leva o robô à parede. O prazo é o da fonte dona do pedido, que a [`Leitura`] traz; sem um próprio,
+//!   o de `[seguranca]`. Quem escolhe o pedido entre as fontes são as intenções; aqui só se julga a idade dele.
 //! - **Seguindo a torre, parar é um `0x3f/0x22` a zero, uma vez**, como a DJI (`_set_chassis_stop_depend_mode`, em
 //!   `rm_ctrl.py`). Repetido a cada ciclo, ele mantinha o controlador alinhando o chassi com a torre, e no ar o chassi nunca
 //!   alinha: as rodas foram a 850 rpm na mão do dono (2026-11-03, `out/2026-11-03-firmware-controlador/levantado/`, no laboratório).
@@ -268,7 +269,8 @@ impl<C: Corpo> Seguranca<C> {
             limites.push(LIMITE_NAO_FINITO);
             return [0.0; 3];
         }
-        let vencido = leitura.idade_twist.is_none_or(|i| i > self.prazo);
+        let prazo = leitura.prazo_twist.unwrap_or(self.prazo);
+        let vencido = leitura.idade_twist.is_none_or(|i| i > prazo);
         if vencido {
             if pedido != [0.0; 3] {
                 limites.push(LIMITE_PRAZO);
@@ -342,7 +344,8 @@ impl<C: Corpo> Seguranca<C> {
         let mudou_modo = leitura.modo != self.modo;
         self.modo = leitura.modo;
         if !self.armado {
-            let vivo = leitura.idade_twist.is_some_and(|i| i <= self.prazo);
+            let prazo = leitura.prazo_twist.unwrap_or(self.prazo);
+            let vivo = leitura.idade_twist.is_some_and(|i| i <= prazo);
             let limitado_por = if vivo && leitura.twist != [0.0; 3] {
                 vec![LIMITE_DESARMADO]
             } else {
@@ -423,7 +426,8 @@ impl<C: Corpo> Seguranca<C> {
         limites: &mut Vec<&'static str>,
     ) {
         // A velocidade pedida vale até o prazo, como o giro das rodas: sem cliente, a torre para.
-        let taxa = if leitura.idade_taxa.is_some_and(|i| i <= self.prazo) {
+        let prazo = leitura.prazo_taxa.unwrap_or(self.prazo);
+        let taxa = if leitura.idade_taxa.is_some_and(|i| i <= prazo) {
             leitura.taxa_torre
         } else {
             [0.0; 2]

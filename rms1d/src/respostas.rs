@@ -7,8 +7,8 @@ use std::time::{Duration, Instant};
 
 use duck_ipc_proto as proto;
 use rms1_control::telemetria::{Amostra, BIT_CAPOTOU, BIT_LEVANTADO, BITS_CHASSI, Enlace};
-use rms1_control::{Estado, Intencoes, Modo, Saude};
-use rms1d_params::{Params, TipoCorpo};
+use rms1_control::{Estado, FonteId, Intencoes, Modo, Saude};
+use rms1d_params::{Canal, Params, TipoCorpo};
 
 /// O que uma resposta precisa saber.
 pub struct Contexto {
@@ -25,6 +25,77 @@ const MODEL_API: u32 = 2;
 
 fn nomes_dos_modos() -> Vec<String> {
     Modo::TODOS.iter().map(|m| m.nome().to_owned()).collect()
+}
+
+/// Por que a fonte não pode pedir neste canal; `None` se pode. A parada não passa por aqui: vale para qualquer fonte.
+pub fn barrado(i: &Intencoes, fonte: FonteId, canal: Canal) -> Option<String> {
+    let nome = i.nome(fonte);
+    if !i.pode(fonte, canal) {
+        return Some(format!(
+            "a fonte {nome} não tem o canal {} na tabela de rms1d.toml",
+            canal.nome()
+        ));
+    }
+    i.espera_a_autonomia(fonte)
+        .then(|| format!("a fonte {nome} só vale com a autonomia ligada (robot.autonomous)"))
+}
+
+/// A fonte de prioridade maior que tem as rodas ou a torre agora, em palavras, para a recusa.
+fn superado(i: &Intencoes, fonte: FonteId, canal: Canal) -> Option<String> {
+    let o_que = match canal {
+        Canal::Rodas => "as rodas",
+        _ => "a torre",
+    };
+    i.quem_supera(fonte, canal, Instant::now())
+        .map(|maior| format!("{} tem {o_que} agora", i.nome(maior)))
+}
+
+/// O que foi feito de um pedido de intenção.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Feito {
+    /// A chamada não é um pedido contínuo.
+    NaoEra,
+    Aceito,
+    /// Não vale, com o motivo: a tabela não dá o canal à fonte, ela espera a autonomia, ou perde para uma fonte maior.
+    Recusado(String),
+}
+
+/// Quem manda agora: o bloco `control` de `s1.state` e de `s1.telemetry`. Cada nome é o da fonte com pedido vivo naquele
+/// canal; ausente, ninguém o tem.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Controle {
+    pub rodas: Option<Arc<str>>,
+    pub torre: Option<Arc<str>>,
+    pub autonomia: bool,
+}
+
+impl Controle {
+    /// O do ciclo que o laço publicou.
+    pub fn do_estado(e: &Estado) -> Self {
+        Self {
+            rodas: e.dono_rodas.clone(),
+            torre: e.dono_torre.clone(),
+            autonomia: e.autonomia,
+        }
+    }
+
+    /// O de agora, sem esperar o laço.
+    pub fn de_agora(i: &Intencoes, agora: Instant) -> Self {
+        let l = i.ler(agora);
+        Self {
+            rodas: l.dono_rodas.map(|f| i.nome(f)),
+            torre: l.dono_torre.map(|f| i.nome(f)),
+            autonomia: i.autonomia(),
+        }
+    }
+
+    fn json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "wheels": {"source": self.rodas.as_deref()},
+            "gimbal": {"source": self.torre.as_deref()},
+            "autonomous": self.autonomia,
+        })
+    }
 }
 
 /// `robot.look`: um ponto no corpo vira os dois ângulos da torre. O ângulo limitado é o mais perto que a
@@ -54,36 +125,66 @@ pub fn olhar(p: &proto::LookParams, s: &rms1d_params::Seguranca) -> proto::LookR
     }
 }
 
-/// Um pedido contínuo, por notificação ou por requisição. `true` se foi um.
-pub fn aplicar_intencao(i: &Intencoes, call: &proto::Call) -> bool {
+/// Um pedido contínuo da fonte, por notificação ou por requisição.
+///
+/// `com_resposta` é se o cliente espera a resposta. Aí o pedido de rodas que perde para uma fonte de prioridade maior é
+/// recusado e não fica guardado: dizer "recusado" e aplicá-lo meio segundo depois, quando a outra soltasse, seria mentir.
+/// Por notificação ele fica guardado, e passa a valer quando a outra soltar: é assim que quem renova o pedido retoma o
+/// corpo. O alvo de ângulo da torre é um só, e quem perde não o troca, com resposta ou sem.
+pub fn aplicar_intencao(
+    i: &Intencoes,
+    fonte: FonteId,
+    call: &proto::Call,
+    com_resposta: bool,
+) -> Feito {
+    let canal = match call {
+        proto::Call::RobotMove(_) => Canal::Rodas,
+        proto::Call::RobotHead(_) => Canal::Torre,
+        proto::Call::RobotDo(_) => Canal::Modo,
+        _ => return Feito::NaoEra,
+    };
+    if let Some(por) = barrado(i, fonte, canal) {
+        return Feito::Recusado(por);
+    }
     match call {
         proto::Call::RobotMove(p) => {
-            i.pedir_twist([p.vx, p.vy, p.vyaw]);
-            true
+            if com_resposta && let Some(por) = superado(i, fonte, Canal::Rodas) {
+                return Feito::Recusado(por);
+            }
+            i.pedir_twist(fonte, [p.vx, p.vy, p.vyaw]);
         }
         proto::Call::RobotHead(p) => {
-            i.pedir_torre(p.head_yaw, p.head_pitch);
-            true
+            if !i.pedir_torre(fonte, p.head_yaw, p.head_pitch) {
+                return Feito::Recusado(torre_de_outra(i, fonte));
+            }
         }
         // O `robotd` também aceita a skill como notificação. Nome errado, aqui, não tem a quem responder.
         proto::Call::RobotDo(p) => {
             if let Some(m) = Modo::de_nome(&p.skill) {
                 i.pedir_modo(m);
             }
-            true
         }
-        _ => false,
+        _ => {}
     }
+    Feito::Aceito
+}
+
+/// O motivo de o alvo da torre não ter sido trocado.
+fn torre_de_outra(i: &Intencoes, fonte: FonteId) -> String {
+    superado(i, fonte, Canal::Torre).unwrap_or_else(|| "outra fonte tem a torre agora".to_owned())
 }
 
 /// `s1.gimbal`, `{"action": "speed", "yaw": graus/s, "pitch": graus/s}`, yaw à direita e pitch para cima, ou `{"action": "stop"}`.
+/// O erro é o do pedido malformado; `com_resposta` vale como em [`aplicar_intencao`].
 pub fn aplicar_taxa_da_torre(
     i: &Intencoes,
+    fonte: FonteId,
     params: Option<&serde_json::Value>,
-) -> Result<(), String> {
+    com_resposta: bool,
+) -> Result<Feito, String> {
     let p = params.ok_or("faltam os parâmetros")?;
-    match p["action"].as_str() {
-        Some("stop") => i.pedir_taxa_torre(0.0, 0.0),
+    let [yaw, pitch] = match p["action"].as_str() {
+        Some("stop") => [0.0; 2],
         Some("speed") => {
             let campo = |nome: &str| {
                 p[nome]
@@ -91,11 +192,42 @@ pub fn aplicar_taxa_da_torre(
                     .filter(|v| v.is_finite())
                     .ok_or_else(|| format!("{nome} tem de ser um número"))
             };
-            i.pedir_taxa_torre(campo("yaw")?, campo("pitch")?);
+            [campo("yaw")?, campo("pitch")?]
         }
         outra => return Err(format!("ação desconhecida: {outra:?}")),
+    };
+    if let Some(por) = barrado(i, fonte, Canal::Torre) {
+        return Ok(Feito::Recusado(por));
     }
-    Ok(())
+    if com_resposta && let Some(por) = superado(i, fonte, Canal::Torre) {
+        return Ok(Feito::Recusado(por));
+    }
+    i.pedir_taxa_torre(fonte, yaw, pitch);
+    Ok(Feito::Aceito)
+}
+
+/// `s1.armor` e `s1.sight` com valores gravam no robô, e isso é o canal `ajustes`. Sem valores só leem, e qualquer fonte
+/// lê. O motivo, se a fonte não pode gravar.
+pub fn ajuste_barrado(
+    i: &Intencoes,
+    fonte: FonteId,
+    metodo: &str,
+    params: Option<&serde_json::Value>,
+) -> Option<String> {
+    let grava = match metodo {
+        "s1.armor" => sensibilidade_pedida(params).is_some(),
+        "s1.sight" => mira_pedida(params).is_some(),
+        _ => false,
+    };
+    grava.then(|| barrado(i, fonte, Canal::Ajustes)).flatten()
+}
+
+fn sensibilidade_pedida(params: Option<&serde_json::Value>) -> Option<&serde_json::Value> {
+    params.and_then(|p| p.get("sensitivity"))
+}
+
+fn mira_pedida(params: Option<&serde_json::Value>) -> Option<&serde_json::Value> {
+    params.filter(|p| p.get("zoom_in").is_some() || p.get("zoom_out").is_some())
 }
 
 /// `s1.armor`: a sensibilidade das placas, de 0 a 10, a faixa da DJI (`RobotArmor.set_hit_sensitivity`). Com `sensitivity`, o
@@ -104,7 +236,7 @@ pub fn sensibilidade_das_placas(
     c: &Contexto,
     params: Option<&serde_json::Value>,
 ) -> Result<serde_json::Value, String> {
-    if let Some(v) = params.and_then(|p| p.get("sensitivity")) {
+    if let Some(v) = sensibilidade_pedida(params) {
         let n = v
             .as_u64()
             .filter(|n| *n <= 10)
@@ -136,8 +268,7 @@ const MIRA_MAXIMO: u64 = 10000;
 /// arquivo ou a chave); com `zoom_in` e `zoom_out`, cada um `[x, y]` de 0 a 10000, grava e responde o que ficou.
 pub fn mira(c: &Contexto, params: Option<&serde_json::Value>) -> Result<serde_json::Value, String> {
     let arquivo = c.params.mira.arquivo.as_deref().map(std::path::Path::new);
-    let pedido = params.filter(|p| p.get("zoom_in").is_some() || p.get("zoom_out").is_some());
-    if let Some(p) = pedido {
+    if let Some(p) = mira_pedida(params) {
         let par = |nome: &str| -> Result<[u64; 2], String> {
             let v = p
                 .get(nome)
@@ -373,11 +504,20 @@ fn problema_da_telemetria(c: &Contexto, a: Option<&Amostra>, agora: Instant) -> 
     None
 }
 
-/// `s1.state`: tudo o que se sabe do corpo, nos eixos do contrato. O que nunca chegou é `null`, e não zero.
-pub fn estado_s1(a: Option<&Amostra>, idade_ms: Option<u64>, recente: bool) -> serde_json::Value {
+/// `s1.state`: tudo o que se sabe do corpo, nos eixos do contrato, e quem manda nele. O que nunca chegou é `null`, e não
+/// zero. O bloco `control` sai sempre, também sem telemetria: quem dirige não depende de o corpo falar.
+pub fn estado_s1(
+    a: Option<&Amostra>,
+    idade_ms: Option<u64>,
+    recente: bool,
+    controle: &Controle,
+) -> serde_json::Value {
     use serde_json::json;
     let Some(a) = a else {
-        return json!({"link": {"state": "off", "packets": 0, "ignored": 0, "age_ms": idade_ms, "fresh": false}});
+        return json!({
+            "link": {"state": "off", "packets": 0, "ignored": 0, "age_ms": idade_ms, "fresh": false},
+            "control": controle.json(),
+        });
     };
     let (codigo, passo) = match a.enlace {
         Enlace::Recusado { passo, codigo } => (Some(codigo), Some(passo.nome())),
@@ -444,6 +584,7 @@ pub fn estado_s1(a: Option<&Amostra>, idade_ms: Option<u64>, recente: bool) -> s
         "chassis": chassi,
         "plates": placas,
         "ir": {"top_left": a.infravermelho[0], "top_right": a.infravermelho[1]},
+        "control": controle.json(),
     })
 }
 
@@ -463,7 +604,12 @@ pub fn estado_do_contrato(e: &Estado) -> proto::RobotState {
         movement: proto::MoveState {
             requested: e.pedido,
             applied: e.aplicado,
-            source: None,
+            // Como no pato: o nome de quem fez o pedido de `requested`, e nada se ele não disse o nome.
+            source: e
+                .fonte_do_pedido
+                .as_deref()
+                .filter(|n| *n != rms1d_params::FONTE_SEM_NOME)
+                .map(str::to_owned),
             limited_by: e.limitado_por.iter().map(|s| (*s).to_owned()).collect(),
         },
         head: [0.0, pitch, yaw, 0.0],
@@ -492,7 +638,7 @@ pub fn estado_do_contrato(e: &Estado) -> proto::RobotState {
         theremin: None,
         laser: None,
         soccer: None,
-        autonomous: false,
+        autonomous: e.autonomia,
         chorale: None,
         t_ns: proto::clock::monotonic_ns(),
         imu: medidas.map(|m| proto::ImuState {
@@ -515,12 +661,18 @@ fn nao_servida(id: proto::Id, call: &proto::Call) -> proto::Response {
     )
 }
 
-/// Responder uma requisição. Síncrona e sem esperar o laço: estas respostas têm de sair com tudo quebrado.
-pub fn responder(c: &Contexto, id: proto::Id, call: &proto::Call) -> proto::Response {
+/// Responder uma requisição da fonte. Síncrona e sem esperar o laço: estas respostas têm de sair com tudo quebrado.
+pub fn responder(
+    c: &Contexto,
+    fonte: FonteId,
+    id: proto::Id,
+    call: &proto::Call,
+) -> proto::Response {
     use proto::Call::*;
     let aceito = |id| proto::Response::ok(Some(id), &proto::IntentResult::accepted());
     let recusado =
         |id, por: &str| proto::Response::ok(Some(id), &proto::IntentResult::refused(por));
+    let i = &c.intencoes;
     match call {
         Hello(_) => proto::Response::ok(
             Some(id),
@@ -542,18 +694,34 @@ pub fn responder(c: &Contexto, id: proto::Id, call: &proto::Call) -> proto::Resp
         // A página mostra a escolha de dados anônimos só se o robô responde. Este corpo não envia nada.
         TelemetryStatus => proto::Response::ok(Some(id), &proto::TelemetryResult::default()),
 
-        RobotMove(_) | RobotHead(_) => {
-            aplicar_intencao(&c.intencoes, call);
-            aceito(id)
-        }
+        RobotMove(_) | RobotHead(_) => match aplicar_intencao(i, fonte, call, true) {
+            Feito::Recusado(por) => recusado(id, &por),
+            Feito::Aceito | Feito::NaoEra => aceito(id),
+        },
+        // Responde um documento, e não `accepted`: quem não pode recebe erro, ou acreditaria que a torre foi.
         RobotLook(p) => {
             let r = olhar(p, &c.params.seguranca);
-            c.intencoes.pedir_torre(r.head.head_yaw, r.head.head_pitch);
-            proto::Response::ok(Some(id), &r)
+            if let Some(por) = barrado(i, fonte, Canal::Torre) {
+                proto::Response::err(
+                    Some(id),
+                    proto::Error::new(proto::code::PERMISSION_DENIED, por),
+                )
+            } else if i.pedir_torre(fonte, r.head.head_yaw, r.head.head_pitch) {
+                proto::Response::ok(Some(id), &r)
+            } else {
+                proto::Response::err(
+                    Some(id),
+                    proto::Error::new(proto::code::BUSY, torre_de_outra(i, fonte)),
+                )
+            }
         }
+        // A parada vale para qualquer fonte: não há canal a conferir.
         RobotStop => {
-            c.intencoes.parar();
+            i.parar(fonte);
             aceito(id)
+        }
+        RobotEnable(_) | RobotInit | RobotRelax if barrado(i, fonte, Canal::Energia).is_some() => {
+            recusado(id, &barrado(i, fonte, Canal::Energia).unwrap_or_default())
         }
         RobotEnable(p) => {
             let sim = if p.toggle {
@@ -583,6 +751,7 @@ pub fn responder(c: &Contexto, id: proto::Id, call: &proto::Call) -> proto::Resp
             Some(id),
             &proto::ModeResult {
                 mode: MODO_CONTRATO.to_owned(),
+                autonomous: i.autonomia(),
                 ..proto::ModeResult::default()
             },
         ),
@@ -602,12 +771,13 @@ pub fn responder(c: &Contexto, id: proto::Id, call: &proto::Call) -> proto::Resp
                 built_in: nomes_dos_modos(),
             },
         ),
-        RobotDo(p) => match Modo::de_nome(&p.skill) {
-            Some(m) => {
+        RobotDo(p) => match (Modo::de_nome(&p.skill), barrado(i, fonte, Canal::Modo)) {
+            (None, _) => recusado(id, &format!("não há skill chamada {}", p.skill)),
+            (Some(_), Some(por)) => recusado(id, &por),
+            (Some(m), None) => {
                 c.intencoes.pedir_modo(m);
                 aceito(id)
             }
-            None => recusado(id, &format!("não há skill chamada {}", p.skill)),
         },
         RobotSubscribe(_) => proto::Response::ok(
             Some(id),
@@ -621,11 +791,14 @@ pub fn responder(c: &Contexto, id: proto::Id, call: &proto::Call) -> proto::Resp
             },
         ),
         RobotSafeToRestart => {
+            // O pedido de quem tem as rodas, julgado como a segurança o julga: o prazo da fonte dele, ou o de `[seguranca]`.
             let a = c.intencoes.ler(Instant::now());
-            let prazo = Duration::from_millis(c.params.seguranca.prazo_ms);
+            let prazo = a
+                .prazo_twist
+                .unwrap_or(Duration::from_millis(c.params.seguranca.prazo_ms));
             let andando = c.intencoes.armado_pedido()
                 && a.twist != [0.0; 3]
-                && a.idade_twist.is_some_and(|i| i < prazo);
+                && a.idade_twist.is_some_and(|i| i <= prazo);
             proto::Response::ok(
                 Some(id),
                 &proto::SafeToRestartResult {
@@ -660,7 +833,18 @@ pub fn responder(c: &Contexto, id: proto::Id, call: &proto::Call) -> proto::Resp
         RobotSetMode(_) => recusado(id, "este corpo está sempre sobre rodas"),
         RobotTheremin(_) => recusado(id, "este corpo não tem sensor de profundidade"),
         RobotLaserTrack(_) | RobotSoccer(_) => recusado(id, "este corpo não tem o jogo do pato"),
-        RobotAutonomous(_) => recusado(id, "a autonomia deste corpo entra com a tabela de fontes"),
+        // O robô por conta própria: um nível que este serviço guarda e publica (`robot.mode` e `robot.state`), e que
+        // libera as fontes `so_autonomo` da tabela. Quem o muda precisa do canal `autonomia`.
+        RobotAutonomous(p) => match barrado(i, fonte, Canal::Autonomia) {
+            Some(por) => recusado(id, &por),
+            None => {
+                if i.autonomia() != p.active {
+                    tracing::warn!(ligada = p.active, por = %i.nome(fonte), "a autonomia mudou");
+                }
+                i.definir_autonomia(p.active);
+                aceito(id)
+            }
+        },
         RobotChorale(_) | ChoraleSubscribe => recusado(id, "este corpo não canta"),
         // Estas duas não respondem `accepted`, e sim um documento: uma recusa viraria um documento vazio no cliente.
         RobotModel | RobotVetbook => nao_servida(id, call),

@@ -19,7 +19,7 @@ pub mod seguranca;
 pub mod telemetria;
 
 pub use corpo::{Corpo, CorpoFalso, CorpoRede, CorpoSerial};
-pub use intencoes::{Intencoes, Modo};
+pub use intencoes::{FonteId, Intencoes, Leitura, Modo};
 pub use laco::{Estado, Laco};
 pub use saude::Saude;
 pub use seguranca::Seguranca;

@@ -153,7 +153,12 @@ fn main() -> ExitCode {
                 return ExitCode::FAILURE;
             }
         };
-        let intencoes = Arc::new(Intencoes::default());
+        // A tabela de quem manda, de `[[fontes]]`, com o prazo de `[seguranca]` para a fonte que não tem um próprio.
+        let intencoes = Arc::new(Intencoes::com_fontes(
+            &params.fontes,
+            Duration::from_millis(params.seguranca.prazo_ms),
+        ));
+        intencoes.definir_autonomia(params.autonomia.ligada);
         let saude = Arc::new(Saude::default());
         let (estados, _) = broadcast::channel(ESTADOS_NA_FILA);
         let laco = match rodar_laco(

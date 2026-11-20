@@ -34,6 +34,14 @@ pub struct Estado {
     pub corpo_recente: bool,
     /// Há quantos milissegundos chegou o último pacote.
     pub idade_pacote_ms: Option<u64>,
+    /// O nome da fonte que tem as rodas: a de maior prioridade com pedido vivo. `None` sem nenhum.
+    pub dono_rodas: Option<Arc<str>>,
+    /// O nome da fonte que tem a torre.
+    pub dono_torre: Option<Arc<str>>,
+    /// O nome de quem fez o pedido de `pedido`, vivo ou vencido.
+    pub fonte_do_pedido: Option<Arc<str>>,
+    /// O robô por conta própria está ligado (`robot.autonomous`).
+    pub autonomia: bool,
 }
 
 pub struct Laco<C: Corpo> {
@@ -127,6 +135,10 @@ impl<C: Corpo> Laco<C> {
                 .saude
                 .idade_do_pacote(agora)
                 .map(|i| i.as_millis() as u64),
+            dono_rodas: leitura.dono_rodas.map(|f| self.intencoes.nome(f)),
+            dono_torre: leitura.dono_torre.map(|f| self.intencoes.nome(f)),
+            fonte_do_pedido: leitura.fonte_twist.map(|f| self.intencoes.nome(f)),
+            autonomia: self.intencoes.autonomia(),
         })
     }
 

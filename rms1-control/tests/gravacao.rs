@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use rms1_control::corpo::{Corpo, CorpoFalso};
 use rms1_control::gravacao::{Gravando, diferencas};
-use rms1_control::{Intencoes, Laco, Saude};
+use rms1_control::{FonteId, Intencoes, Laco, Saude};
 use rms1d_params::Params;
 
 fn gravar(caminho: &std::path::Path, ciclos_por_pedido: usize, vx: f64) {
@@ -21,11 +21,11 @@ fn gravar(caminho: &std::path::Path, ciclos_por_pedido: usize, vx: f64) {
     intencoes.pedir_armar(true);
     let mut t = Instant::now();
     for _ in 0..ciclos_por_pedido {
-        intencoes.pedir_twist([vx, 0.0, 0.0]);
+        intencoes.pedir_twist(FonteId::SEM_NOME, [vx, 0.0, 0.0]);
         t = Instant::now().max(t + Duration::from_millis(1));
         laco.ciclo(t, false);
     }
-    intencoes.pedir_torre(0.2, 0.1);
+    intencoes.pedir_torre(FonteId::SEM_NOME, 0.2, 0.1);
     laco.ciclo(t, false);
     intencoes.pedir_armar(false);
     laco.ciclo(t, false);
@@ -68,7 +68,7 @@ fn o_identificador_de_tarefa_nao_conta_como_diferenca() {
             Arc::new(Saude::default()),
         );
         intencoes.pedir_armar(true);
-        intencoes.pedir_torre(0.2, 0.1);
+        intencoes.pedir_torre(FonteId::SEM_NOME, 0.2, 0.1);
         let mut t = Instant::now();
         for _ in 0..repete {
             t += Duration::from_millis(200);
@@ -381,7 +381,7 @@ fn disco_cheio_nao_vira_falha_de_envio() {
     intencoes.pedir_armar(true);
     let mut t = Instant::now();
     for _ in 0..50 {
-        intencoes.pedir_twist([0.5, 0.0, 0.0]);
+        intencoes.pedir_twist(FonteId::SEM_NOME, [0.5, 0.0, 0.0]);
         t += Duration::from_millis(10);
         laco.ciclo(t, false);
     }

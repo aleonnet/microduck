@@ -20,7 +20,7 @@ pub const TABELA: &str = include_str!("../robo_s1.json");
 /// `dji_scratch` derrubou `dji_sys` (`docs/s1/robot/rms1d-pontos-de-controle.md`), e o próximo nome ninguém conhece.
 const PODE_PARAR: [&str; 3] = ["dji_monitor", "dji_hdvt_uav", "dji_camera"];
 
-#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct Params {
     pub robo: Robo,
@@ -39,6 +39,127 @@ pub struct Params {
     pub dji: Dji,
     /// O serviço de mídia, `rms1-mediad`. Sem a seção, o `rms1d` não repassa som e recusa dizendo isso.
     pub midia: Option<Midia>,
+    /// Quem manda no corpo: uma linha por fonte. Escrita no arquivo, a tabela substitui a padrão inteira.
+    pub fontes: Vec<Fonte>,
+    pub autonomia: Autonomia,
+}
+
+impl Default for Params {
+    fn default() -> Self {
+        Self {
+            robo: Robo::default(),
+            corpo: Corpo::default(),
+            nos: Nos::default(),
+            laco: Laco::default(),
+            seguranca: Seguranca::default(),
+            geometria: Geometria::default(),
+            torre: Torre::default(),
+            telemetria: Telemetria::default(),
+            estimativa: Estimativa::default(),
+            armadura: Armadura::default(),
+            mira: Mira::default(),
+            dji: Dji::default(),
+            midia: None,
+            fontes: Fonte::padrao(),
+            autonomia: Autonomia::default(),
+        }
+    }
+}
+
+/// O nome da fonte de quem não diz o nome no `hello`, ou diz um que a tabela não tem. Toda tabela tem de trazê-la.
+pub const FONTE_SEM_NOME: &str = "sem_nome";
+/// O teto de linhas da tabela: a arbitragem percorre todas a cada ciclo do laço.
+pub const FONTES_MAX: usize = 16;
+
+/// O que uma fonte pode pedir ao corpo. Cada pedido do contrato cai em um.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Canal {
+    /// `robot.move`.
+    Rodas,
+    /// `robot.head`, `robot.look` e `s1.gimbal`.
+    Torre,
+    /// `robot.sound`.
+    Som,
+    /// Armar e desarmar: `robot.enable`, `robot.init` e `robot.relax`.
+    Energia,
+    /// Quem segue quem: `robot.do`.
+    Modo,
+    /// O que fica gravado no robô: `s1.armor` e `s1.sight` com valores.
+    Ajustes,
+    /// Ligar e desligar o robô por conta própria: `robot.autonomous`.
+    Autonomia,
+}
+
+impl Canal {
+    pub const TODOS: [Canal; 7] = [
+        Canal::Rodas,
+        Canal::Torre,
+        Canal::Som,
+        Canal::Energia,
+        Canal::Modo,
+        Canal::Ajustes,
+        Canal::Autonomia,
+    ];
+
+    pub fn nome(self) -> &'static str {
+        match self {
+            Self::Rodas => "rodas",
+            Self::Torre => "torre",
+            Self::Som => "som",
+            Self::Energia => "energia",
+            Self::Modo => "modo",
+            Self::Ajustes => "ajustes",
+            Self::Autonomia => "autonomia",
+        }
+    }
+}
+
+/// Uma linha da tabela de quem manda no corpo. O desenho é o do `twist_mux` do ROS (fonte com prioridade e prazo), por
+/// canal: entre as fontes com pedido vivo num canal, vale a de maior prioridade; sem pedido novo dentro do prazo, o canal
+/// passa à seguinte. A parada (`robot.stop`) não passa por aqui: vale para qualquer fonte.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Fonte {
+    /// O nome que o cliente diz no `hello` (`client`).
+    pub nome: String,
+    /// De 0 a 255: maior manda. Os números só ordenam, e dois iguais são recusados.
+    pub prioridade: u8,
+    pub canais: Vec<Canal>,
+    /// Sem pedido novo há este tempo, a fonte solta o canal. Ausente, vale `[seguranca] prazo_ms`.
+    #[serde(default)]
+    pub prazo_ms: Option<u64>,
+    /// Só vale com a autonomia ligada (`robot.autonomous`): é a linha do cérebro.
+    #[serde(default)]
+    pub so_autonomo: bool,
+}
+
+impl Fonte {
+    /// A tabela padrão, na ordem do dono (2026-11-19): piloto, agente, cérebro. Quem não diz o nome segue podendo o que
+    /// podia antes da tabela, e perde para todos. É a mesma que `deploy/s1/rms1d.toml` escreve por extenso.
+    pub fn padrao() -> Vec<Fonte> {
+        let linha = |nome: &str, prioridade, canais: &[Canal], so_autonomo| Fonte {
+            nome: nome.to_owned(),
+            prioridade,
+            canais: canais.to_vec(),
+            prazo_ms: None,
+            so_autonomo,
+        };
+        let corpo = [Canal::Rodas, Canal::Torre, Canal::Som];
+        vec![
+            linha("piloto", 30, &Canal::TODOS, false),
+            linha("agente", 20, &corpo, false),
+            linha("cerebro", 10, &corpo, true),
+            linha(FONTE_SEM_NOME, 0, &Canal::TODOS, false),
+        ]
+    }
+}
+
+/// O robô por conta própria: o nível que `robot.autonomous` muda até o serviço sair, e com que ele sobe.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct Autonomia {
+    pub ligada: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -797,6 +918,43 @@ impl Params {
                 "dji.parar não pode ter `{p}`: só {PODE_PARAR:?} podem parar"
             ));
         }
+        if self.fontes.len() > FONTES_MAX {
+            return ruim(format!(
+                "fontes: a tabela tem {} linhas, e o teto é {FONTES_MAX}",
+                self.fontes.len()
+            ));
+        }
+        if !self.fontes.iter().any(|f| f.nome == FONTE_SEM_NOME) {
+            return ruim(format!(
+                "fontes: falta a linha `{FONTE_SEM_NOME}`, a de quem não diz o nome no hello"
+            ));
+        }
+        for (i, f) in self.fontes.iter().enumerate() {
+            if f.nome.is_empty() {
+                return ruim(format!("fontes: a linha {} está sem nome", i + 1));
+            }
+            if self.fontes[..i].iter().any(|g| g.nome == f.nome) {
+                return ruim(format!("fontes: o nome `{}` está repetido", f.nome));
+            }
+            if let Some(g) = self.fontes[..i]
+                .iter()
+                .find(|g| g.prioridade == f.prioridade)
+            {
+                return ruim(format!(
+                    "fontes: `{}` e `{}` têm a mesma prioridade ({}), e a ordem entre elas ficaria por conta do acaso",
+                    g.nome, f.nome, f.prioridade
+                ));
+            }
+            // Zero soltaria o canal antes do ciclo seguinte; acima de 10 s, um cliente caído seguraria o corpo.
+            if let Some(p) = f.prazo_ms
+                && !(1..=10_000).contains(&p)
+            {
+                return ruim(format!(
+                    "fontes: prazo_ms de `{}` fora de 1 a 10000: {p}",
+                    f.nome
+                ));
+            }
+        }
         if let Some(m) = &self.midia {
             if !m.socket.starts_with('/') {
                 return ruim(format!(
@@ -1240,5 +1398,117 @@ mod testes {
             p.corpo.gravar_recebido.is_some(),
             "a prova em modo sombra grava o recebido"
         );
+        // A tabela do robô, escrita por extenso, é a padrão: o simulador, que não a escreve, anda com a mesma.
+        assert_eq!(p.fontes, Fonte::padrao());
+        assert!(
+            !p.autonomia.ligada,
+            "o robô sobe sem andar por conta própria"
+        );
+    }
+
+    const SEM_NOME: &str =
+        "[[fontes]]\nnome = \"sem_nome\"\nprioridade = 0\ncanais = [\"rodas\"]\n";
+
+    /// A ordem é a do dono: piloto, agente, cérebro; e quem não diz o nome perde para todos.
+    #[test]
+    fn a_tabela_padrao_e_piloto_agente_cerebro() {
+        let p = Params::default();
+        p.validar().unwrap();
+        let mut ordem: Vec<&Fonte> = p.fontes.iter().collect();
+        ordem.sort_by_key(|f| std::cmp::Reverse(f.prioridade));
+        let nomes: Vec<&str> = ordem.iter().map(|f| f.nome.as_str()).collect();
+        assert_eq!(nomes, ["piloto", "agente", "cerebro", FONTE_SEM_NOME]);
+        let de_nome = |n: &str| p.fontes.iter().find(|f| f.nome == n).unwrap();
+        assert_eq!(de_nome("piloto").canais, Canal::TODOS);
+        assert_eq!(de_nome(FONTE_SEM_NOME).canais, Canal::TODOS);
+        for n in ["agente", "cerebro"] {
+            assert_eq!(
+                de_nome(n).canais,
+                [Canal::Rodas, Canal::Torre, Canal::Som],
+                "{n} não arma, não muda o modo nem grava ajuste"
+            );
+        }
+        assert!(de_nome("cerebro").so_autonomo && !de_nome("agente").so_autonomo);
+        assert!(p.fontes.iter().all(|f| f.prazo_ms.is_none()));
+    }
+
+    #[test]
+    fn a_tabela_do_arquivo_substitui_a_padrao() {
+        let p = de(&format!(
+            "{SEM_NOME}[[fontes]]\nnome = \"piloto\"\nprioridade = 9\ncanais = [\"rodas\", \"torre\"]\nprazo_ms = 250\n[autonomia]\nligada = true\n"
+        ))
+        .unwrap();
+        assert_eq!(p.fontes.len(), 2);
+        assert_eq!(p.fontes[1].prazo_ms, Some(250));
+        assert_eq!(p.fontes[1].canais, [Canal::Rodas, Canal::Torre]);
+        assert!(p.autonomia.ligada);
+    }
+
+    /// Cada erro da tabela é recusado dizendo o nome do que está errado.
+    #[test]
+    fn tabela_de_fontes_errada_e_recusada_pelo_nome() {
+        let linha = |nome: &str, prioridade: u32, resto: &str| {
+            format!(
+                "[[fontes]]\nnome = \"{nome}\"\nprioridade = {prioridade}\ncanais = [\"rodas\"]\n{resto}"
+            )
+        };
+        for (t, nome) in [
+            // Nome repetido.
+            (
+                format!(
+                    "{SEM_NOME}{}{}",
+                    linha("piloto", 3, ""),
+                    linha("piloto", 4, "")
+                ),
+                "o nome `piloto` está repetido",
+            ),
+            // Prioridade repetida.
+            (
+                format!(
+                    "{SEM_NOME}{}{}",
+                    linha("piloto", 3, ""),
+                    linha("agente", 3, "")
+                ),
+                "`piloto` e `agente` têm a mesma prioridade (3)",
+            ),
+            // Canal desconhecido.
+            (
+                format!(
+                    "{SEM_NOME}[[fontes]]\nnome = \"piloto\"\nprioridade = 3\ncanais = [\"asas\"]\n"
+                ),
+                "asas",
+            ),
+            // Falta a linha de quem não diz o nome.
+            (linha("piloto", 3, ""), "falta a linha `sem_nome`"),
+            // Prazo fora da faixa, nas duas pontas.
+            (
+                format!("{SEM_NOME}{}", linha("piloto", 3, "prazo_ms = 0\n")),
+                "prazo_ms de `piloto` fora de 1 a 10000: 0",
+            ),
+            (
+                format!("{SEM_NOME}{}", linha("piloto", 3, "prazo_ms = 10001\n")),
+                "prazo_ms de `piloto` fora de 1 a 10000: 10001",
+            ),
+            // Chave escrita errada numa linha.
+            (
+                format!("{SEM_NOME}{}", linha("piloto", 3, "prazzo_ms = 250\n")),
+                "prazzo_ms",
+            ),
+            // Linha sem nome.
+            (
+                format!("{SEM_NOME}{}", linha("", 3, "")),
+                "a linha 2 está sem nome",
+            ),
+            ("[autonomia]\nligado = true\n".to_owned(), "ligado"),
+        ] {
+            let e = de(&t).unwrap_err().to_string();
+            assert!(e.contains(nome), "{t}: {e}");
+        }
+        // Mais linhas do que o teto.
+        let muitas: String = (1..=FONTES_MAX as u32)
+            .map(|i| linha(&format!("f{i}"), i, ""))
+            .collect();
+        let e = de(&format!("{SEM_NOME}{muitas}")).unwrap_err().to_string();
+        assert!(e.contains("o teto é 16"), "{e}");
     }
 }

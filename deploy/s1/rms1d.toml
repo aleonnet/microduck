@@ -36,6 +36,40 @@ arquivo = "/mnt/dji/rm_user_setting.json"
 # `init`, sem `kill` (a bancada cuida disso).
 parar = ["dji_monitor", "dji_hdvt_uav", "dji_camera"]
 
+# Quem manda no corpo, uma linha por fonte. O cliente diz o nome no `hello` (`client`); em cada canal vale a fonte de maior
+# prioridade com pedido vivo, e sem pedido novo dentro do prazo (o de `[seguranca] prazo_ms`, 500 ms, salvo `prazo_ms` na
+# linha) o canal passa à seguinte. `robot.stop` vale para qualquer uma. Os números só ordenam: a ordem é a do dono (piloto,
+# agente, cérebro). Esta tabela é a padrão de `rms1d-params`, escrita por extenso; o teste `o_arquivo_do_robo_carrega`
+# reprova se as duas se afastarem.
+# O piloto: a página e o controle. Manda em tudo, e toma o corpo na hora.
+[[fontes]]
+nome = "piloto"
+prioridade = 30
+canais = ["rodas", "torre", "som", "energia", "modo", "ajustes", "autonomia"]
+
+# O agente (`rms1-agente`), que cumpre o que a estação decide: move, vira a torre e fala. Não arma nem muda ajuste.
+[[fontes]]
+nome = "agente"
+prioridade = 20
+canais = ["rodas", "torre", "som"]
+
+# O cérebro: só vale com a autonomia ligada (`robot.autonomous`).
+[[fontes]]
+nome = "cerebro"
+prioridade = 10
+canais = ["rodas", "torre", "som"]
+so_autonomo = true
+
+# Quem não diz o nome (o `robotctl`, um roteiro): segue podendo o que podia antes da tabela, e perde para todos.
+[[fontes]]
+nome = "sem_nome"
+prioridade = 0
+canais = ["rodas", "torre", "som", "energia", "modo", "ajustes", "autonomia"]
+
+# O robô sobe sem andar por conta própria; `robot.autonomous` muda isto até o serviço sair.
+[autonomia]
+ligada = false
+
 # A mídia do robô, do `rms1-mediad`: a câmera pela sequência da DJI, o microfone pelo canal esquerdo a 16 kHz, e o som pelo
 # `aplay`. Com a DJI parada, é ele quem deixa o chip de áudio como a partida dela deixa.
 [midia]

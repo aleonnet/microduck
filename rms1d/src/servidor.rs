@@ -8,12 +8,12 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use duck_ipc_proto as proto;
-use rms1_control::Estado;
+use rms1_control::{Estado, FonteId};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{broadcast, mpsc};
 
-use crate::respostas::{self, Contexto};
+use crate::respostas::{self, Contexto, Controle, Feito};
 
 /// Maior linha aceita de um cliente.
 const LINHA_MAX: usize = 64 * 1024;
@@ -194,6 +194,8 @@ async fn atender(
     // `s1.state`, na mesma assinatura: a mesma conexão pode querer os dois, cada um no seu ritmo.
     let mut intervalo_s1: Option<Duration> = None;
     let mut ultimo_s1: Option<Instant> = None;
+    // Quem esta conexão é na tabela de fontes: a sem nome, até um `hello` dizer o nome (`client`).
+    let mut fonte = FonteId::SEM_NOME;
 
     loop {
         let linha = match assinatura.as_mut() {
@@ -212,7 +214,7 @@ async fn atender(
                                 && ultimo_s1.is_none_or(|u| u.elapsed() >= i)
                             {
                                 ultimo_s1 = Some(Instant::now());
-                                let params = respostas::estado_s1(e.corpo.as_deref(), e.idade_pacote_ms, e.corpo_recente);
+                                let params = respostas::estado_s1(e.corpo.as_deref(), e.idade_pacote_ms, e.corpo_recente, &Controle::do_estado(&e));
                                 let n = serde_json::json!({"jsonrpc": "2.0", "method": "s1.state", "params": params});
                                 escrever(&mut saida, &n).await?;
                             }
@@ -251,16 +253,37 @@ async fn atender(
         };
         // `s1.gimbal` é do S1, e não do contrato comum: velocidade da torre, com o sinal da DJI.
         if pedido.method == "s1.gimbal" {
-            let r = respostas::aplicar_taxa_da_torre(&c.intencoes, pedido.params.as_ref());
+            let r = respostas::aplicar_taxa_da_torre(
+                &c.intencoes,
+                fonte,
+                pedido.params.as_ref(),
+                pedido.id.is_some(),
+            );
             if let Some(id) = pedido.id.clone() {
                 let resposta = match r {
-                    Ok(()) => proto::Response::ok(Some(id), &proto::IntentResult::accepted()),
+                    Ok(Feito::Recusado(por)) => {
+                        proto::Response::ok(Some(id), &proto::IntentResult::refused(por))
+                    }
+                    Ok(_) => proto::Response::ok(Some(id), &proto::IntentResult::accepted()),
                     Err(e) => proto::Response::err(
                         Some(id),
                         proto::Error::new(proto::code::INVALID_PARAMS, e),
                     ),
                 };
                 escrever(&mut saida, &resposta).await?;
+            }
+            continue;
+        }
+        // `s1.armor` e `s1.sight` com valores gravam no robô: só a fonte com o canal `ajustes`. Ler, qualquer uma lê.
+        if let Some(por) =
+            respostas::ajuste_barrado(&c.intencoes, fonte, &pedido.method, pedido.params.as_ref())
+        {
+            if let Some(id) = pedido.id.clone() {
+                let r = proto::Response::err(
+                    Some(id),
+                    proto::Error::new(proto::code::PERMISSION_DENIED, por),
+                );
+                escrever(&mut saida, &r).await?;
             }
             continue;
         }
@@ -324,6 +347,7 @@ async fn atender(
                         a.as_deref(),
                         idade.map(|i| i.as_millis() as u64),
                         recente,
+                        &Controle::de_agora(&c.intencoes, agora),
                     ),
                 )
             };
@@ -341,13 +365,18 @@ async fn atender(
                     proto::code::INVALID_PARAMS,
                     e.to_string(),
                 )),
-                Ok(_) => {
-                    let n = serde_json::json!({"jsonrpc": "2.0", "method": proto::method::ROBOT_SOUND, "params": params});
-                    Ok(match m.repassar(n.to_string()) {
-                        Ok(()) => proto::IntentResult::accepted(),
-                        Err(por) => proto::IntentResult::refused(por),
-                    })
-                }
+                Ok(_) => Ok(
+                    match respostas::barrado(&c.intencoes, fonte, rms1d_params::Canal::Som) {
+                        Some(por) => proto::IntentResult::refused(por),
+                        None => {
+                            let n = serde_json::json!({"jsonrpc": "2.0", "method": proto::method::ROBOT_SOUND, "params": params});
+                            match m.repassar(n.to_string()) {
+                                Ok(()) => proto::IntentResult::accepted(),
+                                Err(por) => proto::IntentResult::refused(por),
+                            }
+                        }
+                    },
+                ),
             };
             if let Some(id) = pedido.id.clone() {
                 let r = match resposta {
@@ -359,10 +388,39 @@ async fn atender(
             continue;
         }
         let call = pedido.as_call();
-        // Notificação não tem resposta: é assim que os pedidos contínuos chegam.
+        // O `hello` diz quem a conexão é (`client`), como no pato. O nome que a tabela não tem, ou nenhum, é a fonte sem
+        // nome; e o nome dela ninguém pode dizer: quem o dissesse passaria por quem não disse nada.
+        if let Ok(proto::Call::Hello(p)) = &call {
+            if p.client.as_deref() == Some(rms1d_params::FONTE_SEM_NOME) {
+                if let Some(id) = pedido.id.clone() {
+                    let r = proto::Response::err(
+                        Some(id),
+                        proto::Error::new(
+                            proto::code::INVALID_PARAMS,
+                            format!(
+                                "client não pode ser {}: é a fonte de quem não diz o nome",
+                                rms1d_params::FONTE_SEM_NOME
+                            ),
+                        ),
+                    );
+                    escrever(&mut saida, &r).await?;
+                }
+                continue;
+            }
+            fonte = c.intencoes.fonte(p.client.as_deref());
+            if let Some(nome) = p.client.as_deref()
+                && fonte == FonteId::SEM_NOME
+            {
+                tracing::info!(
+                    cliente = nome,
+                    "o nome não está na tabela de fontes: fica como a fonte sem nome"
+                );
+            }
+        }
+        // Notificação não tem resposta: é assim que os pedidos contínuos chegam. A que a fonte não pode fazer é ignorada.
         let Some(id) = pedido.id.clone() else {
             if let Ok(call) = call {
-                respostas::aplicar_intencao(&c.intencoes, &call);
+                respostas::aplicar_intencao(&c.intencoes, fonte, &call, false);
             }
             continue;
         };
@@ -377,7 +435,7 @@ async fn atender(
             ultimo = None;
         }
         let resposta = match call {
-            Ok(call) => respostas::responder(&c, id, &call),
+            Ok(call) => respostas::responder(&c, fonte, id, &call),
             Err(e) => proto::Response::err(Some(id), e),
         };
         escrever(&mut saida, &resposta).await?;

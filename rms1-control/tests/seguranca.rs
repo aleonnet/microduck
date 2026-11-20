@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use rms1_control::cinematica::rpm_de_twist;
 use rms1_control::intencoes::Modo;
-use rms1_control::{CorpoFalso, Intencoes, Laco, Saude};
+use rms1_control::{CorpoFalso, FonteId, Intencoes, Laco, Saude};
 use rms1_proto::Quadro;
 use rms1_proto::comando::id;
 use rms1d_params::{Params, TipoCorpo};
@@ -51,7 +51,7 @@ impl Banca {
 
     /// Pede agora, e faz o tempo do relógio do teste andar junto com o carimbo real.
     fn pedir_e_ciclar(&mut self, twist: [f64; 3]) -> rms1_control::Estado {
-        self.intencoes.pedir_twist(twist);
+        self.intencoes.pedir_twist(FonteId::SEM_NOME, twist);
         self.agora = Instant::now();
         self.laco.ciclo(self.agora, true).expect("pedido estado")
     }
@@ -80,7 +80,7 @@ fn sem_armar_nenhum_quadro_chega_ao_corpo() {
         b.ciclo();
     }
     let e = b.pedir_e_ciclar([1.0, 0.0, 0.0]);
-    b.intencoes.pedir_torre(0.5, 0.1);
+    b.intencoes.pedir_torre(FonteId::SEM_NOME, 0.5, 0.1);
     b.ciclo();
     assert!(b.corpo.quadros().is_empty(), "{:?}", b.corpo.quadros());
     assert_eq!(e.aplicado, [0.0; 3]);
@@ -199,7 +199,8 @@ fn valor_nao_finito_e_recusado_e_o_robo_para() {
     assert_eq!(b.ultimas_rodas(), [0; 4]);
     assert_eq!(e.limitado_por, vec!["not_finite"]);
     b.corpo.limpar();
-    b.intencoes.pedir_torre(f64::INFINITY, 0.0);
+    b.intencoes
+        .pedir_torre(FonteId::SEM_NOME, f64::INFINITY, 0.0);
     let e = b.ciclo();
     assert!(b.de(id::TORRE_ANGULOS).is_empty());
     assert!(e.limitado_por.contains(&"not_finite"));
@@ -216,7 +217,7 @@ fn a_torre_inverte_os_dois_sinais_para_a_dji() {
     let mut b = banca();
     b.armar();
     b.intencoes
-        .pedir_torre(10f64.to_radians(), 5f64.to_radians());
+        .pedir_torre(FonteId::SEM_NOME, 10f64.to_radians(), 5f64.to_radians());
     b.ciclo();
     let q = b.de(id::TORRE_ANGULOS).pop().unwrap();
     assert_eq!((i16_em(&q, 3), i16_em(&q, 7)), (-100, -50));
@@ -229,12 +230,12 @@ fn a_torre_fica_nos_limites_do_firmware() {
     let mut b = banca();
     b.armar();
     b.intencoes
-        .pedir_torre(-300f64.to_radians(), -90f64.to_radians());
+        .pedir_torre(FonteId::SEM_NOME, -300f64.to_radians(), -90f64.to_radians());
     b.ciclo();
     let q = b.de(id::TORRE_ANGULOS).pop().unwrap();
     assert_eq!((i16_em(&q, 3), i16_em(&q, 7)), (2500, 350));
     b.intencoes
-        .pedir_torre(300f64.to_radians(), 90f64.to_radians());
+        .pedir_torre(FonteId::SEM_NOME, 300f64.to_radians(), 90f64.to_radians());
     b.ciclo();
     let q = b.de(id::TORRE_ANGULOS).pop().unwrap();
     assert_eq!((i16_em(&q, 3), i16_em(&q, 7)), (-2500, -200));
@@ -246,7 +247,7 @@ fn com_a_torre_seguindo_o_giro_nao_e_enviado() {
     let mut b = banca();
     b.armar();
     b.intencoes.pedir_modo(Modo::TorreSegueChassi);
-    b.intencoes.pedir_torre(1.0, 0.1);
+    b.intencoes.pedir_torre(FonteId::SEM_NOME, 1.0, 0.1);
     b.ciclo();
     assert_eq!(b.de(id::MODO_TORRE).pop().unwrap().dados, vec![2, 0]);
     let q = b.de(id::TORRE_ANGULOS).pop().unwrap();
@@ -295,7 +296,7 @@ fn com_o_chassi_seguindo_o_alvo_da_torre_vai_uma_vez_so() {
     let mut b = banca();
     b.armar();
     b.intencoes.pedir_modo(Modo::ChassiSegueTorre);
-    b.intencoes.pedir_torre(0.3, 0.0);
+    b.intencoes.pedir_torre(FonteId::SEM_NOME, 0.3, 0.0);
     for _ in 0..30 {
         b.ciclo();
     }
@@ -307,7 +308,7 @@ fn com_o_chassi_seguindo_o_alvo_da_torre_vai_uma_vez_so() {
 fn no_modo_livre_o_alvo_da_torre_e_reenviado() {
     let mut b = banca();
     b.armar();
-    b.intencoes.pedir_torre(0.3, 0.0);
+    b.intencoes.pedir_torre(FonteId::SEM_NOME, 0.3, 0.0);
     for _ in 0..30 {
         b.ciclo();
     }
@@ -406,7 +407,8 @@ fn a_tarefa_da_torre_troca_a_cada_envio_e_nunca_e_zero() {
     let mut vistas = Vec::new();
     for i in 0..300u32 {
         // De 0,002 rad em 0,002 rad: mais de um décimo de grau, então cada alvo é novo e sai neste ciclo.
-        b.intencoes.pedir_torre(f64::from(i) * 0.002, 0.0);
+        b.intencoes
+            .pedir_torre(FonteId::SEM_NOME, f64::from(i) * 0.002, 0.0);
         b.ciclo();
         vistas.push(b.de(id::TORRE_ANGULOS).pop().unwrap().dados[0]);
     }
@@ -442,7 +444,7 @@ fn o_estado_da_torre_e_o_alvo_limitado_e_diz_que_limitou() {
     let mut b = banca();
     b.armar();
     assert_eq!(b.ciclo().torre, None, "ninguém pediu");
-    b.intencoes.pedir_torre(6.0, -2.0);
+    b.intencoes.pedir_torre(FonteId::SEM_NOME, 6.0, -2.0);
     let e = b.ciclo();
     let [yaw, pitch] = e.torre.unwrap();
     assert!((yaw - 250f64.to_radians()).abs() < 1e-3, "{yaw}");
@@ -452,7 +454,7 @@ fn o_estado_da_torre_e_o_alvo_limitado_e_diz_que_limitou() {
         "{:?}",
         e.limitado_por
     );
-    b.intencoes.pedir_torre(0.1, 0.1);
+    b.intencoes.pedir_torre(FonteId::SEM_NOME, 0.1, 0.1);
     let e = b.ciclo();
     assert!(e.limitado_por.is_empty(), "{:?}", e.limitado_por);
 }
@@ -463,7 +465,7 @@ fn com_a_torre_seguindo_o_estado_nao_mostra_yaw_pedido() {
     let mut b = banca();
     b.armar();
     b.intencoes.pedir_modo(Modo::TorreSegueChassi);
-    b.intencoes.pedir_torre(6.0, 0.1);
+    b.intencoes.pedir_torre(FonteId::SEM_NOME, 6.0, 0.1);
     let e = b.ciclo();
     let [yaw, pitch] = e.torre.unwrap();
     assert_eq!(yaw, 0.0);
@@ -475,8 +477,8 @@ fn com_a_torre_seguindo_o_estado_nao_mostra_yaw_pedido() {
 #[test]
 fn armar_nao_cumpre_o_que_foi_pedido_antes() {
     let mut b = banca();
-    b.intencoes.pedir_twist([1.0, 0.0, 0.0]);
-    b.intencoes.pedir_torre(0.5, 0.1);
+    b.intencoes.pedir_twist(FonteId::SEM_NOME, [1.0, 0.0, 0.0]);
+    b.intencoes.pedir_torre(FonteId::SEM_NOME, 0.5, 0.1);
     b.intencoes.pedir_armar(true);
     b.agora = Instant::now();
     let e = b.laco.ciclo(b.agora, true).unwrap();
@@ -497,8 +499,8 @@ fn armar_nao_cumpre_o_que_foi_pedido_antes() {
 fn pedido_logo_depois_de_armar_vale() {
     let mut b = banca();
     b.intencoes.pedir_armar(true);
-    b.intencoes.pedir_twist([1.0, 0.0, 0.0]);
-    b.intencoes.pedir_torre(0.2, 0.0);
+    b.intencoes.pedir_twist(FonteId::SEM_NOME, [1.0, 0.0, 0.0]);
+    b.intencoes.pedir_torre(FonteId::SEM_NOME, 0.2, 0.0);
     b.agora = Instant::now();
     b.laco.ciclo(b.agora, true).unwrap();
     assert_ne!(b.ultimas_rodas(), [0; 4]);
@@ -510,7 +512,7 @@ fn pedido_logo_depois_de_armar_vale() {
 fn armar_de_novo_nao_esquece_o_pedido() {
     let mut b = banca();
     b.armar();
-    b.intencoes.pedir_twist([1.0, 0.0, 0.0]);
+    b.intencoes.pedir_twist(FonteId::SEM_NOME, [1.0, 0.0, 0.0]);
     b.intencoes.pedir_armar(true);
     b.agora = Instant::now();
     b.laco.ciclo(b.agora, true).unwrap();
@@ -580,7 +582,7 @@ fn nenhum_caminho_envia_reset_de_no() {
     b.armar();
     for m in Modo::TODOS {
         b.intencoes.pedir_modo(m);
-        b.intencoes.pedir_torre(0.2, 0.1);
+        b.intencoes.pedir_torre(FonteId::SEM_NOME, 0.2, 0.1);
         b.pedir_e_ciclar([0.5, 0.1, 0.5]);
     }
     for _ in 0..400 {
@@ -609,8 +611,8 @@ fn desarmado_so_sai_a_telemetria() {
     p.corpo.tipo = TipoCorpo::Serial;
     let mut b = banca_com(&p);
     for _ in 0..600 {
-        b.intencoes.pedir_twist([1.0, 0.0, 0.0]);
-        b.intencoes.pedir_torre(0.5, 0.1);
+        b.intencoes.pedir_twist(FonteId::SEM_NOME, [1.0, 0.0, 0.0]);
+        b.intencoes.pedir_torre(FonteId::SEM_NOME, 0.5, 0.1);
         b.ciclo();
     }
     let q = b.corpo.quadros();
@@ -672,8 +674,8 @@ fn pedidos_em_rajada_nao_atrasam_o_laco() {
     let f = fim.clone();
     let martelo = std::thread::spawn(move || {
         while !f.load(Ordering::Relaxed) {
-            i.pedir_twist([0.1, 0.0, 0.0]);
-            i.pedir_torre(0.1, 0.1);
+            i.pedir_twist(FonteId::SEM_NOME, [0.1, 0.0, 0.0]);
+            i.pedir_torre(FonteId::SEM_NOME, 0.1, 0.1);
         }
     });
     let mut pior = Duration::ZERO;
@@ -696,7 +698,8 @@ fn velocidade_da_torre_vai_a_cada_ciclo_sem_tarefa_de_angulo() {
     let mut b = banca();
     b.armar();
     for _ in 0..10 {
-        b.intencoes.pedir_taxa_torre(120.0, -30.0);
+        b.intencoes
+            .pedir_taxa_torre(FonteId::SEM_NOME, 120.0, -30.0);
         b.agora = Instant::now();
         b.laco.ciclo(b.agora, false);
     }
@@ -724,7 +727,7 @@ fn velocidade_da_torre_vai_a_cada_ciclo_sem_tarefa_de_angulo() {
 fn velocidade_da_torre_vence_no_prazo_e_para() {
     let mut b = banca();
     b.armar();
-    b.intencoes.pedir_taxa_torre(120.0, 0.0);
+    b.intencoes.pedir_taxa_torre(FonteId::SEM_NOME, 120.0, 0.0);
     b.agora = Instant::now();
     b.laco.ciclo(b.agora, false);
     b.corpo.limpar();
@@ -743,11 +746,11 @@ fn velocidade_da_torre_vence_no_prazo_e_para() {
 fn parar_tambem_para_a_torre() {
     let mut b = banca();
     b.armar();
-    b.intencoes.pedir_taxa_torre(120.0, 0.0);
+    b.intencoes.pedir_taxa_torre(FonteId::SEM_NOME, 120.0, 0.0);
     b.agora = Instant::now();
     b.laco.ciclo(b.agora, false);
     b.corpo.limpar();
-    b.intencoes.parar();
+    b.intencoes.parar(FonteId::SEM_NOME);
     b.agora += Duration::from_millis(10);
     b.laco.ciclo(b.agora, false);
     let t = b.de(id::TORRE_TAXA);
@@ -760,11 +763,12 @@ fn parar_tambem_para_a_torre() {
 fn velocidade_da_torre_nao_finita_e_recusada_e_a_torre_para() {
     let mut b = banca();
     b.armar();
-    b.intencoes.pedir_taxa_torre(120.0, 0.0);
+    b.intencoes.pedir_taxa_torre(FonteId::SEM_NOME, 120.0, 0.0);
     b.agora = Instant::now();
     b.laco.ciclo(b.agora, false);
     b.corpo.limpar();
-    b.intencoes.pedir_taxa_torre(f64::NAN, 0.0);
+    b.intencoes
+        .pedir_taxa_torre(FonteId::SEM_NOME, f64::NAN, 0.0);
     b.agora += Duration::from_millis(10);
     b.laco.ciclo(b.agora, false);
     let t = b.de(id::TORRE_TAXA);
@@ -777,12 +781,12 @@ fn velocidade_da_torre_nao_finita_e_recusada_e_a_torre_para() {
 fn velocidade_da_torre_esquece_o_alvo_de_angulo() {
     let mut b = banca();
     b.armar();
-    b.intencoes.pedir_torre(0.5, 0.1);
+    b.intencoes.pedir_torre(FonteId::SEM_NOME, 0.5, 0.1);
     b.ciclo();
-    b.intencoes.pedir_taxa_torre(60.0, 0.0);
+    b.intencoes.pedir_taxa_torre(FonteId::SEM_NOME, 60.0, 0.0);
     b.agora = Instant::now();
     b.laco.ciclo(b.agora, false);
-    b.intencoes.pedir_taxa_torre(0.0, 0.0);
+    b.intencoes.pedir_taxa_torre(FonteId::SEM_NOME, 0.0, 0.0);
     b.corpo.limpar();
     b.agora = Instant::now();
     b.laco.ciclo(b.agora, false);
@@ -848,7 +852,7 @@ impl Direta {
 
     /// Um ciclo com o pedido dado, levantado ou não; devolve os motivos de limite e limpa o corpo.
     fn ciclo(&mut self, twist: [f64; 3], levantado: bool) -> (Vec<&'static str>, Vec<Quadro>) {
-        self.intencoes.pedir_twist(twist);
+        self.intencoes.pedir_twist(FonteId::SEM_NOME, twist);
         let agora = Instant::now();
         let a = self
             .s
