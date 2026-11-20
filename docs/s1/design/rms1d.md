@@ -1,18 +1,18 @@
 # `rms1d`: o serviço do corpo do S1
 
-Status: em uso no simulador; prova no robô pendente. Data: 2026-11-03.
+Status: em uso no simulador; prova no robô pendente. Data: 2026-11-03. A tabela de quem manda no corpo e o contrato 68 do pato: 2026-11-20, provados no Mac com a estação de verdade; a prova no simulador e no robô é do dono.
 
 O que conta como pronto, pelo dono: atuar, ler e receber telemetria para controlar o S1 no mesmo nível do pato, com lista finita de pontos de controle. O teste só vale no caminho da entrega: controlar, interagir, treinar e colocar inteligência no S1.
 
-Este serviço é novo. O `s1d` fica sem mudança, como comparação. A origem de bytes, unidades e sentidos é a biblioteca do laboratório, `~/Development/RoboMaster-S1/biblioteca`, e o firmware copiado do robô.
+Este serviço é novo. O `s1d` fica na árvore só como leitura e comparação: saiu da lista de pacotes em 2026-11-20, porque usa uma chamada que o contrato 68 não tem. A origem de bytes, unidades e sentidos é a biblioteca do laboratório, `~/Development/RoboMaster-S1/biblioteca`, e o firmware copiado do robô.
 
 ## O caminho
 
 Um caminho só. Entre simulador e robô, só muda `[corpo] tipo` em `rms1d.toml`.
 
 ```text
-console, robotctl, rms1d-roteiro, e depois a inteligência
-        │  JSON-RPC, um socket unix, o contrato do pato
+a página (piloto), o rms1-agente, robotctl, rms1d-roteiro, e depois o cérebro
+        │  JSON-RPC, um socket unix, o contrato do pato; cada um diz quem é no `hello`
         ▼
       rms1d
         │  bytes do protocolo do corpo
@@ -45,6 +45,72 @@ console, robotctl, rms1d-roteiro, e depois a inteligência
 - Armar não cumpre pedido antigo: o que foi pedido antes de armar é esquecido, mesmo dentro do prazo.
 - `<socket>.lock` garante um só dono, e nunca é apagado.
 - `MissedTickBehavior::Skip`, em executor próprio.
+
+## Quem manda no corpo: a tabela de fontes
+
+**Em resumo:** cada cliente diz o nome no `hello`; em cada canal vale o pedido vivo da fonte de maior prioridade; sem pedido novo dentro do prazo, o canal passa à seguinte; a parada vale para qualquer um. A ordem é a do dono (2026-11-19): piloto, agente, cérebro.
+
+Antes havia um quadro de pedidos só, e o último que escrevia vencia: o piloto e o agente se atropelavam. O pato de hoje diz quem pediu (`move.source`), e ele mesmo escreve que lá não há árbitro ("every intent slot is last-writer-wins", `robotd/src/intents.rs`). O desenho daqui é o do `twist_mux` do ROS (fonte com prioridade e prazo; os exemplos do pacote usam 0,5 s), por canal; e, do Roboglot (`docs/adr/0067`), a parada que nunca é arbitrada.
+
+A tabela mora em `rms1d.toml`, uma linha `[[fontes]]` por fonte. A padrão de `rms1d-params` é a mesma que `deploy/s1/rms1d.toml` escreve por extenso (um teste reprova se as duas se afastam); escrita no arquivo, ela substitui a padrão inteira.
+
+| Fonte (`nome`) | `prioridade` | `canais` | Quem é |
+|---|---|---|---|
+| `piloto` | 30 | todos | a página e o controle; toma o corpo na hora |
+| `agente` | 20 | `rodas`, `torre`, `som` | o `rms1-agente`: não arma, não muda modo nem ajuste |
+| `cerebro` | 10 | `rodas`, `torre`, `som`, com `so_autonomo` | só vale com a autonomia ligada |
+| `sem_nome` | 0 | todos | quem não diz o nome, ou diz um que a tabela não tem (`robotctl`, um roteiro): pode o que podia antes, e perde para todos |
+
+Os números só ordenam. Cada linha pode ter `prazo_ms` próprio (1 a 10000); sem ele vale `[seguranca] prazo_ms`, 500. A tabela é recusada, pelo nome do que está errado, com nome ou prioridade repetidos, canal desconhecido, sem a linha `sem_nome`, ou com mais de 16 linhas.
+
+| Canal | O que cai nele |
+|---|---|
+| `rodas` | `robot.move` |
+| `torre` | `robot.head`, `robot.look`, `s1.gimbal` |
+| `som` | `robot.sound` |
+| `energia` | `robot.enable`, `robot.init`, `robot.relax` |
+| `modo` | `robot.do` |
+| `ajustes` | `s1.armor` e `s1.sight` com valores (ler, qualquer fonte lê) |
+| `autonomia` | `robot.autonomous` |
+
+As regras, e onde cada uma mora:
+
+- **Só as rodas e a torre são disputadas** (`rms1-control/src/intencoes.rs`). Cada fonte tem o seu quadro de pedidos de rodas e de velocidade da torre, com carimbo. A cada ciclo, em cada um dos dois, vale o pedido vivo (mais novo que o prazo da fonte) da fonte de maior prioridade. Sem pedido vivo de ninguém, o estado mostra o mais recente e diz `deadman`, como antes.
+- **A segurança não escolhe: só julga a idade** do pedido que as intenções entregam, com o prazo da fonte dele (`seguranca.rs`). Segue sendo a única dona do corpo.
+- **O alvo de ângulo da torre é um só,** com quem o pôs e quando. Uma fonte só o troca se nenhuma de prioridade maior tem a torre (velocidade viva, ou alvo posto por ela dentro do prazo). Velocidade diferente de zero de quem tem a torre apaga o alvo: nenhum alvo velho, de fonte nenhuma, volta quando a torre para. Vencida a posse, a torre fica onde está, e qualquer fonte pode pedir.
+- **A parada nunca é barrada.** `robot.stop`, de qualquer fonte, apaga os pedidos de rodas e de velocidade da torre de todas, e deixa o zero de quem parou. Quem tem prioridade volta a mandar no pedido seguinte: a parada que segura o cérebro depois de um "pare" entra com ele.
+- **Armar apaga os pedidos de todas as fontes,** como antes apagava o único.
+- **A fonte `so_autonomo` só conta com a autonomia ligada** (`robot.autonomous {active}`, canal `autonomia`; sobe de `[autonomia] ligada`, falso no robô). Desligada, o que ela pediu deixa de valer na hora.
+- **Pedido em canal que a fonte não tem é recusado com o motivo** (`rms1d/src/respostas.rs`, `barrado`); como notificação, é ignorado. O que responde documento e não `accepted` (`robot.look`, `s1.armor`, `s1.sight`) responde erro: `PERMISSION_DENIED`, ou `BUSY` quando a torre é de outra fonte.
+- **A requisição (com id) de rodas ou de velocidade da torre que perde para uma fonte maior é recusada, dizendo quem tem o canal, e não fica guardada.** A notificação fica, e passa a valer quando a outra soltar: é assim que quem renova o pedido retoma o corpo. Dizer "recusado" e aplicar meio segundo depois seria mentir.
+- **O nome `sem_nome` ninguém pode dizer no `hello`** (`INVALID_PARAMS`): quem o dissesse passaria por quem não disse nada. Um `hello` novo troca quem a conexão é.
+
+O que o estado diz:
+
+- `robot.state`: `move.source`, o nome de quem fez o pedido de `move.requested`, vivo ou vencido, como no pato (ausente para a fonte sem nome); e `autonomous`.
+- `robot.mode`: `autonomous`.
+- `s1.state` e `s1.telemetry`: o bloco `control`, que sai sempre, também sem telemetria.
+
+```json
+"control": {"client": "agente", "wheels": {"source": "piloto"}, "gimbal": {"source": null}, "autonomous": false}
+```
+
+`source` é o nome da fonte que tem o canal agora (pedido vivo), ou `null` sem nenhuma. `client` é a linha da tabela que a conexão que lê é: o nome dito no `hello`, ou `sem_nome` se a tabela não o tem. É por ele que um cliente sabe se o dono é ele mesmo, sem supor que o nome dele está na tabela (o `rms1-agente` e a página usam).
+
+Provas: `rms1d-params` (a tabela errada, recusada pelo nome), `rms1-control/tests/fontes.rs` (a escolha, os prazos, a torre, a parada, a autonomia, pelos quadros que chegam ao corpo), `rms1d/tests/fontes.rs` (o processo de verdade, com três clientes) e, no laboratório, `out/2026-11-20-quem-manda-no-corpo/prova_quem_manda.py` (a cena inteira, com a estação de verdade). Cada uma com o defeito plantado reprovando (`.roadworthy/refutations.jsonl`).
+
+## O contrato 68 do pato
+
+O ramo do S1 subiu para cima do pato de hoje em 2026-11-20 (336 commits; um conflito, na lista de pacotes). `rms1d/src/respostas.rs` não tem braço genérico: cada chamada nova do contrato para a compilação até alguém decidir o que ela é neste corpo. As 15 novas:
+
+| Chamada | Neste corpo |
+|---|---|
+| `robot.autonomous` | servida: é o nível da autonomia da tabela de fontes |
+| `robot.laserTrack`, `robot.soccer` | recusadas com o motivo: este corpo não tem o jogo do pato |
+| `robot.volume`, `robot.setVolume` | erro `METHOD_NOT_FOUND`: respondem documento, e o volume do S1 é do `rms1-mediad` (`s1.media.volume`) |
+| `nfc.*`, `photo.*`, `map.*` | de outros serviços (`METHOD_NOT_FOUND`) |
+
+`robot.remoteSessionActive` saiu do contrato, e daqui.
 
 ## O som é do `rms1-mediad`
 
@@ -121,6 +187,8 @@ Nas gravações de 2026-11-03:
 ## Ativação pela bancada
 
 `scripts/s1/rms1d-bench.sh up` escolhe pelo que o robô tem: o mesmo `rms1d` no ar, com o mesmo binário e a mesma configuração pela soma `sha256`, e saudável, só religa a ponte ("Conectando ao robô"); outro `rms1d` no ar, "Atualizando o robô"; nada nosso, "Preparando o robô". Os três terminam em "Robô pronto". O binário só vai ao robô quando a soma muda, e os processos da DJI só param se estiverem no ar.
+
+Com `[midia]` no arquivo, a ativação sobe também o `rms1-agente`, depois do `rms1d`, que ele comanda, e o de antes sai primeiro; "o mesmo no ar" inclui o agente vivo e com o mesmo binário. Sem o binário (`cargo s1 -p rms1-agente`), ou sem ele subir, a ativação avisa com o motivo e segue: dá para pilotar, e o robô não cumpre os pedidos da estação. A volta o encerra.
 
 As gravações do `rms1d` que sai (`corpo.gravar` e `corpo.gravar_recebido`) mudam de nome no robô para `<arquivo>.robo-<data>-<hora>`, um nome por ativação, e são copiadas ao fundo, logo, para `$XDG_STATE_HOME/rms1/gravacoes/<data>/`; só são apagadas no robô depois de a cópia chegar. A ativação seguinte e a volta à DJI esperam a cópia em curso, com prazo. Prova: `scripts/s1/test-rms1d-bench.sh`, com contraprova de cada caso.
 
