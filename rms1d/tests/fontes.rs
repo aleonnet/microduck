@@ -240,6 +240,9 @@ fn solto_o_piloto_o_agente_retoma_depois_do_prazo() {
     armar(&mut piloto);
     piloto.andar(GIRO);
     let soltou = Instant::now();
+    // Na fila de quem olha ainda pode haver um estado de antes de o pedido do piloto chegar ao laço: a troca só é
+    // conferida depois de o corpo estar fazendo o que ele pediu.
+    olho.ate(LOGO, "o piloto não andou", |e| aplicado(e) == GIRO);
     let mut voltou = None;
     // Sem dormir: o estado chega a cada ciclo do laço, e quem dorme lê estado velho. O agente renova a cada cinco.
     let mut lidos = 0;
