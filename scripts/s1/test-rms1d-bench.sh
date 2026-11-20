@@ -29,7 +29,7 @@ if tem adb_caiu && [ ! -f "$DEFEITO.conectado" ]; then exit 1; fi
 case "$*" in
   *estado_do_robo*)
     # O que o robô tem: o `rms1d` no ar e as somas do programa e da configuração.
-    if tem ja_no_ar; then echo RMS1D_VIVO; tem midia_caiu || echo MIDIA_VIVA; tem venc_caiu || echo VENC_VIVO; printf '%s  /data/debian/opt/robot/bin/rms1-mediad\r\n' "$SOMA_MIDIA"; printf '%s  /data/debian/opt/robot/bin/rms1d\r\n%s  /data/debian/etc/robot/rms1d.toml\r\n' "$SOMA_BIN" "$SOMA_TOML";
+    if tem ja_no_ar; then echo RMS1D_VIVO; tem midia_caiu || echo MIDIA_VIVA; tem venc_caiu || echo VENC_VIVO; tem agente_caiu || echo AGENTE_VIVO; printf '%s  /data/debian/opt/robot/bin/rms1-mediad\r\n%s  /data/debian/opt/robot/bin/rms1-agente\r\n' "$SOMA_MIDIA" "$SOMA_AGENTE"; printf '%s  /data/debian/opt/robot/bin/rms1d\r\n%s  /data/debian/etc/robot/rms1d.toml\r\n' "$SOMA_BIN" "$SOMA_TOML";
     elif tem outro_no_ar; then echo RMS1D_VIVO; printf '%s  /data/debian/opt/robot/bin/rms1d\r\n%s  /data/debian/etc/robot/rms1d.toml\r\n' 0000 0000;
     elif tem outro_toml; then echo RMS1D_VIVO; printf '%s  /data/debian/opt/robot/bin/rms1d\r\n%s  /data/debian/etc/robot/rms1d.toml\r\n' "$SOMA_BIN" 0000;
     elif tem vivo_sem_somas; then echo RMS1D_VIVO;
@@ -55,6 +55,7 @@ case "$*" in
   *midia_no_ar*) if tem midia_morta; then echo MIDIA_MORTA; echo "rms1-mediad: mixer: o valor não pegou em MIC2 Volume"; else echo midia_no_ar; fi ;;
   *"pkill -TERM rms1d"*sem_rms1d*) if tem rms1d_antigo; then echo RMS1D_ANTIGO_VIVO; else echo sem_rms1d; fi ;;
   *parada_conferida*) tem dji_vivo && echo AINDA_NO_AR_dji_hdvt_uav; tem camera_viva && echo AINDA_NO_AR_dji_camera; tem serial_presa && echo SERIAL_PRESA /proc/9/fd/3; echo parada_conferida ;;
+  *agente_no_ar*) if tem agente_morto; then echo AGENTE_MORTO; echo "rms1-agente: habilidades: move: velocidade é 9 m/s, e o corpo vai até 3.5"; else echo agente_no_ar; fi ;;
   *venc_no_ar*) if tem venc_morto; then echo VENC_MORTO; echo "não abri libOMX.hantro.H1.video.encoder.so"; else echo venc_no_ar; fi ;;
   *"pidof rms1d"*) if tem rms1d_morto; then echo RMS1D_MORTO; else echo rms1d_no_ar; fi ;;
   *"pidof dji_hdvt_uav"*) echo dji_voltou ;;
@@ -109,6 +110,9 @@ export SOMA_TOML="$(shasum -a 256 deploy/s1/rms1d.toml | cut -d' ' -f1)"
 export SOMA_MIDIA="$(shasum -a 256 target/armv7-unknown-linux-gnueabihf/release/rms1-mediad | cut -d' ' -f1)"
 # O codificador de hardware: um arquivo qualquer no lugar do binário, que só o Android NDK compila.
 export S1_BIN_VENC="$T/rms1-venc"; printf 'rms1-venc de teste' > "$S1_BIN_VENC"
+# O agente: um arquivo qualquer no lugar do binário do robô, para o teste não depender de ele já ter sido compilado para lá.
+export S1_BIN_AGENTE="$T/rms1-agente"; printf 'rms1-agente de teste' > "$S1_BIN_AGENTE"
+export SOMA_AGENTE="$(shasum -a 256 "$S1_BIN_AGENTE" | cut -d' ' -f1)"
 
 echo "--- o caminho certo"
 scripts/s1/rms1d-bench.sh up > "$T/up.txt" 2>&1 || { echo "up falhou:"; tail -20 "$T/up.txt"; exit 1; }
@@ -126,6 +130,13 @@ antes "pkill -TERM rms1-mediad" "push target/armv7-unknown-linux-gnueabihf/relea
 antes "pkill -TERM rms1-mediad" "pkill -TERM rms1-venc"
 pediu "push $S1_BIN_VENC /data/rms1-venc"
 antes "/data/rms1-venc servir /data/debian/run/rms1-venc/venc.sock" "/opt/robot/bin/rms1-mediad --config /etc/robot/rms1d.toml"
+# O agente: o de antes sai primeiro, antes dos dois que ele usa; o novo vai ao robô e sobe depois do `rms1d`, que ele comanda,
+# no socket do `rms1d` e com o mesmo arquivo.
+antes "pkill -TERM rms1-agente" "pkill -TERM rms1-mediad"
+pediu "push $S1_BIN_AGENTE /data/debian/opt/robot/bin/rms1-agente"
+pediu "/opt/robot/bin/rms1-agente --config /etc/robot/rms1d.toml --robo /run/robotd.sock"
+antes "/opt/robot/bin/rms1d --config /etc/robot/rms1d.toml" "/opt/robot/bin/rms1-agente --config /etc/robot/rms1d.toml"
+antes "/opt/robot/bin/rms1-agente --config" "forward tcp:9010"
 pediu "push deploy/s1/asound.conf /data/debian/etc/asound.conf"
 pediu "cp -f /system/audio/sound/power_on.wav /data/debian/var/lib/robot/sounds/greet/"
 pediu "forward tcp:9011 localfilesystem:/data/debian/run/rms1-mediad/media.sock"
@@ -171,6 +182,21 @@ esperar_copia
 grep -q "AVISO: a mídia do robô não subiu (rms1-mediad: mixer: o valor não pegou em MIC2 Volume)" "$T/up.txt" && grep -q "Robô pronto" "$T/up.txt" && echo "mídia morta: avisa e segue" || { echo "MÍDIA MORTA, SEM AVISO:"; tail -5 "$T/up.txt"; falhou=1; }
 : > "$DEFEITO"
 
+echo "--- o agente que não sobe, e o que não foi compilado: avisa, com o motivo, e não impede pilotar"
+echo agente_morto > "$DEFEITO"
+: > "$ADB_LOG"
+if scripts/s1/rms1d-bench.sh up > "$T/up.txt" 2>&1 && grep -q "AVISO: o agente do robô não subiu (rms1-agente: habilidades: move: velocidade é 9 m/s, e o corpo vai até 3.5). Dá para pilotar; o robô não cumpre os pedidos da estação." "$T/up.txt" && grep -q "Robô pronto" "$T/up.txt"; then echo "agente morto: avisa e segue"; else echo "AGENTE MORTO, E NÃO AVISOU OU NÃO SEGUIU:"; tail -4 "$T/up.txt"; falhou=1; fi
+esperar_copia
+: > "$DEFEITO"
+: > "$ADB_LOG"
+if S1_BIN_AGENTE="$T/nao-existe" scripts/s1/rms1d-bench.sh up > "$T/up.txt" 2>&1 && grep -q "AVISO: não achei $T/nao-existe (cargo s1 -p rms1-agente)" "$T/up.txt" && grep -q "Robô pronto" "$T/up.txt" && ! grep -q "rms1-agente --config" "$ADB_LOG"; then echo "agente não compilado: avisa, não tenta subir, e segue"; else echo "AGENTE NÃO COMPILADO, E NÃO AVISOU OU TENTOU SUBIR:"; tail -4 "$T/up.txt"; falhou=1; fi
+esperar_copia
+# Sem `[midia]` no arquivo o agente não tem de onde receber o pedido: não sobe, e não há do que avisar.
+grep -v -e '^\[midia' -e '^mixer' -e '^porta_video' -e '^venc' -e '^fonte' -e '^saida' deploy/s1/rms1d.toml > "$T/sem-midia.toml"
+: > "$ADB_LOG"
+if S1_TOML="$T/sem-midia.toml" scripts/s1/rms1d-bench.sh up > "$T/up.txt" 2>&1 && grep -q "Robô pronto" "$T/up.txt" && ! grep -q "AVISO" "$T/up.txt" && ! grep -q "rms1-agente --config" "$ADB_LOG"; then echo "sem [midia]: o agente não sobe, sem aviso"; else echo "SEM [midia], E O AGENTE SUBIU OU HOUVE AVISO:"; tail -4 "$T/up.txt"; falhou=1; fi
+esperar_copia
+
 echo "--- o dji_camera que não sai pelo init para tudo, sem kill e sem subir a mídia"
 echo camera_viva > "$DEFEITO"
 reprova "dji_camera vivo" "o dji_camera não saiu pelo init" "/opt/robot/bin/rms1-mediad --config"
@@ -206,7 +232,7 @@ echo ja_no_ar > "$DEFEITO"
 : > "$ADB_LOG"
 scripts/s1/rms1d-bench.sh up > "$T/up.txt" 2>&1 || { echo "up com o rms1d no ar falhou:"; tail -5 "$T/up.txt"; falhou=1; }
 grep -q "Conectando ao robô" "$T/up.txt" && grep -q "Robô pronto" "$T/up.txt" && echo "no ar e igual: conecta" || { echo "NO AR E IGUAL, NÃO CONECTOU:"; tail -5 "$T/up.txt"; falhou=1; }
-for proibido in "pkill -TERM rms1d" "pkill -TERM rms1-mediad" "pkill -TERM rms1-venc" "rms1-venc servir" "push target" "stop dji_monitor" "stop dji_camera" "/opt/robot/bin/rms1d --config" "/opt/robot/bin/rms1-mediad --config"; do
+for proibido in "pkill -TERM rms1d" "pkill -TERM rms1-mediad" "pkill -TERM rms1-venc" "pkill -TERM rms1-agente" "rms1-venc servir" "push target" "push $S1_BIN_AGENTE" "stop dji_monitor" "stop dji_camera" "/opt/robot/bin/rms1d --config" "/opt/robot/bin/rms1-mediad --config" "/opt/robot/bin/rms1-agente --config"; do
     if grep -qF -- "$proibido" "$ADB_LOG"; then echo "NO AR E IGUAL, MAS PEDIU: $proibido"; falhou=1; fi
 done
 pediu "forward tcp:9010 localfilesystem:/data/debian/run/robotd.sock"
@@ -219,6 +245,16 @@ scripts/s1/rms1d-bench.sh up > "$T/up.txt" 2>&1 || { echo "up com o codificador 
 esperar_copia
 if grep -q "Atualizando o robô" "$T/up.txt" && ! grep -q "Conectando ao robô" "$T/up.txt" && grep -q "Robô pronto" "$T/up.txt"; then echo "codificador caído: atualiza"; else echo "CODIFICADOR CAÍDO, E SÓ CONECTOU:"; tail -5 "$T/up.txt"; falhou=1; fi
 pediu "/data/rms1-venc servir /data/debian/run/rms1-venc/venc.sock"
+: > "$DEFEITO"
+
+echo "--- o mesmo no ar, com o agente caído: não só conecta, sobe o agente de novo, sem enviar o mesmo binário"
+printf 'ja_no_ar\nagente_caiu\n' > "$DEFEITO"
+: > "$ADB_LOG"
+scripts/s1/rms1d-bench.sh up > "$T/up.txt" 2>&1 || { echo "up com o agente caído falhou:"; tail -5 "$T/up.txt"; falhou=1; }
+esperar_copia
+if grep -q "Atualizando o robô" "$T/up.txt" && ! grep -q "Conectando ao robô" "$T/up.txt" && grep -q "Robô pronto" "$T/up.txt"; then echo "agente caído: atualiza"; else echo "AGENTE CAÍDO, E SÓ CONECTOU:"; tail -5 "$T/up.txt"; falhou=1; fi
+pediu "/opt/robot/bin/rms1-agente --config /etc/robot/rms1d.toml --robo /run/robotd.sock"
+if grep -qF "push $S1_BIN_AGENTE" "$ADB_LOG"; then echo "ENVIOU O MESMO BINÁRIO DO AGENTE"; falhou=1; else echo "mesmo binário do agente: não enviou"; fi
 : > "$DEFEITO"
 
 # atualiza <defeito> <envia o binário: sim|nao>: outro `rms1d` no ar, ou o mesmo com outra configuração, ou sem as somas: atualiza,
@@ -366,6 +402,8 @@ scripts/s1/rms1d-bench.sh volta > "$T/volta.txt" 2>&1 || { echo "volta falhou:";
 pediu "pkill -TERM rms1d"
 pediu "pkill -TERM rms1-mediad"
 pediu "pkill -TERM rms1-venc"
+pediu "pkill -TERM rms1-agente"
+antes "pkill -TERM rms1-agente" "shell reboot"
 pediu "forward --remove tcp:9011"
 pediu "shell reboot"
 pediu "forward --remove tcp:9010"

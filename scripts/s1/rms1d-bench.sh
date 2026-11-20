@@ -5,9 +5,10 @@
 #
 #   scripts/s1/rms1d-bench.sh up       acesso, envia, para só o que `[dji] parar` manda, sobe o `rms1d` e, se o arquivo tem
 #                                      `[midia]`, o `rms1-mediad` (câmera, microfone e alto-falante) e, com `[midia] venc`,
-#                                      antes dele o `rms1-venc` (o codificador de hardware do robô). Nada se move. De
-#                                      novo: o anterior sai primeiro, e a gravação dele fica em $S1_OUT. Cada binário só
-#                                      vai ao robô se mudou.
+#                                      antes dele o `rms1-venc` (o codificador de hardware do robô); e, depois do `rms1d`,
+#                                      o `rms1-agente`, que cumpre no corpo o pedido que a estação validou. Nada se move.
+#                                      De novo: o anterior sai primeiro, e a gravação dele fica em $S1_OUT. Cada binário
+#                                      só vai ao robô se mudou.
 #   scripts/s1/rms1d-bench.sh volta    guarda a gravação, reinicia o robô e confere que a DJI voltou.
 #   scripts/s1/rms1d-bench.sh solta    só neste Mac: encerra a ponte e a porta até o robô. O `rms1d` dele segue no ar.
 #
@@ -41,6 +42,9 @@ TCP_MIDIA="${S1_PORTA_MIDIA:-9011}"
 BIN_VENC="${S1_BIN_VENC:-target/s1-android/rms1-venc}"
 VENC_NO_ROBO=/data/rms1-venc
 SOCKET_MIDIA="$ESTADO/media.sock"
+# O agente: o `rms1-agente` no robô. É cliente do `rms1d` (a linha `agente` da tabela de fontes) e do `rms1-mediad`, de onde
+# vem o pedido da estação: sem `[midia]` no arquivo ele não tem de onde receber, e não sobe.
+BIN_AGENTE="${S1_BIN_AGENTE:-target/armv7-unknown-linux-gnueabihf/release/rms1-agente}"
 # Os sons do robô: os da própria DJI (`/system/audio/sound`), sob os nomes do contrato, uma pasta por som.
 SONS="chirp:media_sound_demo_recognize_success greet:power_on alarm:media_sound_demo_attacked inquire:media_sound_demo_scanning peck:sleeping coo:media_sound_demo_gimbal_rotate"
 A=(adb -s "$ALVO")
@@ -270,6 +274,20 @@ subir_midia() { # subir_midia <socket no robô> <1 se o binário do robô já é
     fi
 }
 
+# O agente do robô, depois do `rms1d`, que é quem ele comanda. Uma falha aqui não impede pilotar: avisa, com o motivo, e segue.
+subir_agente() { # subir_agente <1 se o binário do robô já é este>
+    if [ ! -s "$BIN_AGENTE" ]; then
+        diz "AVISO: não achei $BIN_AGENTE (cargo s1 -p rms1-agente). Dá para pilotar; o robô não cumpre os pedidos da estação."
+        return 0
+    fi
+    if [ -z "$1" ]; then "${A[@]}" push "$BIN_AGENTE" "$CHROOT/opt/robot/bin/rms1-agente" >/dev/null; fi
+    "${A[@]}" shell "chmod 755 $CHROOT/opt/robot/bin/rms1-agente; ($BB setsid $BB nohup $ENTRA /opt/robot/bin/rms1-agente --config /etc/robot/rms1d.toml --robo /run/robotd.sock </dev/null >/data/rms1-agente.log 2>&1 &); $BB sleep 1"
+    "${A[@]}" shell "$BB pidof rms1-agente >/dev/null && echo agente_no_ar || { echo AGENTE_MORTO; $BB tail -3 /data/rms1-agente.log; }" | tr -d '\r' | tee "$OUT/agente.txt"
+    if ! grep -q agente_no_ar "$OUT/agente.txt"; then
+        diz "AVISO: o agente do robô não subiu ($(grep -v AGENTE_MORTO "$OUT/agente.txt" | tail -1)). Dá para pilotar; o robô não cumpre os pedidos da estação."
+    fi
+}
+
 saude() { # saude: 0 saudável; 1 doente; o texto em $OUT/saude.txt
     local rc=0
     "$ROBOTCTL" --robot-socket "$SOCKET" --config-socket "$SOCKET" --socket "$SOCKET" health > "$OUT/saude.txt" 2>&1 || rc=$?
@@ -284,7 +302,7 @@ up() {
     esperar_copia
     if [ -z "${S1_SEM_COMPILAR:-}" ]; then
         passo "Compilando o rms1d"
-        cargo s1 -p rms1d -p rms1-mediad
+        cargo s1 -p rms1d -p rms1-mediad -p rms1-agente
         cargo build -q -p rms1d -p robotctl
     fi
     # Antes de qualquer coisa no robô: o arquivo recusado, com dji_scratch por exemplo, não chega a parar nada.
@@ -308,7 +326,7 @@ up() {
     # O que o robô tem. O busybox dele tem `sha256sum` (lido na cópia completa, `arvores/system/system/xbin/busybox`); o
     # `adb shell` do Android 4.4 termina a linha com `\r`.
     local estado soma_bin soma_toml vivo=""
-    estado="$("${A[@]}" shell "echo estado_do_robo; $BB pidof rms1d >/dev/null && echo RMS1D_VIVO; $BB pidof rms1-mediad >/dev/null && echo MIDIA_VIVA; $BB pidof rms1-venc >/dev/null && echo VENC_VIVO; $BB sha256sum $CHROOT/opt/robot/bin/rms1d $CHROOT/etc/robot/rms1d.toml $CHROOT/opt/robot/bin/rms1-mediad 2>/dev/null" | tr -d '\r' || true)"
+    estado="$("${A[@]}" shell "echo estado_do_robo; $BB pidof rms1d >/dev/null && echo RMS1D_VIVO; $BB pidof rms1-mediad >/dev/null && echo MIDIA_VIVA; $BB pidof rms1-venc >/dev/null && echo VENC_VIVO; $BB pidof rms1-agente >/dev/null && echo AGENTE_VIVO; $BB sha256sum $CHROOT/opt/robot/bin/rms1d $CHROOT/etc/robot/rms1d.toml $CHROOT/opt/robot/bin/rms1-mediad $CHROOT/opt/robot/bin/rms1-agente 2>/dev/null" | tr -d '\r' || true)"
     echo "$estado"
     case "$estado" in *RMS1D_VIVO*) vivo=1 ;; esac
     soma_bin="$(printf '%s\n' "$estado" | grep '/opt/robot/bin/rms1d$' | cut -d' ' -f1 || true)"
@@ -328,7 +346,15 @@ up() {
             case "$estado" in *VENC_VIVO*) ;; *) midia_ok="" ;; esac
         fi
     fi
-    if [ -n "$vivo" ] && [ -n "$mesmo_bin" ] && [ -n "$mesmo_toml" ] && [ -n "$midia_ok" ]; then
+    # Com mídia no arquivo e o agente compilado neste Mac, "o mesmo no ar" inclui o `rms1-agente`: o mesmo binário, e vivo.
+    # Sem ele o robô pilotaria e não cumpriria os pedidos da estação, e só conectar esconderia isso.
+    local mesmo_agente="" agente_ok=1
+    if [ -n "$midia" ] && [ -s "$BIN_AGENTE" ]; then
+        if [ "$(printf '%s\n' "$estado" | grep '/opt/robot/bin/rms1-agente$' | cut -d' ' -f1 || true)" = "$(shasum -a 256 "$BIN_AGENTE" | cut -d' ' -f1)" ]; then mesmo_agente=1; fi
+        case "$estado" in *AGENTE_VIVO*) ;; *) agente_ok="" ;; esac
+        [ -n "$mesmo_agente" ] || agente_ok=""
+    fi
+    if [ -n "$vivo" ] && [ -n "$mesmo_bin" ] && [ -n "$mesmo_toml" ] && [ -n "$midia_ok" ] && [ -n "$agente_ok" ]; then
         passo "Conectando ao robô"
         ligar_ponte
         if saude; then
@@ -342,7 +368,9 @@ up() {
     if [ -n "$vivo" ]; then passo "Atualizando o robô"; else passo "Preparando o robô"; fi
     # Um `rms1d` de antes sai pelo caminho que para o robô, e antes do envio: binário em uso não se sobrescreve, e a trava
     # faria o novo morrer em silêncio, com o velho respondendo no lugar dele.
-    # O `rms1-mediad` de antes sai primeiro, por SIGTERM: é assim que ele desliga o fluxo da câmera antes de soltá-la.
+    # O `rms1-agente` de antes sai antes dos dois que ele usa: sem ele renovando, o `rms1d` zera o corpo sozinho, no prazo.
+    "${A[@]}" shell "$BB pkill -TERM rms1-agente; $BB sleep 1" >/dev/null 2>&1 || true
+    # O `rms1-mediad` de antes sai em seguida, por SIGTERM: é assim que ele desliga o fluxo da câmera antes de soltá-la.
     confere sem_midia "o rms1-mediad anterior não saiu; desligue o robô na chave" "$BB pkill -TERM rms1-mediad; $BB sleep 1; $BB pidof rms1-mediad >/dev/null && { $BB sleep 2; $BB pidof rms1-mediad >/dev/null && echo MIDIA_ANTIGA_VIVA || echo sem_midia; } || echo sem_midia"
     # O `rms1-venc` de antes sai depois do `rms1-mediad`, que é o cliente dele: por SIGTERM ele termina o fluxo e solta o chip.
     "${A[@]}" shell "$BB pkill -TERM rms1-venc; $BB sleep 1" >/dev/null 2>&1 || true
@@ -380,6 +408,11 @@ up() {
     sleep 2
     "${A[@]}" shell "$BB pidof rms1d >/dev/null && echo rms1d_no_ar || { echo RMS1D_MORTO; $BB tail -5 /data/rms1d.log; }" | tee "$OUT/up.txt"
     grep -q rms1d_no_ar "$OUT/up.txt" || falha "o rms1d não subiu no robô; o motivo está no registro do serviço"
+    # O agente por último: ele comanda o `rms1d` e recebe o pedido pelo `rms1-mediad`. Só com a mídia ligada: sem ela não há
+    # de onde o pedido vir.
+    if [ -n "$midia" ]; then
+        case " $parar " in *" dji_camera "*) subir_agente "$mesmo_agente" ;; esac
+    fi
     ligar_ponte
     if ! saude; then
         # Serial muda e telemetria recusada não impedem pilotar: avisa e segue. Qualquer outra coisa para.
@@ -415,8 +448,9 @@ volta() {
     }
     esperar_copia
     passo "parando o rms1d no robô"
-    # SIGTERM: o `rms1d` para o robô e descarrega a gravação antes de sair; o `rms1-mediad` desliga o fluxo da câmera.
-    "${A[@]}" shell "$BB pkill -TERM rms1-mediad; $BB pkill -TERM rms1d; $BB sleep 1; $BB pkill -TERM rms1-venc" || true
+    # SIGTERM: o `rms1-agente` sai primeiro, por ser cliente dos outros; o `rms1d` para o robô e descarrega a gravação antes de
+    # sair; o `rms1-mediad` desliga o fluxo da câmera.
+    "${A[@]}" shell "$BB pkill -TERM rms1-agente; $BB pkill -TERM rms1-mediad; $BB pkill -TERM rms1d; $BB sleep 1; $BB pkill -TERM rms1-venc" || true
     guardar_gravacao "robo-$(date +%H%M%S)"
     if [ -f "$ESTADO/ponte.pid" ]; then kill "$(cat "$ESTADO/ponte.pid")" 2>/dev/null || true; fi
     if [ -f "$ESTADO/ponte-midia.pid" ]; then kill "$(cat "$ESTADO/ponte-midia.pid")" 2>/dev/null || true; fi

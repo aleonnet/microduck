@@ -45,6 +45,14 @@ limpar_mediad() {
     : > "$ESTADO/rms1-mediad.pid"
 }
 
+# E para o `rms1-agente` do simulador, que sobe depois dos dois: órfão, ele seguiria ligado aos sockets da subida seguinte.
+limpar_agente() {
+    [ -s "$ESTADO/rms1-agente.pid" ] || return 0
+    orfao="$(cat "$ESTADO/rms1-agente.pid")"
+    if e_nosso "$orfao" rms1-agente; then kill "$orfao" 2>/dev/null || true; fi
+    : > "$ESTADO/rms1-agente.pid"
+}
+
 # Nem a ponte até o robô, nem a porta do `adb`. Só neste Mac: o robô, quem devolve é "Voltar ao modo DJI".
 limpar_ponte() {
     [ -s "$ESTADO/bancada/ponte.pid" ] || return 0
@@ -78,6 +86,7 @@ parar() {
     done
     limpar_rms1d
     limpar_mediad
+    limpar_agente
     limpar_ponte
     limpar_arquivos
 }
@@ -97,6 +106,7 @@ conferir() {
 morreu() {
     limpar_rms1d
     limpar_mediad
+    limpar_agente
     limpar_ponte
     limpar_arquivos
     echo "[rms1] o serviço parou. O que ele disse:" >&2
@@ -112,6 +122,7 @@ encerrar() {
     fi
     limpar_rms1d
     limpar_mediad
+    limpar_agente
     limpar_ponte
     limpar_arquivos
     diz "encerrado"
@@ -123,10 +134,11 @@ subir() {
     mkdir -p "$ESTADO"
     limpar_rms1d
     limpar_mediad
+    limpar_agente
     echo "$$" > "$ESTADO/rms1.pid"
     trap encerrar INT TERM HUP
-    diz "compilando o rms1d e o rms1-mediad, a primeira vez leva alguns minutos"
-    (cd "$REPO" && exec cargo build --quiet -p rms1d -p rms1-mediad) &
+    diz "compilando o rms1d, o rms1-mediad e o rms1-agente, a primeira vez leva alguns minutos"
+    (cd "$REPO" && exec cargo build --quiet -p rms1d -p rms1-mediad -p rms1-agente) &
     compilando=$!
     wait "$compilando" || falha "a compilação falhou; o erro está acima"
     compilando=""

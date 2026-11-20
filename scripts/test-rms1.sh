@@ -11,7 +11,7 @@ passou() { echo "PASSOU $*"; }
 falha() { echo "REPROVOU $*"; falhou=1; }
 escutando() { lsof -nP -iTCP:$P_PAGINA -iTCP:$P_WS -iTCP:$P_TCP -iTCP:$P_QUADROS -sTCP:LISTEN 2>/dev/null | grep -c LISTEN; }
 [ "$(escutando)" = 0 ] || { echo "portas de teste ocupadas"; exit 2; }
-cargo build --quiet -p rms1d || exit 2
+cargo build --quiet -p rms1d -p rms1-mediad -p rms1-agente || exit 2
 
 UV="$(command -v uv)"
 CARGO="$(command -v cargo)"
@@ -107,6 +107,11 @@ grep -q "compilando" "$T/sobe.txt" && passou "diz que está compilando" || falha
 [ "$(sed -n 1p "$T/sobe.txt" | grep -c compilando)" = 1 ] && passou "diz antes de começar" || falha "a primeira linha não é o aviso: $(sed -n 1p "$T/sobe.txt")"
 curl -fs "http://127.0.0.1:$P_PAGINA/robo_s1.json" | grep -q raio_roda && passou "a página serve a tabela do robô" || falha "sem a tabela"
 curl -fs -o /dev/null "http://127.0.0.1:$P_PAGINA/viewer/" && passou "a página responde" || falha "a página não responde"
+# O agente do simulador sobe com o serviço, no arquivo e no socket do `rms1d` dele: é ele quem cumpre o que a estação pede.
+n=0
+until [ -n "$(pgrep -f "rms1-agente --config $T/estado/rms1d.toml" || true)" ] || [ "$n" -gt 50 ]; do n=$((n + 1)); sleep 0.1; done
+AGENTE="$(pgrep -f "rms1-agente --config $T/estado/rms1d.toml" || true)"
+if [ -n "$AGENTE" ] && [ "$(cat "$T/estado/rms1-agente.pid" 2>/dev/null)" = "$AGENTE" ]; then passou "o rms1-agente do simulador subiu: processo $AGENTE"; else falha "o rms1-agente não subiu, ou o número dele não foi guardado: '$AGENTE' e '$(cat "$T/estado/rms1-agente.pid" 2>/dev/null)'"; fi
 # O Ctrl-C de verdade vai ao grupo inteiro: comando, uv, serviço e rms1d.
 kill -INT "-$PID"
 espera_fim 10; rc=$?
@@ -170,8 +175,11 @@ else
 fi
 if kill -0 "$PONTE_FALSA" 2>/dev/null; then falha "a ponte até o robô ficou órfã: $PONTE_FALSA"; kill "$PONTE_FALSA" 2>/dev/null; else passou "a ponte até o robô não ficou órfã"; fi
 : > "$T/estado/bancada/robo_tocado"
-RMS1D_FILHO="$(pgrep -f "$T/estado/rms1d.toml" || true)"
-if [ -n "$RMS1D_FILHO" ]; then falha "o rms1d ficou órfão: $RMS1D_FILHO"; kill "$RMS1D_FILHO" 2>/dev/null; fi
+# Os três filhos do serviço levam o arquivo do simulador na linha de comando: o `rms1d`, o `rms1-mediad` e o `rms1-agente`.
+for filho in $(pgrep -f "$T/estado/rms1d.toml" || true); do
+    falha "ficou órfão: $(ps -o command= -p "$filho" | cut -c1-80)"
+    kill "$filho" 2>/dev/null
+done
 sem_nada "morreu depois"
 
 echo "--- o serviço morre ao subir: o erro real aparece"
