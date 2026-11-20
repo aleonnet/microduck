@@ -48,6 +48,7 @@ pub fn olhar(p: &proto::LookParams, s: &rms1d_params::Seguranca) -> proto::LookR
             head_pitch: pitch_lim,
             head_yaw: yaw_lim,
             head_roll: 0.0,
+            alpha: None,
         },
         clamped: yaw_lim != yaw || pitch_lim != pitch,
     }
@@ -462,6 +463,7 @@ pub fn estado_do_contrato(e: &Estado) -> proto::RobotState {
         movement: proto::MoveState {
             requested: e.pedido,
             applied: e.aplicado,
+            source: None,
             limited_by: e.limitado_por.iter().map(|s| (*s).to_owned()).collect(),
         },
         head: [0.0, pitch, yaw, 0.0],
@@ -481,11 +483,16 @@ pub fn estado_do_contrato(e: &Estado) -> proto::RobotState {
         targets: Vec::new(),
         velocities: Vec::new(),
         currents_ma: Vec::new(),
+        // Do pato, sem equivalente neste corpo: a guarda de impacto das pernas, o laser, o futebol e a escuta.
+        impact_guard: Vec::new(),
         odom: medidas.map_or_else(proto::OdomState::default, |m| proto::OdomState {
             position: m.posicao,
             yaw: m.rumo.to_radians(),
         }),
         theremin: None,
+        laser: None,
+        soccer: None,
+        autonomous: false,
         chorale: None,
         t_ns: proto::clock::monotonic_ns(),
         imu: medidas.map(|m| proto::ImuState {
@@ -494,6 +501,7 @@ pub fn estado_do_contrato(e: &Estado) -> proto::RobotState {
         }),
         frames: None,
         skeleton: Vec::new(),
+        hearing: None,
     }
 }
 
@@ -575,6 +583,7 @@ pub fn responder(c: &Contexto, id: proto::Id, call: &proto::Call) -> proto::Resp
             Some(id),
             &proto::ModeResult {
                 mode: MODO_CONTRATO.to_owned(),
+                ..proto::ModeResult::default()
             },
         ),
         RobotPolicies => proto::Response::ok(
@@ -631,9 +640,6 @@ pub fn responder(c: &Contexto, id: proto::Id, call: &proto::Call) -> proto::Resp
                 model_api: MODEL_API,
             },
         ),
-        RobotRemoteSessionActive => {
-            proto::Response::ok(Some(id), &serde_json::json!({"active": false}))
-        }
         PadBindings => proto::Response::ok(
             Some(id),
             &proto::PadBindingsResult {
@@ -653,9 +659,22 @@ pub fn responder(c: &Contexto, id: proto::Id, call: &proto::Call) -> proto::Resp
         }
         RobotSetMode(_) => recusado(id, "este corpo está sempre sobre rodas"),
         RobotTheremin(_) => recusado(id, "este corpo não tem sensor de profundidade"),
+        RobotLaserTrack(_) | RobotSoccer(_) => recusado(id, "este corpo não tem o jogo do pato"),
+        RobotAutonomous(_) => recusado(id, "a autonomia deste corpo entra com a tabela de fontes"),
         RobotChorale(_) | ChoraleSubscribe => recusado(id, "este corpo não canta"),
         // Estas duas não respondem `accepted`, e sim um documento: uma recusa viraria um documento vazio no cliente.
         RobotModel | RobotVetbook => nao_servida(id, call),
+        // O volume também responde um documento (`VolumeResult`). No S1 quem tem o alto-falante é o `rms1-mediad`.
+        RobotVolume | RobotSetVolume(_) => proto::Response::err(
+            Some(id),
+            proto::Error::new(
+                proto::code::METHOD_NOT_FOUND,
+                format!(
+                    "{} não é servida por rms1d: o volume do S1 é do rms1-mediad",
+                    call.method()
+                ),
+            ),
+        ),
         RobotVetbookNote(_) | RobotVetbookTally(_) => recusado(id, "este corpo não mantém caderno"),
         RobotLoadPolicy(_) | RobotReloadPolicies | RobotSetSkill(_) | RobotRemoveSkill(_)
         | PadBind(_) => recusado(id, "este corpo não roda rede de política"),
@@ -709,6 +728,16 @@ pub fn responder(c: &Contexto, id: proto::Id, call: &proto::Call) -> proto::Resp
         | PadForget(_)
         | PadInput
         | TofStream
-        | HeadImuStream => nao_servida(id, call),
+        | HeadImuStream
+        | NfcWrite(_)
+        | NfcRead(_)
+        | PhotoList
+        | PhotoGet(_)
+        | PhotoDelete(_)
+        | PhotoTake
+        | MapStatus
+        | MapStream
+        | MapGrid(_)
+        | MapWipe => nao_servida(id, call),
     }
 }

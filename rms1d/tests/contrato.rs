@@ -28,12 +28,17 @@ fn toda_chamada_do_contrato_responde() {
     }
 }
 
-/// Estas duas respondem um documento, e não `accepted`: a recusa viraria um caderno vazio em `robotctl vetbook`.
-/// Toda chamada que não é de intenção precisa de erro, ou o cliente acredita no vazio.
+/// Estas respondem um documento, e não `accepted`: a recusa viraria um caderno vazio em `robotctl vetbook`, e um volume 0
+/// que ninguém pôs. Toda chamada que não é de intenção precisa de erro, ou o cliente acredita no vazio.
 #[test]
 fn o_que_responde_documento_e_erro_e_nao_recusa() {
     let c = contexto();
-    for call in [proto::Call::RobotVetbook, proto::Call::RobotModel] {
+    for call in [
+        proto::Call::RobotVetbook,
+        proto::Call::RobotModel,
+        proto::Call::RobotVolume,
+        proto::Call::RobotSetVolume(proto::VolumeParams { volume: 40 }),
+    ] {
         let r = responder(&c, proto::Id::Number(1), &call);
         let v = serde_json::to_value(&r).unwrap();
         assert!(v["result"].is_null(), "{}: {v}", call.method());
