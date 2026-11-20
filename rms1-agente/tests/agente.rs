@@ -56,6 +56,14 @@ fn desfechos(acoes: &[Acao]) -> Vec<(String, Como)> {
         .collect()
 }
 
+/// O que o agente manda para soltar as rodas: o pedido de andar, a zero. Não é `robot.stop`, que pararia quem pilota.
+fn rodas_soltas() -> (String, Value) {
+    (
+        "robot.move".to_owned(),
+        json!({"vx": 0.0, "vy": 0.0, "vyaw": 0.0}),
+    )
+}
+
 fn pessoa_em(x: f64, y: f64) -> Vec<Caixa> {
     vec![Caixa {
         rotulo: "person".to_owned(),
@@ -123,10 +131,10 @@ fn mover_anda_a_distancia_pela_odometria_renovando_o_pedido_e_para() {
     assert!(desfechos(&segue).is_empty());
     // Passou de 1,67 s, o tempo da distância na velocidade pedida: com a odometria andando, quem decide é a distância.
     assert!(desfechos(&a.tique(t0 + ms(1800))).is_empty());
-    // Chegou a 0,5 m: para, e termina cumprida.
+    // Chegou a 0,5 m: solta as rodas, e termina cumprida.
     a.corpo(armado_em(1.5, 2.0), t0 + ms(2000));
     let fim = a.tique(t0 + ms(2000));
-    assert_eq!(ao_corpo(&fim), [("robot.stop".to_owned(), Value::Null)]);
+    assert_eq!(ao_corpo(&fim), [rodas_soltas()]);
     assert_eq!(desfechos(&fim), [("move".to_owned(), Como::Cumprida)]);
     // Terminada, não pede mais nada.
     assert!(a.tique(t0 + ms(2200)).is_empty());
@@ -156,10 +164,10 @@ fn mover_sem_odometria_anda_pelo_tempo_e_o_que_nao_chega_vence() {
     assert!(desfechos(&a.tique(t0 + ms(1900))).is_empty());
     a.corpo(armado_em(0.0, 0.0), t0 + ms(2000));
     let fim = a.tique(t0 + ms(2000));
-    assert_eq!(ao_corpo(&fim)[0].0, "robot.stop");
+    assert_eq!(ao_corpo(&fim), [rodas_soltas()]);
     assert_eq!(desfechos(&fim), [("move".to_owned(), Como::Cumprida)]);
 
-    // A odometria andou um pouco e parou (o robô encostou em algo): no teto, para e diz que venceu, com o quanto andou.
+    // A odometria andou um pouco e parou (o robô encostou em algo): no teto, solta as rodas e diz que venceu, com o quanto andou.
     let mut a = agente();
     a.corpo(armado_em(0.0, 0.0), t0);
     a.pedido(
@@ -176,7 +184,7 @@ fn mover_sem_odometria_anda_pelo_tempo_e_o_que_nao_chega_vence() {
     }
     a.corpo(armado_em(0.1, 0.0), t0 + ms(5000));
     let fim = a.tique(t0 + ms(5000));
-    assert_eq!(ao_corpo(&fim)[0].0, "robot.stop");
+    assert_eq!(ao_corpo(&fim), [rodas_soltas()]);
     let Acao::Terminou(d) = fim.last().unwrap() else {
         panic!("sem desfecho")
     };
@@ -301,17 +309,20 @@ fn um_pedido_novo_encerra_o_anterior_e_o_corpo_desarmado_ou_mudo_interrompe() {
         pedido("move", json!({"direction": "forward", "meters": 2.0})),
         t0,
     );
-    // Outro pedido: o corpo para, o anterior termina interrompido, e o novo começa.
+    // Outro pedido: as rodas são soltas, o anterior termina interrompido, e o novo começa.
     let acoes = a.pedido(
         pedido("move", json!({"direction": "back", "meters": 0.3})),
         t0 + ms(400),
     );
     assert_eq!(
-        ao_corpo(&acoes)
-            .iter()
-            .map(|(m, _)| m.as_str())
-            .collect::<Vec<_>>(),
-        ["robot.stop", "robot.move"]
+        ao_corpo(&acoes),
+        [
+            rodas_soltas(),
+            (
+                "robot.move".to_owned(),
+                json!({"vx": -0.3, "vy": 0.0, "vyaw": 0.0})
+            )
+        ]
     );
     assert_eq!(desfechos(&acoes), [("move".to_owned(), Como::Interrompida)]);
     // Quem pilota desarmou o robô no meio: o agente larga a habilidade, e não pede mais nada.
@@ -323,6 +334,7 @@ fn um_pedido_novo_encerra_o_anterior_e_o_corpo_desarmado_ou_mudo_interrompe() {
         t0 + ms(600),
     );
     let acoes = a.tique(t0 + ms(600));
+    assert_eq!(ao_corpo(&acoes), [rodas_soltas()]);
     assert_eq!(desfechos(&acoes), [("move".to_owned(), Como::Interrompida)]);
     assert!(a.tique(t0 + ms(800)).is_empty());
 
@@ -335,7 +347,80 @@ fn um_pedido_novo_encerra_o_anterior_e_o_corpo_desarmado_ou_mudo_interrompe() {
     );
     assert!(desfechos(&a.tique(t0 + ms(900))).is_empty());
     let acoes = a.tique(t0 + ms(1100));
+    assert_eq!(ao_corpo(&acoes), [rodas_soltas()]);
     assert_eq!(desfechos(&acoes), [("move".to_owned(), Como::Interrompida)]);
+}
+
+/// `robot.stop` é só da ferramenta de parar: no `rms1d` ela apaga os pedidos de todas as fontes, e mandada no fim de uma
+/// habilidade pararia quem pilota. Cada fim de habilidade, por qualquer caminho, solta só o canal dela.
+#[test]
+fn nenhum_fim_de_habilidade_manda_robot_stop() {
+    let t0 = Instant::now();
+    let mover = || pedido("move", json!({"direction": "forward", "meters": 0.5}));
+    type Fim = fn(&mut Agente, Instant) -> Vec<Acao>;
+    let fins: [(&str, Pedido, Fim); 9] = [
+        ("cumprida", mover(), |a, t| {
+            a.corpo(armado_em(0.5, 0.0), t + ms(2000));
+            a.tique(t + ms(2000))
+        }),
+        ("vencida", mover(), |a, t| {
+            a.corpo(armado_em(0.1, 0.0), t + ms(5000));
+            a.tique(t + ms(5000))
+        }),
+        ("largada", mover(), |a, t| a.largar(7, t + ms(300))),
+        ("trocada", mover(), |a, t| {
+            a.pedido(pedido("look_at", json!({"target": "me"})), t + ms(300))
+        }),
+        ("desarmado", mover(), |a, t| {
+            a.corpo(
+                Corpo {
+                    armado: false,
+                    posicao: [0.0; 2],
+                },
+                t + ms(300),
+            );
+            a.tique(t + ms(300))
+        }),
+        ("mudo", mover(), |a, t| a.tique(t + ms(1100))),
+        (
+            "torre vencida",
+            pedido("search", json!({"target": "dog"})),
+            |a, t| {
+                a.corpo(armado_em(0.0, 0.0), t + ms(20000));
+                a.tique(t + ms(20000))
+            },
+        ),
+        (
+            "torre cumprida",
+            pedido("search", json!({"target": "me"})),
+            |a, t| a.deteccoes(&pessoa_em(0.5, 0.5), t + ms(300)),
+        ),
+        (
+            "torre largada",
+            pedido("search", json!({"target": "dog"})),
+            |a, t| a.largar(7, t + ms(300)),
+        ),
+    ];
+    for (caso, p, fim) in fins {
+        let mut a = agente();
+        a.corpo(armado_em(0.0, 0.0), t0);
+        let andava = p.ferramenta == "move";
+        a.pedido(p, t0);
+        let acoes = fim(&mut a, t0);
+        assert_eq!(desfechos(&acoes).len(), 1, "{caso}: não terminou");
+        let foi = ao_corpo(&acoes);
+        assert!(
+            foi.iter().all(|(m, _)| m != "robot.stop"),
+            "{caso}: a lista do que foi ao corpo traz robot.stop: {foi:?}"
+        );
+        // O canal da habilidade é solto primeiro: as rodas a zero, ou a torre parada.
+        let solto = if andava {
+            rodas_soltas()
+        } else {
+            ("s1.gimbal".to_owned(), json!({"action": "stop"}))
+        };
+        assert_eq!(foi.first(), Some(&solto), "{caso}");
+    }
 }
 
 #[test]
@@ -467,9 +552,9 @@ fn a_estacao_manda_largar_o_pedido_em_curso() {
     // A ordem de largar outro pedido não mexe no que está em curso.
     assert!(a.largar(9, t0 + ms(200)).is_empty());
     assert_eq!(a.em_curso(), Some("move"));
-    // A do pedido em curso para o corpo, e ele termina interrompido.
+    // A do pedido em curso solta as rodas, e ele termina interrompido.
     let acoes = a.largar(7, t0 + ms(300));
-    assert_eq!(ao_corpo(&acoes), [("robot.stop".to_owned(), Value::Null)]);
+    assert_eq!(ao_corpo(&acoes), [rodas_soltas()]);
     assert_eq!(desfechos(&acoes), [("move".to_owned(), Como::Interrompida)]);
     assert!(a.tique(t0 + ms(500)).is_empty());
     // Sem nada em curso, não há o que largar.

@@ -64,25 +64,30 @@ pub enum Feito {
 /// canal; ausente, ninguém o tem.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Controle {
+    /// A linha da tabela que a conexão que lê é (`client`): o nome dito no `hello`, ou a fonte sem nome se a tabela não
+    /// o tem. É com ele que um cliente sabe se o dono de um canal é ele mesmo, sem supor que o nome dele está na tabela.
+    pub cliente: Option<Arc<str>>,
     pub rodas: Option<Arc<str>>,
     pub torre: Option<Arc<str>>,
     pub autonomia: bool,
 }
 
 impl Controle {
-    /// O do ciclo que o laço publicou.
-    pub fn do_estado(e: &Estado) -> Self {
+    /// O do ciclo que o laço publicou, para a conexão desta fonte.
+    pub fn do_estado(e: &Estado, cliente: Arc<str>) -> Self {
         Self {
+            cliente: Some(cliente),
             rodas: e.dono_rodas.clone(),
             torre: e.dono_torre.clone(),
             autonomia: e.autonomia,
         }
     }
 
-    /// O de agora, sem esperar o laço.
-    pub fn de_agora(i: &Intencoes, agora: Instant) -> Self {
+    /// O de agora, sem esperar o laço, para a conexão desta fonte.
+    pub fn de_agora(i: &Intencoes, fonte: FonteId, agora: Instant) -> Self {
         let l = i.ler(agora);
         Self {
+            cliente: Some(i.nome(fonte)),
             rodas: l.dono_rodas.map(|f| i.nome(f)),
             torre: l.dono_torre.map(|f| i.nome(f)),
             autonomia: i.autonomia(),
@@ -91,6 +96,7 @@ impl Controle {
 
     fn json(&self) -> serde_json::Value {
         serde_json::json!({
+            "client": self.cliente.as_deref(),
             "wheels": {"source": self.rodas.as_deref()},
             "gimbal": {"source": self.torre.as_deref()},
             "autonomous": self.autonomia,

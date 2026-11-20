@@ -25,6 +25,17 @@ pub struct Geral {
     pub renovar_ms: u64,
     /// Sem o estado do corpo por este tempo, o `rms1d` saiu.
     pub corpo_vale_ms: u64,
+    /// Com o canal da habilidade (as rodas, ou a torre) na mão de outra fonte por este tempo, o agente a dá por
+    /// interrompida. Ausente no arquivo, vale [`PERDEU_APOS_PADRAO_MS`].
+    #[serde(default = "perdeu_apos_padrao")]
+    pub perdeu_apos_ms: u64,
+}
+
+/// O `perdeu_apos_ms` de uma tabela que não o diz: o mesmo de `habilidades.toml`, e um teste reprova se os dois se afastam.
+pub const PERDEU_APOS_PADRAO_MS: u64 = 300;
+
+fn perdeu_apos_padrao() -> u64 {
+    PERDEU_APOS_PADRAO_MS
 }
 
 /// Uma habilidade: a ferramenta da estação que ela cumpre, e os números dela.
@@ -104,6 +115,9 @@ impl Tabela {
         }
         if self.geral.corpo_vale_ms == 0 {
             return Err("geral.corpo_vale_ms não pode ser 0".to_owned());
+        }
+        if self.geral.perdeu_apos_ms == 0 {
+            return Err("geral.perdeu_apos_ms não pode ser 0".to_owned());
         }
         let mut vistas = Vec::new();
         for h in &self.habilidades {

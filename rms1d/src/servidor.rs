@@ -214,7 +214,7 @@ async fn atender(
                                 && ultimo_s1.is_none_or(|u| u.elapsed() >= i)
                             {
                                 ultimo_s1 = Some(Instant::now());
-                                let params = respostas::estado_s1(e.corpo.as_deref(), e.idade_pacote_ms, e.corpo_recente, &Controle::do_estado(&e));
+                                let params = respostas::estado_s1(e.corpo.as_deref(), e.idade_pacote_ms, e.corpo_recente, &Controle::do_estado(&e, c.intencoes.nome(fonte)));
                                 let n = serde_json::json!({"jsonrpc": "2.0", "method": "s1.state", "params": params});
                                 escrever(&mut saida, &n).await?;
                             }
@@ -347,7 +347,7 @@ async fn atender(
                         a.as_deref(),
                         idade.map(|i| i.as_millis() as u64),
                         recente,
-                        &Controle::de_agora(&c.intencoes, agora),
+                        &Controle::de_agora(&c.intencoes, fonte, agora),
                     ),
                 )
             };

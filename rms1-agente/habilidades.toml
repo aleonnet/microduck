@@ -10,6 +10,10 @@
 renovar_ms = 100
 # Sem o estado do corpo por este tempo, o `rms1d` saiu: o agente recusa o pedido, e larga a habilidade em curso.
 corpo_vale_ms = 1000
+# Com as rodas (ou a torre) na mão de outra fonte por este tempo, a habilidade que as usava termina interrompida, dizendo
+# quem assumiu: é como o agente sabe que o piloto pegou os comandos. Número de partida: três renovações do pedido. Menos que
+# isso, e um instante de outra fonte com o corpo interromperia à toa.
+perdeu_apos_ms = 300
 
 # Parar: nunca é barrado, e encerra a habilidade em curso.
 [[habilidade]]

@@ -44,11 +44,17 @@ impl Bancada {
             estado,
             agente,
         };
-        // O agente assina o estado do corpo, e os pedidos e as detecções da mídia.
+        // O agente diz quem é, e assina o estado do corpo e quem tem cada canal; e os pedidos e as detecções da mídia.
         ate("o agente assinar o estado do corpo", || {
-            !b.corpo.com("robot.subscribe").is_empty()
+            !b.corpo.com("robot.subscribe").is_empty() && !b.corpo.com("s1.subscribe").is_empty()
         })
         .await;
+        let primeira = b.corpo.recebidas.lock().unwrap()[0].clone();
+        assert_eq!(
+            (&primeira["method"], &primeira["params"]["client"]),
+            (&json!("hello"), &json!("agente")),
+            "o hello vem antes de tudo: {primeira}"
+        );
         ate("o agente assinar os pedidos e as detecções", || {
             b.midia
                 .com("s1.media.subscribe")
@@ -94,7 +100,7 @@ async fn o_pedido_da_estacao_move_o_corpo_e_o_desfecho_volta_a_estacao() {
         json!({"vx": 0.3, "vy": 0.0, "vyaw": 0.0})
     );
     assert!(b.desfecho(41).is_none(), "terminou antes de chegar");
-    // O corpo chegou: para, e a estação fica sabendo como terminou.
+    // O corpo chegou: o agente solta as rodas, e a estação fica sabendo como terminou.
     *b.estado.lock().unwrap() = estado_do_corpo(true, 0.3);
     ate("o desfecho do pedido 41", || b.desfecho(41).is_some()).await;
     let d = b.desfecho(41).unwrap();
@@ -106,8 +112,17 @@ async fn o_pedido_da_estacao_move_o_corpo_e_o_desfecho_volta_a_estacao() {
         d["reason"].as_str().is_some_and(|m| m.contains("0.30")),
         "{d}"
     );
-    assert_eq!(b.corpo.com("robot.stop").len(), 1);
+    assert_eq!(
+        b.corpo.com("robot.stop").len(),
+        0,
+        "o fim de uma habilidade não é uma parada"
+    );
     let andou = b.corpo.com("robot.move").len();
+    assert_eq!(
+        b.corpo.com("robot.move")[andou - 1]["params"],
+        json!({"vx": 0.0, "vy": 0.0, "vyaw": 0.0}),
+        "as rodas soltas"
+    );
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(b.corpo.com("robot.move").len(), andou, "seguiu andando");
 
@@ -128,7 +143,11 @@ async fn o_pedido_da_estacao_move_o_corpo_e_o_desfecho_volta_a_estacao() {
     );
     ate("o desfecho do pedido 43", || b.desfecho(43).is_some()).await;
     assert_eq!(b.desfecho(43).unwrap()["outcome"], "cumprida");
-    assert_eq!(b.corpo.com("robot.stop").len(), 2);
+    assert_eq!(
+        b.corpo.com("robot.stop").len(),
+        1,
+        "a da ferramenta de parar"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -162,7 +181,7 @@ async fn as_deteccoes_guiam_a_torre_e_o_corpo_que_cai_interrompe() {
         b.corpo.com("robot.subscribe").len() > assinaturas
     })
     .await;
-    // A estação manda largar um pedido em curso: o corpo para, e o desfecho diz que foi interrompido.
+    // A estação manda largar um pedido em curso: as rodas são soltas, e o desfecho diz que foi interrompido.
     tokio::time::sleep(Duration::from_millis(150)).await;
     b.midia.notificar(
         "s1.station.request",
@@ -177,7 +196,11 @@ async fn as_deteccoes_guiam_a_torre_e_o_corpo_que_cai_interrompe() {
         .notificar("s1.station.request", json!({"request": 53, "cancel": true}));
     ate("o desfecho do pedido 53", || b.desfecho(53).is_some()).await;
     assert_eq!(b.desfecho(53).unwrap()["outcome"], "interrompida");
-    assert_eq!(b.corpo.com("robot.stop").len(), paradas + 1);
+    assert_eq!(b.corpo.com("robot.stop").len(), paradas);
+    assert_eq!(
+        b.corpo.com("robot.move").last().unwrap()["params"],
+        json!({"vx": 0.0, "vy": 0.0, "vyaw": 0.0})
+    );
     // O detector de patos não diz rótulo: a caixa dele é um pato.
     tokio::time::sleep(Duration::from_millis(150)).await;
     b.midia.notificar(

@@ -3,8 +3,9 @@
 //! - **O do `rms1-mediad`:** o agente assina os pedidos que a estação manda cumprir, ou largar (`s1.station.request`), e as detecções
 //!   (`media.detections`), e manda de volta como cada pedido terminou (`s1.station.outcome`), que o `rms1-mediad` leva à
 //!   estação.
-//! - **O do `rms1d`:** o agente assina o estado do corpo (`robot.state`) e manda os pedidos (`robot.move`, `robot.stop`,
-//!   `s1.gimbal`).
+//! - **O do `rms1d`:** o agente diz quem é (`hello`, com `client`: é o nome da linha dele na tabela de fontes), assina o
+//!   estado do corpo (`robot.state`) e quem tem cada canal (`s1.state`, o bloco `control`), e manda os pedidos
+//!   (`robot.move`, `s1.gimbal`, e `robot.stop` quando a ferramenta é a de parar).
 //!
 //! Cada ligação religa sozinha, com espera crescente. Sem o `rms1d`, o pedido é recusado dizendo isso; sem o
 //! `rms1-mediad`, não chega pedido nenhum.
@@ -13,13 +14,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use duck_ipc_proto as proto;
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use tokio::net::unix::OwnedWriteHalf;
 use tokio::sync::{Mutex, mpsc};
 
-use crate::agente::{Acao, Agente, Caixa, Corpo, Pedido};
+use crate::agente::{Acao, Agente, Caixa, Corpo, NOME_NO_CORPO, Pedido};
 use crate::tabela::Tabela;
 
 pub struct Config {
@@ -42,6 +44,13 @@ const SEM_ROTULO: &str = "duck";
 /// O que chega de uma das ligações.
 enum Chegou {
     Corpo(Corpo),
+    /// Do bloco `control` de um `s1.state`: a linha da tabela de fontes que esta conexão é, e quem tem as rodas e a torre
+    /// (o nome da fonte, ou nada).
+    Donos {
+        eu: String,
+        rodas: Option<String>,
+        torre: Option<String>,
+    },
     CorpoCaiu,
     Pedido(Pedido),
     /// A estação mandou largar o pedido deste número.
@@ -58,6 +67,17 @@ fn corpo_de(params: &Value) -> Option<Corpo> {
         armado: params["policy"].as_str()? != "held",
         posicao: [posicao.first()?.as_f64()?, posicao.get(1)?.as_f64()?],
     })
+}
+
+/// Quem tem as rodas e a torre, de um `s1.state`. Um `rms1d` sem a tabela de fontes não traz o bloco: ninguém tem nada.
+fn donos_de(params: &Value) -> Chegou {
+    let c = &params["control"];
+    let dono = |canal: &str| c[canal]["source"].as_str().map(str::to_owned);
+    Chegou::Donos {
+        eu: c["client"].as_str().unwrap_or(NOME_NO_CORPO).to_owned(),
+        rodas: dono("wheels"),
+        torre: dono("gimbal"),
+    }
 }
 
 /// O pedido que a estação manda cumprir, de um `s1.station.request`.
@@ -93,11 +113,11 @@ fn caixas_de(params: &Value) -> Option<Vec<Caixa>> {
     )
 }
 
-/// Mantém uma ligação: liga, manda a assinatura, guarda por onde se escreve, e passa adiante cada linha que chega, até a
-/// conexão cair; então espera e liga de novo.
+/// Mantém uma ligação: liga, manda as linhas de abertura (quem é, e o que assina), guarda por onde se escreve, e passa
+/// adiante cada linha que chega, até a conexão cair; então espera e liga de novo.
 async fn manter(
     socket: PathBuf,
-    assinatura: Value,
+    ao_ligar: Vec<Value>,
     escrita: Escrita,
     chegou: mpsc::UnboundedSender<Chegou>,
     ler: fn(&Value) -> Option<Chegou>,
@@ -111,11 +131,8 @@ async fn manter(
             continue;
         };
         let (leitura, mut saida) = conexao.into_split();
-        if saida
-            .write_all(format!("{assinatura}\n").as_bytes())
-            .await
-            .is_err()
-        {
+        let abertura: String = ao_ligar.iter().map(|l| format!("{l}\n")).collect();
+        if saida.write_all(abertura.as_bytes()).await.is_err() {
             continue;
         }
         espera = ESPERA_MIN;
@@ -161,15 +178,26 @@ pub async fn rodar(cfg: Config) {
     let (ao_corpo, a_midia): (Escrita, Escrita) = Default::default();
     tokio::spawn(manter(
         cfg.robo,
-        json!({"jsonrpc": "2.0", "id": 0, "method": "robot.subscribe", "params": {"hz": ESTADO_HZ}}),
+        // O `hello` primeiro: é ele que põe os pedidos seguintes na linha do agente na tabela de fontes.
+        vec![
+            json!({"jsonrpc": "2.0", "id": 0, "method": proto::method::HELLO, "params": {"api_version": proto::API_VERSION, "client": NOME_NO_CORPO}}),
+            json!({"jsonrpc": "2.0", "id": 0, "method": "robot.subscribe", "params": {"hz": ESTADO_HZ}}),
+            json!({"jsonrpc": "2.0", "id": 0, "method": "s1.subscribe", "params": {"hz": ESTADO_HZ}}),
+        ],
         ao_corpo.clone(),
         chegou.clone(),
-        |v| (v["method"] == "robot.state").then(|| corpo_de(&v["params"]).map(Chegou::Corpo))?,
+        |v| match v["method"].as_str()? {
+            "robot.state" => corpo_de(&v["params"]).map(Chegou::Corpo),
+            "s1.state" => Some(donos_de(&v["params"])),
+            _ => None,
+        },
         Some(|| Chegou::CorpoCaiu),
     ));
     tokio::spawn(manter(
         cfg.midia,
-        json!({"jsonrpc": "2.0", "id": 0, "method": "s1.media.subscribe", "params": {"requests": true, "detections": true}}),
+        vec![
+            json!({"jsonrpc": "2.0", "id": 0, "method": "s1.media.subscribe", "params": {"requests": true, "detections": true}}),
+        ],
         a_midia.clone(),
         chegou,
         |v| match v["method"].as_str()? {
@@ -193,6 +221,9 @@ pub async fn rodar(cfg: Config) {
                     Some(Chegou::Corpo(corpo)) => {
                         agente.corpo(corpo, agora);
                         Vec::new()
+                    }
+                    Some(Chegou::Donos { eu, rodas, torre }) => {
+                        agente.donos(&eu, rodas.as_deref(), torre.as_deref(), agora)
                     }
                     Some(Chegou::CorpoCaiu) => {
                         agente.corpo_caiu();

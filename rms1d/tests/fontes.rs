@@ -222,8 +222,11 @@ fn o_piloto_toma_as_rodas_do_agente_na_hora() {
     );
     assert_eq!(e["move"]["requested"], json!(GIRO));
     assert_eq!(olho.s1()["control"]["wheels"]["source"], "piloto");
+    // E diz a cada conexão qual linha da tabela ela é: quem olha não disse o nome.
+    assert_eq!(c["client"], "sem_nome", "{c}");
     // `s1.telemetry`, que responde sem esperar o laço, diz o mesmo.
     let t = agente.chamar("s1.telemetry", json!({}));
+    assert_eq!(t["result"]["control"]["client"], "agente", "{t}");
     assert_eq!(t["result"]["control"]["wheels"]["source"], "piloto", "{t}");
 }
 
@@ -538,6 +541,11 @@ fn quem_nao_diz_o_nome_segue_podendo_e_perde_para_todos() {
     assert_eq!(r["result"]["accepted"], true, "{r}");
     let r = padd.chamar("robot.move", json!({"vx": 0.3, "vy": 0.0, "vyaw": 0.0}));
     assert_eq!(r["result"]["reason"], "agente tem as rodas agora", "{r}");
+    let t = padd.chamar("s1.telemetry", json!({}));
+    assert_eq!(
+        t["result"]["control"]["client"], "sem_nome",
+        "o corpo diz ao cliente que o nome dele não está na tabela: {t}"
+    );
     // O nome da fonte sem nome ninguém pode dizer.
     let r = padd.chamar("hello", json!({"api_version": 68, "client": "sem_nome"}));
     assert_eq!(r["error"]["code"], -32602, "{r}");

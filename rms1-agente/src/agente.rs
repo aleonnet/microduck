@@ -3,8 +3,14 @@
 //!
 //! As regras:
 //!
-//! - **Uma habilidade por vez.** Um pedido novo para o corpo, encerra a anterior como interrompida, e começa.
+//! - **Uma habilidade por vez.** Um pedido novo encerra a anterior como interrompida, e começa.
 //! - **Parar nunca é barrado:** sai mesmo sem o corpo responder ou com o robô desarmado, e encerra a habilidade em curso.
+//! - **`robot.stop` é só da ferramenta de parar.** No `rms1d` a parada apaga os pedidos de todas as fontes, inclusive o de
+//!   quem pilota. Para arrumar a casa no fim de uma habilidade, o agente solta só o canal dele: quem andava manda as rodas
+//!   a zero, e quem girava a torre manda a torre parar.
+//! - **O corpo tem dono por canal** (a tabela de fontes do `rms1d`). Com o canal da habilidade na mão de outra fonte por
+//!   mais de `perdeu_apos_ms`, ela termina interrompida, dizendo quem assumiu, sem mandar nada ao corpo: o canal já não é
+//!   do agente. Não retoma sozinha.
 //! - **O agente não arma.** Só age com o robô armado por quem pilota; desarmado no meio, larga a habilidade.
 //! - **Toda habilidade termina, e diz como:** cumprida, vencida (o teto da tabela), interrompida ou recusada.
 //! - **O pedido contínuo é renovado** dentro do prazo do `rms1d`, que zera o corpo sem pedido novo: se o agente cair, o
@@ -40,6 +46,9 @@ pub struct Caixa {
     pub centro: [f64; 2],
     pub nota: f64,
 }
+
+/// O nome com que o agente se apresenta ao `rms1d` (`hello`, `client`): a linha dele na tabela de fontes de `rms1d.toml`.
+pub const NOME_NO_CORPO: &str = "agente";
 
 /// Como uma habilidade terminou.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -86,6 +95,8 @@ struct Curso {
     comecou: Instant,
     /// Quando o pedido contínuo saiu pela última vez.
     renovado: Instant,
+    /// Desde quando o canal da habilidade está na mão de outra fonte; `None` enquanto é do agente, ou de ninguém.
+    perdeu_desde: Option<Instant>,
     o_que: OQue,
 }
 
@@ -166,7 +177,8 @@ impl Agente {
             .map(|(c, _)| c)
     }
 
-    /// `robot.stop`, como requisição: o `rms1d` não aplica a parada mandada como notificação.
+    /// `robot.stop`, como requisição: o `rms1d` não aplica a parada mandada como notificação. Só a ferramenta de parar a
+    /// usa: no `rms1d` ela apaga os pedidos de todas as fontes.
     fn parar(&mut self) -> Acao {
         let id = self.proximo_id;
         self.proximo_id += 1;
@@ -197,12 +209,61 @@ impl Agente {
         })
     }
 
-    /// Encerra a habilidade em curso, se há uma: para o corpo e diz como terminou.
+    /// Solta o canal da habilidade: quem andava manda as rodas a zero, e quem girava a torre manda a torre parar. O
+    /// pedido de outra fonte, no mesmo canal ou em outro, segue como está.
+    fn soltar(o_que: &OQue) -> Acao {
+        match o_que {
+            OQue::Mover { .. } => Self::andar([0.0; 2]),
+            OQue::Olhar { .. } | OQue::Procurar { .. } => Self::torre([0.0; 2]),
+        }
+    }
+
+    /// Encerra a habilidade em curso, se há uma: solta o canal dela e diz como terminou.
     fn encerrar(&mut self, como: Como, motivo: &str, acoes: &mut Vec<Acao>) {
         if let Some(c) = self.curso.take() {
-            acoes.push(self.parar());
+            acoes.push(Self::soltar(&c.o_que));
             acoes.push(Self::terminou(c.numero, &c.ferramenta, como, motivo));
         }
+    }
+
+    /// Quem tem as rodas e a torre agora, do bloco `control` de `s1.state`: o nome da fonte, ou nada se ninguém tem. `eu`
+    /// é a linha da tabela que o `rms1d` diz que esta conexão é: o nome do `hello`, ou a fonte sem nome numa tabela que
+    /// não tem a linha do agente. É com ela que o dono é comparado, e não com um nome suposto.
+    ///
+    /// Com o canal da habilidade em curso na mão de outra fonte por mais de `perdeu_apos_ms`, ela termina interrompida,
+    /// dizendo quem assumiu. Nada vai ao corpo: o canal não é mais do agente, e o que ele mandasse só atrapalharia quem
+    /// assumiu. Um instante com outra fonte não conta: o prazo recomeça quando o canal volta ao agente.
+    pub fn donos(
+        &mut self,
+        eu: &str,
+        rodas: Option<&str>,
+        torre: Option<&str>,
+        agora: Instant,
+    ) -> Vec<Acao> {
+        let Some(c) = self.curso.as_mut() else {
+            return Vec::new();
+        };
+        let (dono, canal) = match c.o_que {
+            OQue::Mover { .. } => (rodas, "as rodas"),
+            OQue::Olhar { .. } | OQue::Procurar { .. } => (torre, "a torre"),
+        };
+        let Some(outra) = dono.filter(|d| *d != eu) else {
+            c.perdeu_desde = None;
+            return Vec::new();
+        };
+        let desde = *c.perdeu_desde.get_or_insert(agora);
+        if agora.saturating_duration_since(desde)
+            < Duration::from_millis(self.tabela.geral.perdeu_apos_ms)
+        {
+            return Vec::new();
+        }
+        let c = self.curso.take().expect("conferido acima");
+        vec![Self::terminou(
+            c.numero,
+            &c.ferramenta,
+            Como::Interrompida,
+            format!("o {outra} assumiu {canal}"),
+        )]
     }
 
     /// As palavras de um alvo, em minúsculas, sem pontuação.
@@ -390,13 +451,14 @@ impl Agente {
             ferramenta: p.ferramenta,
             comecou: agora,
             renovado: agora,
+            perdeu_desde: None,
             o_que,
         });
         acoes
     }
 
     /// A estação mandou largar o pedido de número `numero` (ela o interrompeu, ou o teto dela venceu): se é o que está em
-    /// curso, o corpo para, e ele termina interrompido.
+    /// curso, o agente solta o canal dele, e ele termina interrompido.
     pub fn largar(&mut self, numero: u64, _agora: Instant) -> Vec<Acao> {
         let mut acoes = Vec::new();
         if self.curso.as_ref().is_some_and(|c| c.numero == numero) {
@@ -490,11 +552,7 @@ impl Agente {
         }
         if let Some((como, motivo)) = fim {
             let c = self.curso.take().expect("conferido acima");
-            // Quem andava para o corpo inteiro; quem só girava a torre para a torre.
-            acoes.push(match c.o_que {
-                OQue::Mover { .. } => self.parar(),
-                OQue::Olhar { .. } | OQue::Procurar { .. } => Self::torre([0.0; 2]),
-            });
+            acoes.push(Self::soltar(&c.o_que));
             acoes.push(Self::terminou(c.numero, &c.ferramenta, como, motivo));
         }
         acoes
