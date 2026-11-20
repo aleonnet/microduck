@@ -9,8 +9,10 @@
 //!   quem pilota. Para arrumar a casa no fim de uma habilidade, o agente solta só o canal dele: quem andava manda as rodas
 //!   a zero, e quem girava a torre manda a torre parar.
 //! - **O corpo tem dono por canal** (a tabela de fontes do `rms1d`). Com o canal da habilidade na mão de outra fonte por
-//!   mais de `perdeu_apos_ms`, ela termina interrompida, dizendo quem assumiu, sem mandar nada ao corpo: o canal já não é
-//!   do agente. Não retoma sozinha.
+//!   mais de `perdeu_apos_ms`, ela termina interrompida, dizendo quem assumiu, e não retoma sozinha. Ao desistir, o agente
+//!   zera a linha dele no `rms1d`, como em todo fim de habilidade: o pedido de uma fonte superada fica guardado lá, e o
+//!   último que ele renovou passaria a valer quando a vez da outra vencesse, com o pedido já dado por interrompido. O zero
+//!   na linha do agente não mexe no que a fonte que assumiu pede.
 //! - **O agente não arma.** Só age com o robô armado por quem pilota; desarmado no meio, larga a habilidade.
 //! - **Toda habilidade termina, e diz como:** cumprida, vencida (o teto da tabela), interrompida ou recusada.
 //! - **O pedido contínuo é renovado** dentro do prazo do `rms1d`, que zera o corpo sem pedido novo: se o agente cair, o
@@ -231,8 +233,9 @@ impl Agente {
     /// não tem a linha do agente. É com ela que o dono é comparado, e não com um nome suposto.
     ///
     /// Com o canal da habilidade em curso na mão de outra fonte por mais de `perdeu_apos_ms`, ela termina interrompida,
-    /// dizendo quem assumiu. Nada vai ao corpo: o canal não é mais do agente, e o que ele mandasse só atrapalharia quem
-    /// assumiu. Um instante com outra fonte não conta: o prazo recomeça quando o canal volta ao agente.
+    /// dizendo quem assumiu, e o agente solta o canal: o zero na linha dele apaga o último pedido que ele renovou, que
+    /// senão valeria quando a vez da outra fonte vencesse. Um instante com outra fonte não conta: o prazo recomeça quando
+    /// o canal volta ao agente.
     pub fn donos(
         &mut self,
         eu: &str,
@@ -258,12 +261,15 @@ impl Agente {
             return Vec::new();
         }
         let c = self.curso.take().expect("conferido acima");
-        vec![Self::terminou(
-            c.numero,
-            &c.ferramenta,
-            Como::Interrompida,
-            format!("o {outra} assumiu {canal}"),
-        )]
+        vec![
+            Self::soltar(&c.o_que),
+            Self::terminou(
+                c.numero,
+                &c.ferramenta,
+                Como::Interrompida,
+                format!("o {outra} assumiu {canal}"),
+            ),
+        ]
     }
 
     /// As palavras de um alvo, em minúsculas, sem pontuação.

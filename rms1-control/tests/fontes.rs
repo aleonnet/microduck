@@ -293,6 +293,27 @@ fn o_cerebro_so_conta_com_a_autonomia_ligada() {
 fn desligar_a_autonomia_apaga_o_que_o_cerebro_pediu() {
     let mut b = banca();
     b.i.definir_autonomia(true);
+    // O alvo de ângulo que o cérebro pôs também deixa de valer: a torre não segue indo até ele.
+    assert!(b.i.pedir_torre(b.cerebro, 0.3, 0.0));
+    assert!(b.ja().torre.is_some());
+    b.i.definir_autonomia(false);
+    b.corpo.limpar();
+    ciclos_parado(&mut b, Instant::now());
+    assert!(
+        b.de(id::TORRE_ANGULOS).is_empty(),
+        "o alvo do cérebro seguiu sendo mandado à torre com a autonomia desligada"
+    );
+    // O alvo de quem não é `so_autonomo` fica.
+    assert!(b.i.pedir_torre(b.agente, -0.2, 0.0));
+    b.i.definir_autonomia(true);
+    b.i.definir_autonomia(false);
+    b.corpo.limpar();
+    ciclos_parado(&mut b, Instant::now() + Duration::from_secs(2));
+    assert!(
+        !b.de(id::TORRE_ANGULOS).is_empty(),
+        "o alvo do agente sumiu"
+    );
+    b.i.definir_autonomia(true);
     assert!(b.i.pedir_twist(b.cerebro, FRENTE));
     assert!(b.i.pedir_taxa_torre(b.cerebro, 20.0, 0.0));
     assert_eq!(b.ja().aplicado, FRENTE);
@@ -303,7 +324,11 @@ fn desligar_a_autonomia_apaga_o_que_o_cerebro_pediu() {
         e.aplicado, [0.0; 3],
         "o cérebro seguiu andando com a autonomia desligada"
     );
-    assert_eq!((nome(&e.dono_rodas), nome(&e.dono_torre)), (None, None));
+    // As rodas ficam sem dono; a torre é do agente, pelo alvo que ele pôs acima, e nunca do cérebro.
+    assert_eq!(
+        (nome(&e.dono_rodas), nome(&e.dono_torre)),
+        (None, Some("agente"))
+    );
     b.i.definir_autonomia(true);
     let e = b.ja();
     assert_eq!(e.aplicado, [0.0; 3], "o pedido antigo do cérebro voltou");

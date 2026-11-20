@@ -11,7 +11,13 @@ use comum::{Falso, ate};
 use rms1_agente::agente::{Acao, Agente, Como, Corpo, NOME_NO_CORPO, Pedido};
 use rms1_agente::ligacoes::{self, Config};
 use rms1_agente::tabela::{PERDEU_APOS_PADRAO_MS, Tabela};
+use rms1_control::{CorpoFalso, Estado, Intencoes, Laco, Saude};
+use rms1d::respostas::Contexto;
+use rms1d_params::{Params, TipoCorpo};
 use serde_json::{Value, json};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::net::UnixStream;
+use tokio::sync::broadcast;
 
 /// A linha da tabela que o `rms1d` diz que a conexão do agente é.
 const EU: &str = NOME_NO_CORPO;
@@ -74,9 +80,10 @@ fn o_prazo_de_perder_o_canal_vem_da_tabela() {
 }
 
 /// Aceite 12: o agente está andando e o piloto assume as rodas. Passado o prazo, a habilidade termina interrompida,
-/// dizendo quem assumiu, e nada vai ao corpo: nem parada, nem rodas a zero, nem renovação.
+/// dizendo quem assumiu. Ao corpo vai só o zero na linha do agente, que apaga o último pedido que ele renovou: nem
+/// parada, que pararia o piloto, nem renovação.
 #[test]
-fn o_piloto_assume_as_rodas_e_a_habilidade_termina_sem_mexer_no_corpo() {
+fn o_piloto_assume_as_rodas_e_a_habilidade_termina_soltando_so_a_linha_dele() {
     let t0 = Instant::now();
     let mut a = andando(t0);
     // Enquanto as rodas são do agente, ou de ninguém, nada muda.
@@ -90,9 +97,18 @@ fn o_piloto_assume_as_rodas_e_a_habilidade_termina_sem_mexer_no_corpo() {
     assert!(a.donos(EU, Some("piloto"), None, t0 + ms(499)).is_empty());
     assert_eq!(a.em_curso(), Some("move"), "terminou antes do prazo");
     let acoes = a.donos(EU, Some("piloto"), None, t0 + ms(500));
-    let [Acao::Terminou(d)] = acoes.as_slice() else {
-        panic!("a habilidade segue em curso, ou saiu algum pedido ao corpo: {acoes:?}")
+    let [Acao::Corpo(solta), Acao::Terminou(d)] = acoes.as_slice() else {
+        panic!("a habilidade segue em curso, ou o agente não soltou as rodas: {acoes:?}")
     };
+    assert_eq!(
+        (&solta["method"], &solta["params"], solta.get("id")),
+        (
+            &json!("robot.move"),
+            &json!({"vx": 0.0, "vy": 0.0, "vyaw": 0.0}),
+            None
+        ),
+        "o zero na linha dele, por notificação, e não uma parada"
+    );
     assert_eq!(
         (d.numero, d.ferramenta.as_str(), d.como),
         (7, "move", Como::Interrompida)
@@ -129,7 +145,7 @@ fn um_instante_com_outra_fonte_nao_interrompe() {
         );
     }
     assert_eq!(a.em_curso(), Some("move"));
-    assert_eq!(a.donos(EU, Some("piloto"), None, t0 + ms(1000)).len(), 1);
+    assert_eq!(a.donos(EU, Some("piloto"), None, t0 + ms(1000)).len(), 2);
 }
 
 /// O canal é o da habilidade: quem gira a torre não liga para quem tem as rodas, e quem anda não liga para a torre.
@@ -163,9 +179,14 @@ fn cada_habilidade_olha_o_canal_dela() {
         );
         assert!(a.donos(EU, None, Some("cerebro"), t0 + ms(1000)).is_empty());
         let acoes = a.donos(EU, None, Some("cerebro"), t0 + ms(1300));
-        let [Acao::Terminou(d)] = acoes.as_slice() else {
+        let [Acao::Corpo(solta), Acao::Terminou(d)] = acoes.as_slice() else {
             panic!("{ferramenta}: {acoes:?}")
         };
+        assert_eq!(
+            (&solta["method"], &solta["params"]),
+            (&json!("s1.gimbal"), &json!({"action": "stop"})),
+            "{ferramenta}: quem girava a torre solta a torre"
+        );
         assert_eq!(d.como, Como::Interrompida);
         assert_eq!(d.motivo, "o cerebro assumiu a torre");
     }
@@ -187,7 +208,7 @@ fn cada_habilidade_olha_o_canal_dela() {
     assert_eq!(
         a.donos("sem_nome", Some("agente"), None, t0 + ms(1300))
             .len(),
-        1,
+        2,
         "e outra fonte, com o nome que for, é outra"
     );
     // Sem habilidade em curso, não há o que perder.
@@ -269,12 +290,14 @@ async fn o_agente_le_o_dono_das_rodas_no_s1_state() {
     );
     assert_eq!(d["reason"], "o piloto assumiu as rodas");
     let andou = corpo.com("robot.move").len();
+    let pedidos: Vec<Value> = corpo
+        .com("robot.move")
+        .iter()
+        .map(|v| v["params"]["vx"].clone())
+        .collect();
     assert!(
-        corpo
-            .com("robot.move")
-            .iter()
-            .all(|v| v["params"]["vx"] == 0.3),
-        "saiu um pedido de rodas a zero: o canal já era do piloto"
+        pedidos[..andou - 1].iter().all(|vx| *vx == 0.3) && pedidos[andou - 1] == 0.0,
+        "o agente renova o pedido e, ao desistir, zera a linha dele uma vez: {pedidos:?}"
     );
     assert!(
         corpo.com("robot.stop").is_empty(),
@@ -286,5 +309,129 @@ async fn o_agente_le_o_dono_das_rodas_no_s1_state() {
         andou,
         "seguiu renovando o pedido"
     );
+    agente.abort();
+}
+
+/// O agente de verdade contra o `rms1d` de verdade (o servidor e o laço que vão ao robô, com o corpo falso e a tabela de
+/// produção): o agente anda, e quem pilota manda parar. O corpo para, o agente larga o pedido, e **o corpo segue parado
+/// depois que a vez do piloto vence**. Sem o agente soltar a linha dele ao desistir, o último pedido que ele renovou ficava
+/// guardado no `rms1d` e passava a valer meio segundo depois da parada: o robô dava um tranco para a frente (o leitor frio
+/// do diff, 2026-11-20).
+#[tokio::test(flavor = "multi_thread")]
+async fn depois_da_parada_do_piloto_o_pedido_do_agente_nao_volta_sozinho() {
+    let pasta = tempfile::tempdir().unwrap();
+    let (robo, som) = (pasta.path().join("r.sock"), pasta.path().join("m.sock"));
+    let mut params = Params::default();
+    params.corpo.tipo = TipoCorpo::Falso;
+    let prazo = Duration::from_millis(params.seguranca.prazo_ms);
+    let (intencoes, saude) = (
+        Arc::new(Intencoes::com_fontes(&params.fontes, prazo)),
+        Arc::new(Saude::default()),
+    );
+    let (estados, mut ve) = broadcast::channel::<Arc<Estado>>(64);
+    let (i, s, e, p) = (
+        intencoes.clone(),
+        saude.clone(),
+        estados.clone(),
+        params.clone(),
+    );
+    std::thread::spawn(move || {
+        let mut laco = Laco::new(CorpoFalso::default(), &p, i.clone(), s);
+        let periodo = Duration::from_secs_f64(1.0 / f64::from(p.laco.hz));
+        while !i.encerrando() {
+            if let Some(estado) = laco.ciclo(Instant::now(), true) {
+                let _ = e.send(Arc::new(estado));
+            }
+            std::thread::sleep(periodo);
+        }
+        laco.encerrar();
+    });
+    let (_trava, ouvinte) = rms1d::servidor::abrir(&robo).await.unwrap();
+    let contexto = Arc::new(Contexto {
+        params,
+        intencoes: intencoes.clone(),
+        saude,
+    });
+    tokio::spawn(rms1d::servidor::servir(ouvinte, contexto, estados, None));
+    // O que o laço aplicou a cada ciclo, com a hora: é aqui que o tranco apareceria.
+    let aplicou = Arc::new(Mutex::new(Vec::<(Instant, [f64; 3])>::new()));
+    let visto = aplicou.clone();
+    tokio::spawn(async move {
+        while let Ok(e) = ve.recv().await {
+            visto.lock().unwrap().push((Instant::now(), e.aplicado));
+        }
+    });
+    let midia = Falso::subir(&som, None);
+    let agente = tokio::spawn(ligacoes::rodar(Config {
+        robo: robo.clone(),
+        midia: som,
+        tabela: Tabela::padrao().unwrap(),
+    }));
+    ate("o agente assinar os pedidos", || {
+        !midia.com("s1.media.subscribe").is_empty()
+    })
+    .await;
+    // Quem pilota: apresenta-se como a página, arma, e mais tarde manda parar.
+    let (leitura, mut piloto) = UnixStream::connect(&robo).await.unwrap().into_split();
+    let mut respostas = BufReader::new(leitura).lines();
+    for linha in [
+        json!({"jsonrpc": "2.0", "id": 1, "method": "hello", "params": {"api_version": duck_ipc_proto::API_VERSION, "client": "piloto"}}),
+        json!({"jsonrpc": "2.0", "id": 2, "method": "robot.enable", "params": {"on": true}}),
+    ] {
+        piloto
+            .write_all(format!("{linha}\n").as_bytes())
+            .await
+            .unwrap();
+        respostas.next_line().await.unwrap();
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    midia.notificar(
+        "s1.station.request",
+        json!({"request": 71, "tool": "move", "params": {"direction": "forward", "meters": 2.0}}),
+    );
+    ate("o corpo andar pelo pedido do agente", || {
+        aplicou
+            .lock()
+            .unwrap()
+            .last()
+            .is_some_and(|(_, v)| v[0] > 0.0)
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    // A parada de quem pilota.
+    let parou = Instant::now();
+    let parada = json!({"jsonrpc": "2.0", "id": 3, "method": "robot.stop"});
+    piloto
+        .write_all(format!("{parada}\n").as_bytes())
+        .await
+        .unwrap();
+    let desfecho = || {
+        midia
+            .com("s1.station.outcome")
+            .into_iter()
+            .map(|v| v["params"].clone())
+            .find(|p| p["request"] == json!(71))
+    };
+    ate("o desfecho do pedido 71", || desfecho().is_some()).await;
+    let d = desfecho().unwrap();
+    assert_eq!(d["outcome"], "interrompida", "{d}");
+    assert_eq!(d["reason"], "o piloto assumiu as rodas");
+    // Bem além do prazo do piloto (500 ms) mais o do último pedido que o agente renovou: o corpo não pode andar de novo.
+    tokio::time::sleep((parou + prazo * 3).saturating_duration_since(Instant::now())).await;
+    let andou: Vec<(u128, f64)> = aplicou
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(t, v)| *t > parou + Duration::from_millis(100) && v[0] != 0.0)
+        .map(|(t, v)| (t.duration_since(parou).as_millis(), v[0]))
+        .collect();
+    assert!(
+        andou.is_empty(),
+        "o corpo andou sozinho depois da parada do piloto, com o pedido já interrompido: {} ciclos, de {:?} a {:?} (ms depois da parada, m/s)",
+        andou.len(),
+        andou.first(),
+        andou.last()
+    );
+    intencoes.pedir_encerrar();
     agente.abort();
 }

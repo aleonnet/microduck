@@ -83,6 +83,9 @@ fn a_tabela_que_vem_com_o_agente_vale_e_a_errada_e_recusada_pelo_nome() {
     assert!(curto.contains("renovar_ms"), "{curto}");
     let lento = t.conferir_com_o_corpo(500, 0.1).unwrap_err();
     assert!(lento.contains("velocidade"), "{lento}");
+    // E o agente tem de dar o canal por perdido antes de a vez de quem assumiu vencer (300 ms mais uma renovação, em 500).
+    let tarde = t.conferir_com_o_corpo(350, 3.5).unwrap_err();
+    assert!(tarde.contains("perdeu_apos_ms"), "{tarde}");
     for (errada, nome) in [
         (
             "[geral]\nrenovar_ms = 100\ncorpo_vale_ms = 1000\n[[habilidade]]\nfaz = \"parar\"\nferramenta = \"stop\"\n[[habilidade]]\nfaz = \"parar\"\nferramenta = \"stop\"\n",

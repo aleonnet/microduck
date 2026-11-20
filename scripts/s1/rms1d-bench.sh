@@ -280,9 +280,13 @@ subir_agente() { # subir_agente <1 se o binário do robô já é este>
         diz "AVISO: não achei $BIN_AGENTE (cargo s1 -p rms1-agente). Dá para pilotar; o robô não cumpre os pedidos da estação."
         return 0
     fi
-    if [ -z "$1" ]; then "${A[@]}" push "$BIN_AGENTE" "$CHROOT/opt/robot/bin/rms1-agente" >/dev/null; fi
-    "${A[@]}" shell "chmod 755 $CHROOT/opt/robot/bin/rms1-agente; ($BB setsid $BB nohup $ENTRA /opt/robot/bin/rms1-agente --config /etc/robot/rms1d.toml --robo /run/robotd.sock </dev/null >/data/rms1-agente.log 2>&1 &); $BB sleep 1"
-    "${A[@]}" shell "$BB pidof rms1-agente >/dev/null && echo agente_no_ar || { echo AGENTE_MORTO; $BB tail -3 /data/rms1-agente.log; }" | tr -d '\r' | tee "$OUT/agente.txt"
+    # Nenhum passo daqui para a ativação: o `rms1d` já está no ar, e dá para pilotar sem o agente.
+    if [ -z "$1" ] && ! "${A[@]}" push "$BIN_AGENTE" "$CHROOT/opt/robot/bin/rms1-agente" >/dev/null 2>&1; then
+        diz "AVISO: o agente do robô não subiu (o envio de $BIN_AGENTE ao robô falhou). Dá para pilotar; o robô não cumpre os pedidos da estação."
+        return 0
+    fi
+    "${A[@]}" shell "chmod 755 $CHROOT/opt/robot/bin/rms1-agente; ($BB setsid $BB nohup $ENTRA /opt/robot/bin/rms1-agente --config /etc/robot/rms1d.toml --robo /run/robotd.sock </dev/null >/data/rms1-agente.log 2>&1 &); $BB sleep 1" || true
+    { "${A[@]}" shell "$BB pidof rms1-agente >/dev/null && echo agente_no_ar || { echo AGENTE_MORTO; $BB tail -3 /data/rms1-agente.log; }" || true; } | tr -d '\r' | tee "$OUT/agente.txt"
     if ! grep -q agente_no_ar "$OUT/agente.txt"; then
         diz "AVISO: o agente do robô não subiu ($(grep -v AGENTE_MORTO "$OUT/agente.txt" | tail -1)). Dá para pilotar; o robô não cumpre os pedidos da estação."
     fi
@@ -369,7 +373,8 @@ up() {
     # Um `rms1d` de antes sai pelo caminho que para o robô, e antes do envio: binário em uso não se sobrescreve, e a trava
     # faria o novo morrer em silêncio, com o velho respondendo no lugar dele.
     # O `rms1-agente` de antes sai antes dos dois que ele usa: sem ele renovando, o `rms1d` zera o corpo sozinho, no prazo.
-    "${A[@]}" shell "$BB pkill -TERM rms1-agente; $BB sleep 1" >/dev/null 2>&1 || true
+    # Ele não segura aparelho nenhum: o que não sai por SIGTERM em 1 s sai à força, para o novo não subir ao lado dele.
+    "${A[@]}" shell "$BB pkill -TERM rms1-agente; $BB sleep 1; $BB pidof rms1-agente >/dev/null && $BB pkill -KILL rms1-agente" >/dev/null 2>&1 || true
     # O `rms1-mediad` de antes sai em seguida, por SIGTERM: é assim que ele desliga o fluxo da câmera antes de soltá-la.
     confere sem_midia "o rms1-mediad anterior não saiu; desligue o robô na chave" "$BB pkill -TERM rms1-mediad; $BB sleep 1; $BB pidof rms1-mediad >/dev/null && { $BB sleep 2; $BB pidof rms1-mediad >/dev/null && echo MIDIA_ANTIGA_VIVA || echo sem_midia; } || echo sem_midia"
     # O `rms1-venc` de antes sai depois do `rms1-mediad`, que é o cliente dele: por SIGTERM ele termina o fluxo e solta o chip.

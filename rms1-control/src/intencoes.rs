@@ -346,13 +346,22 @@ impl Intencoes {
         self.pedir_taxa_torre(fonte, 0.0, 0.0);
     }
 
-    /// O robô por conta própria, ligado ou desligado. Desligado, o que as fontes `so_autonomo` pediram deixa de valer.
+    /// O robô por conta própria, ligado ou desligado. Desligado, o que as fontes `so_autonomo` pediram deixa de valer:
+    /// as rodas, a velocidade da torre, e o alvo de ângulo, se foi uma delas que o pôs (senão a torre seguiria indo até
+    /// ele com a autonomia desligada).
     pub fn definir_autonomia(&self, ligada: bool) {
         self.autonomia.store(ligada, Ordering::Relaxed);
         if !ligada {
             for f in self.fontes.iter().filter(|f| f.so_autonomo) {
                 f.twist.store(None);
                 f.taxa_torre.store(None);
+            }
+            let alvo = self.torre.load_full();
+            if alvo
+                .as_ref()
+                .is_some_and(|a| self.fontes[a.fonte].so_autonomo)
+            {
+                self.torre.compare_and_swap(&alvo, None);
             }
         }
     }

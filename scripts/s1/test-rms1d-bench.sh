@@ -62,6 +62,8 @@ case "$*" in
   *marca_gravada*) if tem sem_marca; then exit 0; fi; touch "$DEFEITO.marca"; echo marca_gravada ;;
   *marca_viva*) if [ -f "$DEFEITO.uma_falha" ] && [ -f "$DEFEITO.reiniciou" ]; then rm -f "$DEFEITO.uma_falha"; exit 1; fi; if [ -f "$DEFEITO.marca" ]; then echo marca_viva; else echo marca_sumiu; fi ;;
   # Só a cópia ao fundo da ativação, de nome `.robo-`, fica lenta: a da própria volta, rápida, não cobre a falta da espera.
+  # O envio do agente ao robô falha: o `adb` de verdade sai com 1.
+  *"push "*"/opt/robot/bin/rms1-agente") if tem envio_do_agente_falha; then exit 1; fi ;;
   *" pull "*".robo-"*) if tem copia_lenta; then sleep 4; fi; if tem pull_falha; then exit 1; fi
     # A cópia chega: o último argumento é o destino neste Mac.
     for d; do :; done; printf 'gravacao antiga' > "$d" ;;
@@ -191,6 +193,11 @@ esperar_copia
 : > "$ADB_LOG"
 if S1_BIN_AGENTE="$T/nao-existe" scripts/s1/rms1d-bench.sh up > "$T/up.txt" 2>&1 && grep -q "AVISO: não achei $T/nao-existe (cargo s1 -p rms1-agente)" "$T/up.txt" && grep -q "Robô pronto" "$T/up.txt" && ! grep -q "rms1-agente --config" "$ADB_LOG"; then echo "agente não compilado: avisa, não tenta subir, e segue"; else echo "AGENTE NÃO COMPILADO, E NÃO AVISOU OU TENTOU SUBIR:"; tail -4 "$T/up.txt"; falhou=1; fi
 esperar_copia
+echo envio_do_agente_falha > "$DEFEITO"
+: > "$ADB_LOG"
+if scripts/s1/rms1d-bench.sh up > "$T/up.txt" 2>&1 && grep -q "AVISO: o agente do robô não subiu (o envio de $S1_BIN_AGENTE ao robô falhou)" "$T/up.txt" && grep -q "Robô pronto" "$T/up.txt" && ! grep -q "rms1-agente --config" "$ADB_LOG"; then echo "envio do agente falhou: avisa, não tenta subir, e a ativação segue"; else echo "ENVIO DO AGENTE FALHOU, E A ATIVAÇÃO PAROU OU NÃO AVISOU:"; tail -4 "$T/up.txt"; falhou=1; fi
+esperar_copia
+: > "$DEFEITO"
 # Sem `[midia]` no arquivo o agente não tem de onde receber o pedido: não sobe, e não há do que avisar.
 grep -v -e '^\[midia' -e '^mixer' -e '^porta_video' -e '^venc' -e '^fonte' -e '^saida' deploy/s1/rms1d.toml > "$T/sem-midia.toml"
 : > "$ADB_LOG"

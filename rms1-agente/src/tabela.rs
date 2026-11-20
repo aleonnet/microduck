@@ -201,6 +201,14 @@ impl Tabela {
                 self.geral.renovar_ms
             ));
         }
+        // O agente tem de dar o canal por perdido, e zerar a linha dele, antes de a vez de quem assumiu vencer: depois
+        // disso o pedido que ele vinha renovando voltaria a valer. Uma renovação de folga, para o estado chegar.
+        if self.geral.perdeu_apos_ms + self.geral.renovar_ms > prazo_ms {
+            return Err(format!(
+                "geral.perdeu_apos_ms é {}, e a vez de quem assume o corpo vence em {prazo_ms} ms: com uma renovação de folga ({} ms), tem de caber no prazo",
+                self.geral.perdeu_apos_ms, self.geral.renovar_ms
+            ));
+        }
         for h in &self.habilidades {
             if let Habilidade::Mover {
                 ferramenta,
