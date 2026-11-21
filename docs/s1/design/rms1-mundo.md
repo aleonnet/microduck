@@ -10,11 +10,23 @@ estado da percepção. É puro, sem soquete e sem relógio próprio, como o `rms
 contraprovas). Ainda não está ligado ao `rms1-mediad`, e a câmera do robô não foi medida: sem ela, o mundo do robô só diz
 `no_camera`. Nenhum número deste documento vem do robô.
 
+**Estado em 2026-11-21:** o pacote está ligado ao `rms1-mediad` e publica (seção da camada de mundo em
+[`rms1-mediad.md`](rms1-mediad.md)). **O robô mostra o mundo sem esperar a calibração:** sem a entrada `camera` na tabela, vale a lente
+que ele mesmo traz de fábrica (o `rms1-mediad` a lê no arquivo do próprio robô, e os números dela, que são de cada robô, não
+moram neste repositório), dita provisória, e a linha diz `lens.calibrated: false`; a calibração grava a lente medida na
+tabela e só diz se a medida está certa. O cano do lançador, que a lente do robô vê embaixo, no meio do quadro, sai da conta pela
+geometria dele (`cano_na_lente`, da malha do app, com a folga `corpo_folga_m`). E a conferência das duas contas da escala
+tem o limite dela, `reta_tolerancia`: no quadro real guardado (no laboratório,
+`out/2026-11-20-o-s1-ve-em-metros/exame-da-grade-real.txt`) a foto indica a torre a 6,5 graus para baixo, e nessa
+inclinação as duas contas diferem 18,8%; com o limite antigo (10%) o chão real era recusado. Com 0,3, na lente do robô, o
+erro de inclinação de 20 graus ou mais é sempre recusado, e o que passa erra a escala em até 32,4% (o teste
+`com_a_inclinacao_muito_errada_o_quadro_nao_e_dado_por_medido` mede e limita): o erro pequeno quem mede é a calibração.
+
 ## 1. O que entra e o que sai
 
 | Entra | De onde | Forma |
 |---|---|---|
-| a câmera | a tabela física (`rms1d-params/robo_s1.json`) | a lente (`camera`, só quando medida; no simulador, `camera_simulada`, que sai do campo de visão) e onde ela fica (`camera_no_corpo`, da malha do app) |
+| a câmera | a tabela física (`rms1d-params/robo_s1.json`) | a lente (`camera`, que a calibração grava; até lá, a de fábrica do próprio robô, provisória, lida do arquivo dele pela regra de `camera_de_fabrica`; no simulador, `camera_simulada`, que sai do campo de visão), onde ela fica (`camera_no_corpo`, da malha do app) e o cano do lançador que ela vê (`cano_na_lente`, da malha; só na câmera do robô) |
 | uma amostra | o `rms1d`, por `s1.subscribe` | a hora, o giro e a inclinação da torre (a inclinação em relação ao chão) e a pose `[x, y, rumo]` |
 | uma grade | a estação, pela entrega `mapa` | 16 bytes de cabeçalho e a grade, como o leitor de profundidade a escreve; com o nome do leitor e a hora em que o quadro foi tirado |
 | uma falha | a marca do quadro, da estação | a hora e o motivo |
@@ -44,9 +56,13 @@ grade diz. O que está mais perto que o chão puxa essa razão para cima. Na fai
 é a mediana das razões que ficam a menos de `tolerancia` do quartil de baixo. Ela só vale se:
 
 1. a fração da faixa que entrou na conta passa de `chao_minimo`; e
-2. ela bate, dentro de `tolerancia`, com a escala tirada por outro caminho: a inclinação da reta de `u` contra `yn`, que no
-   chão vale `escala·cos(i)/altura` e não depende de onde o horizonte está. Com uma parede enchendo a faixa, ou com a grade
-   casada com a inclinação errada, as duas se separam, e a distância entre elas é o próprio erro que a escala teria.
+2. ela bate, dentro de `reta_tolerancia`, com a escala tirada por outro caminho: a inclinação da reta de `u` contra `yn`,
+   que no chão vale `escala·cos(i)/altura` e não depende de onde o horizonte está. Com uma parede enchendo a faixa, ou com
+   a grade casada com uma inclinação muito errada, as duas se separam. O desvio entre elas é perto de 0,8 do erro que a
+   escala teria (medido nas cenas desenhadas); em imagem real o chão do modelo é plano só a menos de uns 10%, e por isso o
+   limite é largo: a conferência recusa a parede e o erro grande, e não mede o pequeno.
+
+Os pontos da grade que olham para o cano do lançador (`Raios::tapado`) ficam fora da faixa e da conta, e não viram ocupado.
 
 Quando o quadro não dá escala, vale a mediana das escalas boas dos últimos `escala_vale_ms`, e o mundo diz que ela é
 lembrada; sem nenhuma, não há metros (`no_floor`).
@@ -85,7 +101,8 @@ todas as direções (o chassi anda para qualquer lado), e a torre inclinando par
 
 `ok`, `stale` (sem grade há mais de `velho_s`), `failed` (a estação disse a falha, com o motivo), `no_floor` (a grade
 chegou, e não há escala), `no_metres` (o leitor ligado não é o `scdepthv3`), `no_pose` (sem amostra perto do instante do
-quadro, por `torre_vale_ms`) e `no_camera`. Em qualquer estado o mapa segue com o que lembra, cada célula com a idade.
+quadro, por `torre_vale_ms`) e `no_camera` (a tabela sem a lente). À parte do estado, `lens.calibrated` diz se a lente já foi
+medida: com a provisória o mundo aparece do mesmo jeito, e quem mostra os metros diz que não estão calibrados. Em qualquer estado o mapa segue com o que lembra, cada célula com a idade.
 
 ## 5. O medido nas cenas desenhadas (`cargo test -p rms1-mundo`, 2026-11-20)
 
@@ -102,7 +119,8 @@ quadro, por `torre_vale_ms`) e `no_camera`. Em qualquer estado o mapa segue com 
 ## 6. Os ajustes (`[midia.mundo]`, em `rms1d.toml`)
 
 Os padrões são de partida, e a origem de cada um está em `rms1d-params/src/lib.rs`, em `Default` de `MidiaMundo`: `ritmo`,
-`ritmo_da_grade`, `setores`, `alcance_m`, `semente_de`, `tolerancia`, `chao_minimo`, `escala_vale_ms`, `celula_m`,
+`ritmo_da_grade`, `setores`, `alcance_m`, `semente_de`, `tolerancia`, `chao_minimo`, `reta_tolerancia`, `corpo_folga_m`,
+`escala_vale_ms`, `celula_m`,
 `janela_m`, `altura_minima_m`, `altura_maxima_m`, `confirma_livre`, `lembra_s`, `fresco_s`, `velho_s`, `torre_vale_ms`,
 `gravar` e `gravar_limite_mb`. Cada um tem faixa, e o valor fora dela é recusado pelo nome.
 

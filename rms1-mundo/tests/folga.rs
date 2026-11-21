@@ -3,8 +3,8 @@
 
 mod comum;
 
-use comum::{amostra, caixa_em, parede_em};
-use rms1_mundo::{Amostra, Corpo, Estado, Mundo, Olho, Percepcao, Setor};
+use comum::{amostra, caixa_em, entrega, parede_em, profundidades};
+use rms1_mundo::{Amostra, Corpo, Estado, Mundo, Olho, Percepcao, Raios, Setor};
 
 const K: f64 = 0.1;
 
@@ -159,7 +159,7 @@ fn o_estado_da_percepcao_diz_por_que_nao_ha_medida() {
     let a = amostra(1.0, 0.0, 0.0, [0.0; 3]);
     let carga = comum::ver(&olho, &a, &cena, K);
 
-    // Sem a câmera medida: o mundo só diz que ela falta.
+    // Sem a lente na tabela: o mundo só diz que ela falta.
     let mut m = Mundo::novo(None, comum::corpo(), comum::ajustes()).unwrap();
     m.amostra(a);
     assert_eq!(
@@ -264,6 +264,10 @@ fn as_duas_linhas_levam_o_mundo_a_quem_assina() {
     assert_eq!(linha["frame_age_ms"], 40.0);
     assert_eq!(linha["lens"]["hfov_deg"], 120.0);
     assert_eq!(
+        linha["lens"]["calibrated"], true,
+        "a lente do simulador é exata por construção"
+    );
+    assert_eq!(
         linha["perception"],
         serde_json::json!({"state": "ok", "reason": null, "scale": "measured"})
     );
@@ -304,4 +308,116 @@ fn as_duas_linhas_levam_o_mundo_a_quem_assina() {
         ];
         assert_eq!(m.estado_em(meio, 1.04), Estado::Ocupada);
     }
+}
+
+/// A câmera do robô, com a lente provisória de fábrica: o mundo aparece do mesmo jeito (o chão, a caixa e os metros), e a
+/// linha diz que a lente não está calibrada. Estar calibrado diz se a medida está certa, e não se ela aparece.
+#[test]
+fn com_a_lente_provisoria_o_mundo_aparece_e_diz_que_nao_esta_calibrado() {
+    let olho = comum::olho_do_robo();
+    assert!(olho.lente.provisoria);
+    let mut m = comum::mundo(olho);
+    for quadro in 0..3 {
+        olhar(
+            &mut m,
+            &olho,
+            amostra(1.0 + f64::from(quadro) / 15.0, 0.0, 0.0, [0.0; 3]),
+            &[caixa_em(1.0, 0.0), parede_em(4.0)],
+        );
+    }
+    let agora = m.agora(1.2);
+    let linha = agora.linha();
+    assert_eq!(
+        linha["perception"],
+        serde_json::json!({"state": "ok", "reason": null, "scale": "measured"}),
+        "{linha}"
+    );
+    assert_eq!(linha["lens"]["calibrated"], false, "{linha}");
+    let a_frente = agora.obstaculo.expect("o corredor foi visto").ahead_m;
+    assert!(
+        (a_frente - 0.84).abs() <= 0.06,
+        "a caixa a 0,84 m da frente do chassi saiu a {a_frente} m"
+    );
+}
+
+/// O cano do lançador na frente da lente do robô. Sem tirá-lo da conta, ele vira ocupado dentro do próprio corpo do robô;
+/// tirado, o que o mundo diz é a cena: a escala do modelo, o chão livre e a caixa onde ela está.
+#[test]
+fn o_cano_do_lancador_nao_vira_obstaculo() {
+    let olho = comum::olho_do_robo();
+    let cena = [caixa_em(1.0, 0.0), parede_em(4.0)];
+    // As células ocupadas a menos de 30 cm do centro do corpo: ali não há nada na cena.
+    let coladas = |m: &Mundo, t: f64| {
+        m.celulas(t)
+            .into_iter()
+            .filter(|(c, estado, _)| {
+                let lado = comum::ajustes().celula_m;
+                let (x, y) = ((f64::from(c[0]) + 0.5) * lado, (f64::from(c[1]) + 0.5) * lado);
+                *estado == Estado::Ocupada && x.hypot(y) < 0.3
+            })
+            .count()
+    };
+    let ver = |m: &mut Mundo| {
+        let mut ultima = None;
+        for quadro in 0..3 {
+            let a = amostra(1.0 + f64::from(quadro) / 15.0, 0.0, 0.0, [0.0; 3]);
+            let mut prof = profundidades(&olho, &a, &cena);
+            comum::por_o_cano(&olho, &mut prof);
+            m.amostra(a);
+            ultima = Some(m.grade(&entrega(&prof, K, None), "scdepthv3", a.t).unwrap());
+        }
+        ultima.unwrap()
+    };
+
+    // A câmera que não sabe do cano: ele entra no mapa, colado no robô.
+    let mut cega = olho;
+    cega.cano = None;
+    let mut m = comum::mundo(cega);
+    ver(&mut m);
+    assert!(
+        coladas(&m, 1.2) > 0,
+        "sem tirar o cano da conta, ele tinha de aparecer como ocupado colado no robô: o teste não prova nada"
+    );
+
+    // A câmera do robô: o cano fica fora da escala e da ocupação.
+    let mut m = comum::mundo(olho);
+    let tratada = ver(&mut m);
+    let escala = tratada.do_quadro.expect("o chão dá a escala do quadro");
+    // A faixa de baixo é contada sem os pontos que olham para o cano, e nenhum deles entra na conta da escala.
+    let raios = Raios::da_grade(
+        &olho,
+        comum::LARGURA,
+        comum::ALTURA,
+        comum::ajustes().corpo_folga_m,
+    );
+    let faixa = 36 * comum::LARGURA;
+    let tapados_na_faixa = (comum::ALTURA * comum::LARGURA - faixa..comum::ALTURA * comum::LARGURA)
+        .filter(|&k| raios.tapado(k))
+        .count();
+    let exame = tratada.exame.expect("o exame da faixa de baixo");
+    assert!(tapados_na_faixa > 1000, "{tapados_na_faixa}");
+    assert_eq!(
+        exame.total,
+        faixa - tapados_na_faixa,
+        "a faixa de baixo tem de ser contada sem os pontos do cano"
+    );
+    assert!(
+        exame.pontos <= exame.total,
+        "pontos do cano entraram na conta da escala: {exame:?}"
+    );
+    assert!(
+        (escala.valor / K - 1.0).abs() <= 0.02,
+        "com o cano no quadro, a escala saiu {} e a do modelo é {K}",
+        escala.valor
+    );
+    assert_eq!(
+        coladas(&m, 1.2),
+        0,
+        "o cano do lançador virou ocupado colado no robô"
+    );
+    let a_frente = m.agora(1.2).obstaculo.expect("o corredor foi visto").ahead_m;
+    assert!(
+        (a_frente - 0.84).abs() <= 0.06,
+        "com o cano no quadro, a caixa a 0,84 m da frente do chassi saiu a {a_frente} m"
+    );
 }

@@ -51,7 +51,7 @@ pub enum Percepcao {
     SemMetros,
     /// Sem a torre e a pose do instante do quadro: o `rms1d` não está publicando.
     SemPose,
-    /// A câmera do robô ainda não foi medida.
+    /// A tabela física não traz a lente desta câmera.
     SemCamera,
 }
 
@@ -96,6 +96,9 @@ pub struct Agora {
     pub folga: Vec<Setor>,
     /// O campo de visão da lente, em graus: o horizontal e o vertical.
     pub lente: Option<[f64; 2]>,
+    /// A lente já foi medida por nós. Com a provisória (a que o robô traz de fábrica), o mundo aparece do mesmo jeito, e os
+    /// metros dele não estão calibrados: quem os mostra diz isso.
+    pub calibrada: bool,
 }
 
 /// O número que o JSON aceita: o infinito e o que não é número viram `null`.
@@ -109,7 +112,8 @@ fn numero(v: f64, casas: i32) -> Value {
 
 impl Agora {
     /// Os parâmetros de `s1.world`. A folga é uma lista de `[rumo em graus, metros, estado, idade em segundos]`, com o estado
-    /// 0 (não visto), 1 (livre até ali) ou 2 (ocupado ali); no obstáculo, `ahead_m` nulo é o corredor livre.
+    /// 0 (não visto), 1 (livre até ali) ou 2 (ocupado ali); no obstáculo, `ahead_m` nulo é o corredor livre. Em `lens`,
+    /// `calibrated` falso é a lente provisória: os metros aparecem, e não estão calibrados.
     pub fn linha(&self) -> Value {
         let folga: Vec<Value> = self
             .folga
@@ -126,7 +130,7 @@ impl Agora {
         json!({
             "frame": "body",
             "frame_age_ms": self.idade_do_quadro_ms.map(|i| numero(i, 0)),
-            "lens": self.lente.map(|[h, v]| json!({"hfov_deg": numero(h, 2), "vfov_deg": numero(v, 2)})),
+            "lens": self.lente.map(|[h, v]| json!({"hfov_deg": numero(h, 2), "vfov_deg": numero(v, 2), "calibrated": self.calibrada})),
             "perception": {
                 "state": self.percepcao.nome(),
                 "reason": self.motivo,
@@ -250,7 +254,12 @@ impl Mundo {
                 .as_ref()
                 .is_some_and(|r| r.serve(g.largura, g.altura))
             {
-                self.raios = Some(Raios::da_grade(&olho, g.largura, g.altura));
+                self.raios = Some(Raios::da_grade(
+                    &olho,
+                    g.largura,
+                    g.altura,
+                    self.ajustes.corpo_folga_m,
+                ));
             }
             let raios = self.raios.as_ref().expect("os raios desta grade");
             let exame = escala::examinar(&g, &self.conversor, &vista, raios, &self.ajustes);
@@ -330,6 +339,7 @@ impl Mundo {
             obstaculo,
             folga,
             lente: self.olho.map(|o| o.campo_grau()),
+            calibrada: self.olho.is_some_and(|o| !o.lente.provisoria),
         }
     }
 

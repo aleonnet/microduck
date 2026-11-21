@@ -94,6 +94,7 @@ fn o_cliente_leva_as_amostras_ao_mundo_diz_quando_faltam_e_religa_sozinho() {
     let olho = Olho {
         lente: f.camera_simulada,
         no_corpo: f.camera_no_corpo,
+        cano: None,
     };
     let corpo_do_robo = Corpo {
         largura_m: f.largura_m,

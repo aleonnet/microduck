@@ -8,9 +8,14 @@
 //!   app o põe a 5 mm dele);
 //! - **a odometria:** o corpo posto na pose `[x, y, rumo]`.
 //!
-//! Nenhum número do robô mora aqui: a lente e a posição dela vêm da tabela física, por quem chama.
+//! O que a lente vê do próprio robô não é mundo: o cano do lançador fica na torre, como a lente, e por isso aparece sempre no
+//! mesmo lugar do quadro. Os pontos da grade que olham para ele (com uma folga) ficam fora da conta, tirados pela geometria
+//! dele, antes da escala e da ocupação. É como quem faz mapa com braço ou carroceria no quadro resolve: o modelo do corpo com
+//! folga (`robot_body_filter`, MoveIt) ou, para o que é fixo na imagem, uma máscara fixa por câmera.
+//!
+//! Nenhum número do robô mora aqui: a lente, a posição dela e o cano vêm da tabela física, por quem chama.
 
-use rms1d_params::{Camera, CameraNoCorpo};
+use rms1d_params::{Camera, CameraNoCorpo, CanoNaLente};
 use serde::{Deserialize, Serialize};
 
 use crate::historia::Amostra;
@@ -20,6 +25,10 @@ use crate::historia::Amostra;
 pub struct Olho {
     pub lente: Camera,
     pub no_corpo: CameraNoCorpo,
+    /// O cano do lançador, quando ele aparece no quadro desta câmera. A do simulador não o vê (o sensor de profundidade da
+    /// página não desenha o robô), e a gravação de antes de ele existir não o traz.
+    #[serde(default)]
+    pub cano: Option<CanoNaLente>,
 }
 
 impl Olho {
@@ -46,30 +55,67 @@ impl Olho {
     }
 }
 
-/// O centro de cada coluna e de cada linha de uma grade, normalizado. A grade cobre o quadro inteiro da lente, seja qual for o
-/// tamanho dela.
+/// O centro de cada coluna e de cada linha de uma grade, normalizado, e os pontos dela que olham para o próprio robô. A grade
+/// cobre o quadro inteiro da lente, seja qual for o tamanho dela.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Raios {
     pub xn: Vec<f64>,
     pub yn: Vec<f64>,
+    /// Linha por linha, de cima para baixo: o ponto olha para o cano do lançador, e não para o mundo.
+    tapados: Vec<bool>,
 }
 
 impl Raios {
-    pub fn da_grade(olho: &Olho, largura: usize, altura: usize) -> Self {
+    /// `folga_m` engorda o cano: o que a lente vê a menos dessa distância dele também fica de fora.
+    pub fn da_grade(olho: &Olho, largura: usize, altura: usize, folga_m: f64) -> Self {
         let l = &olho.lente;
-        Self {
-            xn: (0..largura)
-                .map(|i| ((i as f64 + 0.5) * l.largura / largura as f64 - l.cx) / l.fx)
-                .collect(),
-            yn: (0..altura)
-                .map(|j| ((j as f64 + 0.5) * l.altura / altura as f64 - l.cy) / l.fy)
-                .collect(),
+        let xn: Vec<f64> = (0..largura)
+            .map(|i| ((i as f64 + 0.5) * l.largura / largura as f64 - l.cx) / l.fx)
+            .collect();
+        let yn: Vec<f64> = (0..altura)
+            .map(|j| ((j as f64 + 0.5) * l.altura / altura as f64 - l.cy) / l.fy)
+            .collect();
+        let mut tapados = vec![false; largura * altura];
+        if let Some(cano) = &olho.cano {
+            for (j, &y) in yn.iter().enumerate() {
+                for (i, &x) in xn.iter().enumerate() {
+                    tapados[j * largura + i] = bate_no_cano(cano, x, y, folga_m);
+                }
+            }
         }
+        Self { xn, yn, tapados }
     }
 
     pub fn serve(&self, largura: usize, altura: usize) -> bool {
         self.xn.len() == largura && self.yn.len() == altura
     }
+
+    /// O ponto `k` da grade (linha por linha) olha para o próprio robô.
+    pub fn tapado(&self, k: usize) -> bool {
+        self.tapados[k]
+    }
+
+    /// Quantos pontos da grade olham para o próprio robô.
+    pub fn tapados(&self) -> usize {
+        self.tapados.iter().filter(|t| **t).count()
+    }
+}
+
+/// O raio do ponto `[xn, yn]` passa a menos de `raio + folga` do eixo do cano em algum lugar entre a lente e a ponta dele. A
+/// `t` metros à frente da lente o raio está em `t * [-xn, -yn]` (para a esquerda e para cima), e o eixo do cano em
+/// `[esquerda, -abaixo]`: a distância entre os dois é menor onde `t` é a projeção do eixo sobre o raio, presa ao trecho.
+fn bate_no_cano(cano: &CanoNaLente, xn: f64, yn: f64, folga_m: f64) -> bool {
+    let alcance = cano.raio_m + folga_m;
+    let (a, b) = (-xn, -yn);
+    let (ey, ez) = (cano.esquerda_m, -cano.abaixo_m);
+    let quadrado = a * a + b * b;
+    let t = if quadrado > 0.0 {
+        ((a * ey + b * ez) / quadrado).clamp(0.0, cano.frente_m)
+    } else {
+        0.0
+    };
+    let (dy, dz) = (t * a - ey, t * b - ez);
+    dy * dy + dz * dz <= alcance * alcance
 }
 
 /// Um ponto do corpo, levado à odometria.

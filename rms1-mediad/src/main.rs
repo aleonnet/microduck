@@ -204,6 +204,25 @@ fn subir_microfone(
     Ok(())
 }
 
+/// A lente provisória da câmera do robô: a do arquivo de calibração que ele mesmo traz de fábrica. Sem o arquivo, ou com ele
+/// ilegível, não há lente, e o mundo diz `no_camera`: o motivo fica no registro.
+fn lente_de_fabrica(fisica: &Fisica) -> Option<rms1d_params::Camera> {
+    let arquivo = rms1d_params::ARQUIVO_DA_CAMERA_DE_FABRICA;
+    let lida = std::fs::read_to_string(arquivo)
+        .map_err(|e| e.to_string())
+        .and_then(|texto| fisica.camera_pela_de_fabrica(&texto));
+    match lida {
+        Ok(lente) => {
+            tracing::warn!(arquivo, foco = lente.fx, cx = lente.cx, cy = lente.cy, "a lente da câmera é a de fábrica, provisória: os metros do mundo não estão calibrados");
+            Some(lente)
+        }
+        Err(motivo) => {
+            tracing::error!(arquivo, %motivo, "sem a lente de fábrica da câmera: o mundo vai dizer no_camera");
+            None
+        }
+    }
+}
+
 fn main() -> ExitCode {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -319,18 +338,20 @@ fn main() -> ExitCode {
                 devolver,
             }
         });
-        // A camada de mundo: com a câmera do robô ou a do simulador, a grade de profundidade da estação vira o chão em volta
-        // do robô. A lente do robô só existe na tabela depois de medida: sem ela, o mundo só diz que ela falta. A câmera de
-        // teste não olha para lugar nenhum, e fica sem mundo.
+        // A camada de mundo: com a câmera do robô ou a do simulador, a grade de profundidade vira o chão em volta do robô. A
+        // lente do robô é a da tabela, depois de medida; até lá, a que o próprio robô traz de fábrica, provisória: o mundo
+        // aparece com ela, e diz que não está calibrado. A câmera do robô vê o cano do lançador, que sai da conta; a do
+        // simulador não o vê (o sensor de profundidade da página não desenha o robô). A câmera de teste não olha para lugar
+        // nenhum, e fica sem mundo.
         let fisica = Fisica::da_tabela();
         let lente = match midia.camera.fonte {
-            FonteCamera::S1 => Some(fisica.camera),
-            FonteCamera::Simulador => Some(Some(fisica.camera_simulada)),
+            FonteCamera::S1 => Some((fisica.camera.or_else(|| lente_de_fabrica(&fisica)), Some(fisica.cano_na_lente))),
+            FonteCamera::Simulador => Some((Some(fisica.camera_simulada), None)),
             FonteCamera::Teste => None,
         };
         let mut mundo = None;
-        if let Some(lente) = lente {
-            let olho = lente.map(|lente| rms1_mundo::Olho { lente, no_corpo: fisica.camera_no_corpo });
+        if let Some((lente, cano)) = lente {
+            let olho = lente.map(|lente| rms1_mundo::Olho { lente, no_corpo: fisica.camera_no_corpo, cano });
             let corpo_do_robo = rms1_mundo::Corpo { largura_m: fisica.largura_m, frente_m: fisica.frente_m };
             let partilhado = match rms1_mundo::Mundo::novo(olho, corpo_do_robo, midia.mundo.clone()) {
                 Ok(m) => Arc::new(std::sync::Mutex::new(m)),

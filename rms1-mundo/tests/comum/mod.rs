@@ -20,6 +20,46 @@ pub fn olho_do_simulador() -> Olho {
     Olho {
         lente: f.camera_simulada,
         no_corpo: f.camera_no_corpo,
+        cano: None,
+    }
+}
+
+/// A câmera do robô, como ele a tem hoje: a lente provisória, do arquivo de fábrica (aqui com números de teste, na forma
+/// dele: os do arquivo são de cada robô), com o cano do lançador no quadro.
+pub fn olho_do_robo() -> Olho {
+    let f = Fisica::da_tabela();
+    Olho {
+        lente: f
+            .camera_pela_de_fabrica("700.5,481.25,349.5,0.000000")
+            .expect("a lente de fábrica de teste"),
+        no_corpo: f.camera_no_corpo,
+        cano: Some(f.cano_na_lente),
+    }
+}
+
+/// Põe o cano do lançador nas profundidades de uma cena: onde o raio de um ponto da grade entra no cilindro dele, a
+/// profundidade passa a ser a dessa entrada. Por amostragem ao longo do raio, e não pela conta fechada do pacote: o cano anda
+/// com a lente, e por isso a conta é feita na lente, sem a torre nem o corpo.
+pub fn por_o_cano(olho: &Olho, profundidades: &mut [f64]) {
+    let cano = olho.cano.expect("esta câmera vê o cano");
+    let l = &olho.lente;
+    for j in 0..ALTURA {
+        for i in 0..LARGURA {
+            let u = (i as f64 + 0.5) * l.largura / LARGURA as f64;
+            let v = (j as f64 + 0.5) * l.altura / ALTURA as f64;
+            let (xn, yn) = ((u - l.cx) / l.fx, (v - l.cy) / l.fy);
+            for passo in 1..=400 {
+                let t = cano.frente_m * f64::from(passo) / 400.0;
+                let (esquerda, cima) = (-t * xn, -t * yn);
+                let fora_do_eixo =
+                    (esquerda - cano.esquerda_m).hypot(cima + cano.abaixo_m);
+                if fora_do_eixo <= cano.raio_m {
+                    let k = j * LARGURA + i;
+                    profundidades[k] = profundidades[k].min(t);
+                    break;
+                }
+            }
+        }
     }
 }
 
@@ -36,12 +76,14 @@ pub fn olho_de_teste() -> Olho {
             altura: 720.0,
             zero_inclinacao_grau: 1.5,
             atraso_ms: 0.0,
+            provisoria: false,
         },
         no_corpo: CameraNoCorpo {
             eixo_altura_m: 0.21,
             lente_frente_m: 0.07,
             lente_acima_m: 0.02,
         },
+        cano: None,
     }
 }
 

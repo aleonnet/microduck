@@ -170,8 +170,11 @@ impl Mapa {
             let mut objeto_de_baixo: Option<[i32; 2]> = None;
             for j in (0..g.altura).rev() {
                 let yn = raios.yn[j];
-                let u = f64::from(conversor.inverso(g, j * g.largura + i));
-                if u <= 0.0 {
+                // O ponto que olha para o próprio robô (o cano do lançador) não diz nada do mundo, como o que veio sem
+                // profundidade.
+                let k = j * g.largura + i;
+                let u = f64::from(conversor.inverso(g, k));
+                if u <= 0.0 || raios.tapado(k) {
                     (chao_de_baixo, objeto_de_baixo) = (None, None);
                     continue;
                 }

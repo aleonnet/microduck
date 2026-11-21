@@ -11,11 +11,19 @@
 //! `out/2026-11-20-distancia-na-estacao/reta_do_chao.py`).
 //!
 //! Duas conferências antes de a escala de um quadro valer. A primeira é a fração da faixa que ficou na conta. A segunda é a
-//! escala sair igual por dois caminhos: pela razão, acima, e pela inclinação da reta do inverso da profundidade contra a linha
-//! do quadro, que no chão vale `escala * cos(inclinação) / altura` e não depende de onde o horizonte está. Com a faixa cheia
-//! de chão e a inclinação da torre certa, as duas dão o mesmo número. Com uma parede enchendo a faixa (o inverso não muda com
-//! a linha) ou com a grade casada com a inclinação errada (o horizonte está noutro lugar), elas se separam, e a distância
-//! entre elas é o próprio erro que a escala teria: o quadro só é dado por medido com esse erro dentro da tolerância.
+//! escala sair parecida por dois caminhos: pela razão, acima, e pela inclinação da reta do inverso da profundidade contra a
+//! linha do quadro, que no chão vale `escala * cos(inclinação) / altura` e não depende de onde o horizonte está. Com a faixa
+//! cheia de chão e a inclinação da torre certa, as duas dão o mesmo número. Com uma parede enchendo a faixa (o inverso não
+//! muda com a linha) ou com a grade casada com uma inclinação muito errada (o horizonte está noutro lugar), elas se separam.
+//!
+//! O limite dessa segunda conferência é `reta_tolerancia`, e não a `tolerancia` do chão. Em imagem real o chão do modelo é
+//! plano só a menos de uns 10%, e a inclinação da reta amplifica isso: no quadro real guardado em 2026-11-20, na inclinação
+//! que a própria foto indica, as duas contas diferem de 19 a 20% (no laboratório,
+//! `out/2026-11-20-o-s1-ve-em-metros/exame_da_grade_real.py`). A conferência recusa a parede e o erro grande de inclinação; o
+//! erro pequeno ela não vê, e quem o mede é a calibração. É o que quem tira a escala do chão faz: a escala é a mediana das
+//! alturas por ponto, e a inclinação vem de fora (da telemetria da torre, aqui), e não da própria imagem.
+//!
+//! Os pontos que olham para o próprio robô (o cano do lançador: `Raios::tapado`) ficam fora da conta inteira.
 
 use std::collections::VecDeque;
 
@@ -50,7 +58,7 @@ pub enum Recusa {
     ChaoEspalhado,
     /// A reta do inverso da profundidade contra a linha é deitada ou desce: uma parede enchendo a faixa.
     SemReta,
-    /// A escala pela razão e a escala pela inclinação da reta diferem mais que a tolerância.
+    /// A escala pela razão e a escala pela inclinação da reta diferem mais que `reta_tolerancia`.
     Desvio,
 }
 
@@ -69,7 +77,7 @@ impl Recusa {
 /// para saber por que um quadro não foi dado por medido.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Exame {
-    /// Quantos pontos a faixa de baixo tem.
+    /// Quantos pontos a faixa de baixo tem, sem os que olham para o próprio robô.
     pub total: usize,
     /// Quantos deles podiam ser chão: abaixo do horizonte, dentro do alcance, com profundidade.
     pub pontos: usize,
@@ -121,7 +129,10 @@ pub fn examinar(
     ajustes: &Ajustes,
 ) -> Exame {
     let de = ((ajustes.semente_de * g.altura as f64).ceil() as usize).min(g.altura);
-    let total = (g.altura - de) * g.largura;
+    // A faixa de baixo, sem os pontos que olham para o próprio robô.
+    let total = (de * g.largura..g.altura * g.largura)
+        .filter(|&k| !raios.tapado(k))
+        .count();
     let minimo = ((ajustes.chao_minimo * total as f64).ceil() as usize).max(8);
     let altura = vista.altura;
     let mut exame = Exame {
@@ -147,6 +158,9 @@ pub fn examinar(
             continue;
         }
         for i in 0..g.largura {
+            if raios.tapado(j * g.largura + i) {
+                continue;
+            }
             let u = conversor.inverso(g, j * g.largura + i);
             if u > 0.0 {
                 pontos.push((raios.yn[j] as f32, (z_chao * f64::from(u)) as f32, u));
@@ -197,7 +211,7 @@ pub fn examinar(
     exame.pela_reta = Some(pela_reta);
     let desvio = (valor / pela_reta - 1.0).abs();
     exame.desvio = Some(desvio);
-    if desvio > ajustes.tolerancia {
+    if desvio > ajustes.reta_tolerancia {
         exame.recusa = Some(Recusa::Desvio);
     }
     exame

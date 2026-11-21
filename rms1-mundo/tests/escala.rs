@@ -14,7 +14,7 @@ fn medir(olho: &Olho, a: &Amostra, carga: &[u8], alvo: [f64; 3]) -> (Option<DoQu
     let mut conversor = Conversor::default();
     conversor.preparar(&g);
     let vista = Vista::nova(olho, a);
-    let raios = Raios::da_grade(olho, g.largura, g.altura);
+    let raios = Raios::da_grade(olho, g.largura, g.altura, comum::ajustes().corpo_folga_m);
     let achada = escala::do_quadro(&g, &conversor, &vista, &raios, &comum::ajustes());
     let [xn, yn, z] = vista.da_lente(alvo).expect("o alvo está à frente da lente");
     let [u, v] = olho.no_quadro(xn, yn);
@@ -222,16 +222,25 @@ fn com_a_torre_para_cima_o_chao_sai_da_faixa_e_o_quadro_nao_e_medido() {
     );
 }
 
-/// A grade casada com a inclinação errada: o que a faixa mostra não é o chão que a conta espera. O quadro só é dado por medido
-/// com o erro de escala dentro da tolerância (mais dois pontos, do que a conferência não vê), e com 10° ou mais de erro ele
-/// nunca é dado por medido. O erro pequeno de inclinação passa, e o teste diz quanto de escala cada um custa.
+/// A grade casada com a inclinação errada: o que a faixa mostra não é o chão que a conta espera. A conferência das duas
+/// contas da escala tem o limite `reta_tolerancia`, largo o bastante para o chão de uma imagem real passar: ela recusa o erro
+/// grande, e o pequeno passa, com o custo de escala que este teste mede e limita. Com a câmera do robô (a lente de fábrica),
+/// 20° ou mais de erro nunca são dados por medidos, e o que passa erra a escala em até 32,4% (medido em 2026-11-21; 5° de
+/// erro custam até 30%). Com a lente larga do simulador a conferência vê menos (a mesma inclinação muda menos a reta): lá, 30°
+/// ou mais nunca passam, e o que passa erra em até 37,5%. O desvio entre as duas contas é perto de 0,8 do erro de escala: o
+/// limite de 0,3 deixa passar o que erraria até uns 35%. O erro pequeno de inclinação quem mede é a calibração (o zero da
+/// inclinação e o atraso do quadro), e não esta conferência.
 #[test]
-fn com_a_inclinacao_errada_o_quadro_nao_e_dado_por_medido() {
-    let tolerancia = comum::ajustes().tolerancia;
-    for (nome, olho) in [
-        ("simulador", comum::olho_do_simulador()),
-        ("teste", comum::olho_de_teste()),
+fn com_a_inclinacao_muito_errada_o_quadro_nao_e_dado_por_medido() {
+    for (nome, olho, erro_recusado, custo) in [
+        ("simulador", comum::olho_do_simulador(), 30.0, 0.4),
+        ("teste", comum::olho_de_teste(), 20.0, 0.35),
+        ("robô", comum::olho_do_robo(), 20.0, 0.35),
     ] {
+        // A cena é vista sem o cano: o que se prova aqui é a conta da escala.
+        let mut olho = olho;
+        olho.cano = None;
+        let (mut maior_erro, mut maior_custo) = (0.0f64, 0.0f64);
         for de_verdade in [-20.0, -10.0, 0.0] {
             let prof = profundidades(
                 &olho,
@@ -240,7 +249,7 @@ fn com_a_inclinacao_errada_o_quadro_nao_e_dado_por_medido() {
             );
             let carga = entrega(&prof, 0.1, None);
             for erro in [
-                -20.0, -15.0, -10.0, -5.0, -2.0, 2.0, 5.0, 10.0, 15.0, 20.0f64,
+                -30.0, -20.0, -15.0, -10.0, -5.0, -2.0, 2.0, 5.0, 10.0, 15.0, 20.0, 30.0f64,
             ] {
                 let dita = amostra(0.0, 0.0, de_verdade + erro, [0.0; 3]);
                 let (achada, _, _) = medir(&olho, &dita, &carga, [5.9, 0.0, 2.5]);
@@ -254,15 +263,17 @@ fn com_a_inclinacao_errada_o_quadro_nao_e_dado_por_medido() {
                     ))
                 );
                 if let Some(e) = achada {
-                    assert!(
-                        erro.abs() < 10.0 && (e.valor / 0.1 - 1.0).abs() <= tolerancia + 0.02,
-                        "com a câmera do {nome}, a torre a {de_verdade}° e a grade casada com {}°, o quadro foi dado por medido, com a escala em {} no lugar de 0,1",
-                        de_verdade + erro,
-                        e.valor
-                    );
+                    maior_erro = maior_erro.max(erro.abs());
+                    maior_custo = maior_custo.max((e.valor / 0.1 - 1.0).abs());
                 }
             }
         }
+        println!("{nome}: o maior erro de inclinação dado por medido foi de {maior_erro}°, e o maior custo de escala, {:.1}%", maior_custo * 100.0);
+        assert!(
+            maior_erro < erro_recusado && maior_custo <= custo,
+            "com a câmera do {nome}, um quadro casado com a inclinação errada em {maior_erro}° foi dado por medido, e o maior erro de escala entre os que passaram foi de {:.1}%",
+            maior_custo * 100.0
+        );
     }
 }
 
@@ -276,7 +287,7 @@ fn o_exame_diz_por_que_a_escala_do_quadro_nao_valeu() {
         let mut conversor = Conversor::default();
         conversor.preparar(&g);
         let vista = Vista::nova(&olho, dita);
-        let raios = Raios::da_grade(&olho, g.largura, g.altura);
+        let raios = Raios::da_grade(&olho, g.largura, g.altura, comum::ajustes().corpo_folga_m);
         let ajustes = comum::ajustes();
         let exame = escala::examinar(&g, &conversor, &vista, &raios, &ajustes);
         assert_eq!(

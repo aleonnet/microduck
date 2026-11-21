@@ -11,14 +11,15 @@
 //!   Com `"requests": true`, recebe `s1.station.request {"request", "tool", "params"}`: cada pedido validado que a estação
 //!   manda o corpo cumprir. É a assinatura do agente.
 //!   Com `"world": true`, recebe `s1.world`, `[midia.mundo] ritmo` vezes por segundo: o chão em volta do robô, no corpo de
-//!   agora. `{"frame": "body", "frame_age_ms", "lens": {"hfov_deg", "vfov_deg"}, "perception": {"state", "reason", "scale"},
+//!   agora. `{"frame": "body", "frame_age_ms", "lens": {"hfov_deg", "vfov_deg", "calibrated"}, "perception": {"state", "reason", "scale"},
 //!   "obstacle": {"ahead_m", "away", "age_s"}, "clearance": [[rumo em graus, metros, estado, idade em s], ...]}`. O rumo é
 //!   positivo à esquerda; o estado de cada direção é 0 (não visto), 1 (livre até ali) ou 2 (ocupado ali); `ahead_m` é a
 //!   folga da frente do chassi, e nulo é o corredor livre; `obstacle` nulo é o corredor nunca visto. `state` vale `ok`,
 //!   `stale` (sem grade há mais de `velho_s`), `failed` (a estação disse a falha, e `reason` o motivo), `no_floor`,
 //!   `no_metres` (o leitor ligado na estação não dá metros), `no_pose` (o `rms1d` não está publicando a torre e a pose) ou
-//!   `no_camera` (a lente do robô não foi medida); `scale` diz se a escala é a do quadro (`measured`) ou a dos de antes
-//!   (`remembered`).
+//!   `no_camera` (a tabela física não traz a lente); `scale` diz se a escala é a do quadro (`measured`) ou a dos de antes
+//!   (`remembered`). `lens.calibrated` falso é a lente provisória, a que o robô traz de fábrica: o mundo aparece do mesmo
+//!   jeito, e os metros dele não estão calibrados.
 //!   Com `"world_grid": true`, recebe `s1.world.grid`, `ritmo_da_grade` vezes por segundo, para a tela: `{"frame": "odom",
 //!   "pose": [x, y, rumo em graus], "cell_m", "cells": [[ix, iy, estado, idade em s], ...]}`, só as células vistas e ainda
 //!   lembradas, com o canto de cada uma em `(ix * cell_m, iy * cell_m)` e o estado 1 (livre) ou 2 (ocupada). As duas saem

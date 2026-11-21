@@ -1,5 +1,5 @@
-//! A geometria: um ponto do quadro levado ao chão e de volta, com a torre girada e inclinada e o corpo em qualquer pose, e os
-//! casos de valor conhecido, feitos à mão.
+//! A geometria: um ponto do quadro levado ao chão e de volta, com a torre girada e inclinada e o corpo em qualquer pose, os
+//! casos de valor conhecido, feitos à mão, e os pontos da grade que olham para o cano do lançador.
 
 mod comum;
 
@@ -20,12 +20,14 @@ fn redonda() -> Olho {
             altura: 720.0,
             zero_inclinacao_grau: 0.0,
             atraso_ms: 0.0,
+            provisoria: false,
         },
         no_corpo: CameraNoCorpo {
             eixo_altura_m: 0.2,
             lente_frente_m: 0.08,
             lente_acima_m: 0.03,
         },
+        cano: None,
     }
 }
 
@@ -162,7 +164,8 @@ fn a_ida_e_a_volta_fecham_em_qualquer_arranjo() {
 #[test]
 fn a_grade_cobre_o_quadro_inteiro_da_lente() {
     let olho = redonda();
-    let raios = Raios::da_grade(&olho, 320, 180);
+    let raios = Raios::da_grade(&olho, 320, 180, 0.0);
+    assert_eq!(raios.tapados(), 0, "a câmera sem cano não tapa nada");
     assert!(raios.serve(320, 180) && !raios.serve(224, 126));
     // O meio da primeira coluna da grade fica a dois pontos da borda do quadro de 1280, e o da última, a dois da outra.
     assert!(
@@ -179,4 +182,62 @@ fn a_grade_cobre_o_quadro_inteiro_da_lente() {
         (h - 120.0).abs() < 1e-9 && (v - 88.50).abs() < 0.01,
         "{h} por {v}"
     );
+}
+
+/// O cano do lançador aparece embaixo, no meio do quadro da câmera do robô: os pontos da grade que olham para ele ficam fora da
+/// conta, com a folga pedida, e só eles.
+#[test]
+fn os_pontos_que_olham_para_o_cano_ficam_fora_da_conta() {
+    let olho = comum::olho_do_robo();
+    let cano = olho.cano.expect("a câmera do robô vê o cano");
+    let (largura, altura) = (320usize, 180usize);
+    // O ponto da grade em que cai um ponto da lente: `frente` metros à frente, `esquerda` e `cima` fora do eixo dela.
+    let ponto = |frente: f64, esquerda: f64, cima: f64| {
+        let [u, v] = olho.no_quadro(-esquerda / frente, -cima / frente);
+        assert!(
+            (0.0..olho.lente.largura).contains(&u) && (0.0..olho.lente.altura).contains(&v),
+            "o ponto ({frente}, {esquerda}, {cima}) cai fora do quadro: ({u}, {v})"
+        );
+        (v * altura as f64 / olho.lente.altura) as usize * largura
+            + (u * largura as f64 / olho.lente.largura) as usize
+    };
+    let justo = Raios::da_grade(&olho, largura, altura, 0.0);
+    let com_folga = Raios::da_grade(&olho, largura, altura, 0.005);
+    // Na ponta do cano, um milímetro para dentro da borda de cima dele: tapado. Três milímetros acima da borda: só com a
+    // folga de cinco. Um centímetro acima: nunca.
+    let topo = -cano.abaixo_m + cano.raio_m;
+    let dentro = ponto(cano.frente_m, cano.esquerda_m, topo - 0.001);
+    let rente = ponto(cano.frente_m, cano.esquerda_m, topo + 0.003);
+    let acima = ponto(cano.frente_m, cano.esquerda_m, topo + 0.01);
+    assert!(
+        justo.tapado(dentro) && com_folga.tapado(dentro),
+        "o ponto dentro do cano tem de ficar fora da conta"
+    );
+    assert!(
+        !justo.tapado(rente) && com_folga.tapado(rente),
+        "a 3 mm do cano, o ponto só fica fora da conta com a folga"
+    );
+    assert!(
+        !justo.tapado(acima) && !com_folga.tapado(acima),
+        "a 1 cm do cano, o ponto é mundo"
+    );
+    // O que fica tapado é pouco, e fica embaixo, no meio: o meio do quadro, o horizonte e os cantos de baixo são mundo.
+    let (sem, com) = (justo.tapados(), com_folga.tapados());
+    assert!(
+        sem > 200 && sem < com && com < largura * altura / 20,
+        "tapados sem folga {sem}, com folga {com}"
+    );
+    for k in 0..largura * altura {
+        if com_folga.tapado(k) {
+            let (i, j) = (k % largura, k / largura);
+            assert!(
+                j > altura * 3 / 4 && i > largura / 4 && i < largura * 3 / 4,
+                "o ponto ({i}, {j}) não olha para o cano"
+            );
+        }
+    }
+    // Sem o cano na câmera, nada fica de fora.
+    let mut sem_cano = olho;
+    sem_cano.cano = None;
+    assert_eq!(Raios::da_grade(&sem_cano, largura, altura, 0.005).tapados(), 0);
 }
