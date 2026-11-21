@@ -1,6 +1,6 @@
 # `rms1-mediad`: o serviço de mídia do S1
 
-Status: em uso no robô e no simulador desde 2026-11-15, com a estação Hailo de verdade. Data: 2026-11-14; atualizado em 2026-11-15 e em 2026-11-17 (a voz que vai à estação). A ativação no robô está em [`../robot/rms1-mediad-no-robo.md`](../robot/rms1-mediad-no-robo.md).
+Status: em uso no robô e no simulador desde 2026-11-15, com a estação Hailo de verdade. Data: 2026-11-14; atualizado em 2026-11-15, em 2026-11-17 (a voz que vai à estação) e em 2026-11-20 (a camada de mundo: o cliente do `rms1d` e as duas publicações, ainda sem prova no robô). A ativação no robô está em [`../robot/rms1-mediad-no-robo.md`](../robot/rms1-mediad-no-robo.md).
 
 O dono único da câmera, do microfone e do alto-falante do S1. No pato a câmera é do `mediad`, e o microfone e o som são do `robotd`. No S1 os três ficam num processo só, fora do `rms1d`, por três razões:
 
@@ -17,10 +17,10 @@ console, cérebro, rms1d (o som)                 estação Hailo (Pi 4), achada 
         │  JSON-RPC, um socket unix                    ▲ quadro reduzido      │ entregas
         ▼                                              │ TCP                  ▼
                               rms1-mediad
-        ┌──────────────┬──────────────┬───────────────┐
-        ▼              ▼              ▼               ▼
-     câmera        microfone     alto-falante     percepção
-  teste | sim | S1   arquivo | S1   aplay | nula   (segue o anúncio)
+        ┌──────────────┬──────────────┬───────────────┬──────────────┐
+        ▼              ▼              ▼               ▼              ▼
+     câmera        microfone     alto-falante     percepção        corpo
+  teste | sim | S1   arquivo | S1   aplay | nula   (segue o anúncio)  (lê o rms1d: a torre e a pose)
 ```
 
 As fontes ficam atrás da mesma interface: a de teste, a do simulador e a do robô. Entre uma e outra só muda `[midia]` em `rms1d.toml`.
@@ -40,7 +40,9 @@ As fontes ficam atrás da mesma interface: a de teste, a do simulador e a do rob
 | `rms1-mediad/src/venc.rs` | O cliente do `rms1-venc`: uma conexão só, partilhada pela percepção e pela imagem da tela |
 | `rms1-mediad/venc/rms1-venc.c` | O programa do lado Android do robô que comanda o codificador de hardware do S1 (Hantro H1): H.264 e JPEG |
 | `rms1-mediad/src/estacao.rs` | O anúncio da estação e o cabeçalho das mensagens |
-| `rms1-mediad/src/percepcao.rs` | A percepção pela estação: segue o anúncio, manda o quadro e a voz, lê as entregas e o resultado dos pedidos, publica |
+| `rms1-mediad/src/percepcao.rs` | A percepção pela estação: segue o anúncio, manda o quadro e a voz, lê as entregas e o resultado dos pedidos, publica; leva a grade de profundidade à camada de mundo e publica o mundo |
+| `rms1-mediad/src/corpo.rs` | O cliente do `rms1d`, só de leitura: a torre e a pose de cada instante, para situar no chão o que a câmera vê |
+| `rms1-mundo` | A camada de mundo, pura: da grade de profundidade aos metros, à ocupação do chão e à folga por direção ([`rms1-mundo.md`](rms1-mundo.md)) |
 | `rms1-mediad/src/servidor.rs` | O socket local |
 | `rms1d-params` | `[midia]` em `rms1d.toml`: o esquema, os padrões e a validação |
 
@@ -63,8 +65,8 @@ Um socket unix, `[midia] socket`, em JSON-RPC, uma linha por mensagem.
 | `hello` | A versão do contrato e a do serviço |
 | `media.frame` | O próximo quadro: uma linha com o cabeçalho do contrato do pato (`MediaFrameHeader`) e, em seguida, exatamente `bytes` bytes crus. A conexão fecha depois dele |
 | `robot.sound` | O do contrato do pato (`tag` e `hold`), como requisição ou notificação |
-| `s1.media.subscribe` | `{"heard": true, "detections": true}`. A conexão passa a receber `s1.audio.heard {"kind"}`, já com a trava aplicada, e `media.detections`. Com `"voice": true`, recebe também `s1.station.result` (a seção da voz, abaixo). Cada pedido diz as assinaturas que quer: a que não vem é desligada |
-| `s1.media.status` | O que o serviço está fazendo: quadros copiados, se há som tocando (`playing`), se o microfone está surdo pela trava (`deaf`: o som e a janela depois dele), e a percepção (`perception`), que diz também em que formato o último quadro foi (`format`: `rgb`, `h264` ou `jpeg`) e, se foi cru com a estação pedindo outro, por quê (`encoder_problem`) |
+| `s1.media.subscribe` | `{"heard": true, "detections": true}`. A conexão passa a receber `s1.audio.heard {"kind"}`, já com a trava aplicada, e `media.detections`. Com `"voice": true`, recebe também `s1.station.result` (a seção da voz, abaixo). Com `"requests": true`, recebe `s1.station.request` (a seção do pedido, abaixo). Com `"world": true` e com `"world_grid": true`, recebe `s1.world` e `s1.world.grid` (a seção da camada de mundo, abaixo). Cada pedido diz as assinaturas que quer: a que não vem é desligada |
+| `s1.media.status` | O que o serviço está fazendo: quadros copiados, se há som tocando (`playing`), se o microfone está surdo pela trava (`deaf`: o som e a janela depois dele), e a percepção (`perception`), que diz também em que formato o último quadro foi (`format`: `rgb`, `h264` ou `jpeg`), se foi cru com a estação pedindo outro, por quê (`encoder_problem`), e quanto a última grade de profundidade levou para virar mundo (`world_ms`) |
 | `s1.media.preview` | `{"width": 640, "format": "jpeg", "quality": 70}`. O quadro reduzido, para quem só quer olhar (a mídia do Pilotar, no simulador): o cabeçalho de `media.frame` e os bytes. Sem `format`, vem em RGB (`format: "RGB"`); com `"jpeg"`, em JPEG (`format: "JPEG"`, qualidade de 30 a 90), pelo codificador do `mediad`; com o codificador de hardware ligado e a largura de 640, o JPEG sai do chip (a qualidade vira o nível dele, de 3 a 9), e por software se o chip não responder do pato. A redução e o JPEG são feitos aqui. A conexão fica aberta e serve o pedido seguinte |
 
 **O som passa pelo `rms1d`.** Quem pede som fala com o `rms1d`, como no pato fala com o `robotd`: ele repassa `robot.sound` a este serviço como notificação, sem esperar, e responde aceito. Sem `[midia]` em `rms1d.toml`, ou com este serviço fora do ar, recusa com o motivo. `rms1d/tests/midia.rs`.
@@ -131,6 +133,20 @@ A estação valida um pedido, e o corpo o cumpre. Quem cumpre é o `rms1-agente`
 - **O desfecho volta como mensagem de tipo 23:** `{"pedido", "ferramenta", "como", "motivo"}`, com `como` em `cumprida`, `vencida`, `interrompida` ou `recusada`. Quem o diz é o agente, por `s1.station.outcome {"request", "tool", "outcome", "reason"}` no socket. O desfecho dito sem estação ligada não é guardado.
 - **`s1.media.status`** conta, em `perception`, os pedidos recebidos (`requests`) e os desfechos mandados (`outcomes`).
 
+## A camada de mundo: o chão em volta do robô, em metros
+
+A estação entrega a grade de profundidade (a função Distância: a entrega `mapa`, do leitor `scdepthv3`). O serviço a leva ao `rms1-mundo`, que devolve o chão em volta do robô em metros, e publica o resultado. As contas estão em [`rms1-mundo.md`](rms1-mundo.md); aqui, o que o serviço faz em volta delas.
+
+- **Quem tem a camada.** O serviço com a câmera do robô ou a do simulador (`[midia.camera] fonte`). A lente do simulador sai do campo de visão da tabela física; a do robô só existe na tabela depois de medida (`camera`), e até lá o mundo do robô só diz `no_camera`. A câmera de teste fica sem a camada: quem assina as duas linhas não recebe nada, e a grade é só contada.
+- **A torre e a pose vêm do `rms1d`** (`corpo.rs`). O cliente liga ao socket de `[midia] robo` (o do contrato, `/run/robotd.sock`; no simulador, o do `rms1d` simulado), assina `s1.subscribe` a 50 por segundo e leva cada `s1.state` ao mundo como uma amostra, com a hora em que chegou: o giro da torre em relação ao chassi (`gimbal.yaw_deg`), a inclinação dela em relação ao chão (`gimbal.pitch_ground_deg`) e a pose (`body.position_m`, `body.attitude_deg.yaw`), de graus para radianos. Não diz nome nem pede canal: para o `rms1d` é a fonte sem nome, que não manda nada. Estado sem pacote recente do corpo (`link.fresh`) não vira amostra. A ligação que cai religa sozinha, com espera de 0,1 a 2 s; sem amostra mais nova que `torre_vale_ms`, o mundo diz `no_pose`. `cargo test -p rms1-mediad --test corpo`.
+- **A grade é casada com o instante em que o quadro foi tirado, e não com o de quando ela chega.** Cada quadro que sai leva guardada, com o número dele, a hora em que a câmera o tirou: a idade do quadro, pelo relógio de parede em que ele foi marcado, levada ao relógio que não volta, que é o das amostras. A entrega `mapa` é do quadro mais antigo ainda sem marca, e vai ao mundo com a hora dele; a lente tira dessa hora o atraso medido da câmera (`camera.atraso_ms`). No teste, com a torre girando a 60 graus por segundo e a estação levando 300 ms, a caixa cai no lugar; casada com a torre de quando a grade chega, cai a 18,5 graus dele (`a_grade_e_casada_com_a_torre_do_instante_em_que_o_quadro_foi_tirado_e_o_mundo_e_publicado`).
+- **A percepção que falhou não é "não vi nada".** A marca de cada quadro traz o que aconteceu nele (`{"entregaram", "falharam", "recusa"}`). A função da grade entre as que falharam, ou o quadro recusado inteiro, vira `failed` no mundo, com o motivo que a estação deu, até a grade seguinte. Sem grade há mais de `velho_s`, o estado é `stale`. Em qualquer estado o mapa segue com o que lembra, cada célula com a idade.
+- **A grade que não se lê** conta a entrega e um erro, avisa no registro, e o mundo fica como estava. A que chega sem quadro em voo a que casar, também.
+- **`s1.world`**, `[midia.mundo] ritmo` vezes por segundo (20), o mundo no corpo de agora: `{"frame": "body", "frame_age_ms", "lens": {"hfov_deg", "vfov_deg"}, "perception": {"state", "reason", "scale"}, "obstacle": {"ahead_m", "away", "age_s"}, "clearance": [[rumo em graus, metros, estado, idade em s], ...]}`. O rumo é positivo à esquerda, de -170 a 180; o estado de cada direção é 0 (não visto), 1 (livre até ali) ou 2 (ocupado ali), e a distância é do centro do corpo. `obstacle.ahead_m` é a folga da frente do chassi ao ocupado mais perto no corredor da largura do robô (nulo: o corredor livre), `away` o lado mais livre (1 à esquerda, -1 à direita), e `obstacle` nulo é o corredor nunca visto. `state`: `ok`, `stale`, `failed`, `no_floor`, `no_metres` (o leitor ligado não é o `scdepthv3`), `no_pose` ou `no_camera`. `scale`: `measured` (a escala saiu do chão do próprio quadro) ou `remembered` (a dos quadros de antes).
+- **`s1.world.grid`**, `ritmo_da_grade` vezes por segundo (5), para a tela: `{"frame": "odom", "pose": [x, y, rumo em graus], "cell_m", "cells": [[ix, iy, estado, idade em s], ...]}`, só as células vistas e ainda lembradas, com o canto de cada uma em `(ix * cell_m, iy * cell_m)` e o estado 1 (livre) ou 2 (ocupada).
+- **As duas saem haja ou não estação na rede,** e só são montadas se alguém as assina. Quem assina só as detecções não recebe nada de novo.
+- **Não medido** (é da prova com o simulador e da calibração no robô): quanto o processador do S1 leva para tratar uma grade (`world_ms`; a meta é 20 ms), o tamanho da linha `s1.world.grid` com a sala inteira vista, e o ritmo em que as amostras de fato chegam do `rms1d`.
+
 ## O codificador de hardware
 
 O chip do S1 codifica H.264 e JPEG (Hantro H1), e as bibliotecas dele são do Android do robô: o `rms1-mediad`, que roda no chroot, não as carrega. Quem as chama é o `rms1-venc` (`rms1-mediad/venc/rms1-venc.c`), um programa do lado Android, compilado com o NDK por `sh rms1-mediad/venc/compila.sh` (que confere cada símbolo importado contra as bibliotecas do próprio robô). Os dois conversam por um socket de domínio Unix que os dois lados enxergam: `[midia] venc`, no robô `/run/rms1-venc/venc.sock`, que de fora do chroot é `/data/debian/run/rms1-venc/venc.sock`.
@@ -155,5 +171,5 @@ Testes: `cargo test -p rms1-mediad --test som_simulado`.
 
 ## O que ficou para depois desta frente
 
-- O que o robô faz com as caixas: ninguém age sobre elas ainda (é da frente do cérebro).
+- O que o robô faz com as caixas e com o mundo: ninguém age sobre eles ainda (é da frente do cérebro).
 - A janela da trava contra a própria voz segue nos 0,8 s do pato. No robô, o nível do microfone voltou ao piso 0,00 s depois do fim do som, e nenhum evento passou (`out/2026-11-14-s1-midia/prova-trava.txt`, no laboratório, 2026-11-15); a janela não foi encurtada.

@@ -33,6 +33,8 @@ duck-ipc-proto = { path = "../duck-ipc-proto" }
 # O JPEG do quadro que vai à tela: o mesmo codificador do `mediad` do pato (`mediad/src/stream.rs`), já no `Cargo.lock`.
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
 pet-detect = { path = "../pet-detect" }
+# A camada de mundo: a grade de profundidade da estação, com a torre e a pose do `rms1d`, vira o chão em volta do robô.
+rms1-mundo = { path = "../rms1-mundo" }
 rms1d-params = { path = "../rms1d-params" }
 serde.workspace = true
 serde_json.workspace = true

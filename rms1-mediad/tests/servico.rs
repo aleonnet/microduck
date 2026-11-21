@@ -453,3 +453,101 @@ async fn quem_assina_os_pedidos_recebe_o_que_a_estacao_manda_cumprir_e_diz_o_des
     }
     assert!(desfechos.try_recv().is_err());
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn quem_assina_o_mundo_recebe_as_duas_linhas_e_quem_assina_so_as_deteccoes_nao_recebe_nada_de_novo()
+ {
+    use rms1_mundo::{Corpo, Mundo};
+    use rms1d_params::{Fisica, MidiaMundo};
+    let (_pasta, _anota, servico) = montar();
+    // As duas linhas como a camada de mundo as monta: aqui, a de um robô com a lente ainda por medir.
+    let f = Fisica::da_tabela();
+    let corpo = Corpo {
+        largura_m: f.largura_m,
+        frente_m: f.frente_m,
+    };
+    let mundo = Mundo::novo(None, corpo, MidiaMundo::default()).unwrap();
+    let do_mundo = serde_json::json!({"jsonrpc": "2.0", "method": "s1.world", "params": mundo.agora(1.0).linha()})
+        .to_string();
+    let da_grade = serde_json::json!({"jsonrpc": "2.0", "method": "s1.world.grid", "params": mundo.linha_da_grade(1.0)})
+        .to_string();
+    // Sem assinatura, as linhas não têm para quem ir: é por aí que a camada de mundo sabe que não precisa montá-las.
+    assert!(servico.mundo.send(do_mundo.as_str().into()).is_err());
+    assert!(
+        servico
+            .grade_do_mundo
+            .send(da_grade.as_str().into())
+            .is_err()
+    );
+
+    let (cliente, servidor_) = UnixStream::pair().unwrap();
+    tokio::spawn(servidor::atender(servidor_, servico.clone()));
+    let mut c = BufReader::new(cliente);
+    c.get_mut()
+        .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"s1.media.subscribe\",\"params\":{\"world\":true,\"world_grid\":true}}\n")
+        .await
+        .unwrap();
+    assert_eq!(linha(&mut c).await["result"]["accepted"], true);
+    // Outra conexão assina só as detecções, como o agente e as ferramentas de hoje.
+    let (cliente, servidor_) = UnixStream::pair().unwrap();
+    tokio::spawn(servidor::atender(servidor_, servico.clone()));
+    let mut so_caixas = BufReader::new(cliente);
+    so_caixas
+        .get_mut()
+        .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"s1.media.subscribe\",\"params\":{\"detections\":true}}\n")
+        .await
+        .unwrap();
+    assert_eq!(linha(&mut so_caixas).await["result"]["accepted"], true);
+
+    assert_eq!(servico.mundo.send(do_mundo.as_str().into()).unwrap(), 1);
+    let n = linha(&mut c).await;
+    assert_eq!(
+        (
+            n["method"].as_str(),
+            n["params"]["frame"].as_str(),
+            n["params"]["perception"]["state"].as_str(),
+            n.get("id")
+        ),
+        (Some("s1.world"), Some("body"), Some("no_camera"), None),
+        "{n}"
+    );
+    assert_eq!(
+        servico
+            .grade_do_mundo
+            .send(da_grade.as_str().into())
+            .unwrap(),
+        1
+    );
+    let n = linha(&mut c).await;
+    assert_eq!(
+        (
+            n["method"].as_str(),
+            n["params"]["frame"].as_str(),
+            n["params"]["cells"].as_array().map(Vec::len)
+        ),
+        (Some("s1.world.grid"), Some("odom"), Some(0)),
+        "{n}"
+    );
+    // Quem assinou só as detecções recebe a detecção, e nada do mundo antes dela.
+    let deteccao = rms1_mediad::percepcao::notificacao(&[], 1280, 720, 45.0);
+    servico.deteccoes.send(deteccao.as_str().into()).unwrap();
+    assert_eq!(linha(&mut so_caixas).await["method"], "media.detections");
+    // E quem assinou o mundo não recebe as detecções.
+    servico.mundo.send(do_mundo.as_str().into()).unwrap();
+    assert_eq!(linha(&mut c).await["method"], "s1.world");
+
+    // Cada pedido diz as assinaturas todas: a que não vem é desligada.
+    c.get_mut()
+        .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"s1.media.subscribe\",\"params\":{\"world\":true}}\n")
+        .await
+        .unwrap();
+    assert_eq!(linha(&mut c).await["result"]["accepted"], true);
+    assert!(
+        servico
+            .grade_do_mundo
+            .send(da_grade.as_str().into())
+            .is_err(),
+        "a assinatura da grade segue ligada"
+    );
+    assert_eq!(servico.mundo.receiver_count(), 1);
+}

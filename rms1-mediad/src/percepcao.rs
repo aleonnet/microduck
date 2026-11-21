@@ -25,6 +25,13 @@
 //! **O pedido a cumprir.** O S1 com quem cumpra pedidos ([`Config::agente`]) diz à estação que recebe o pedido; cada pedido
 //! validado que ela manda ([`Tipo::Pedido`]) é publicado como `s1.station.request`, e o desfecho que o agente diz volta a
 //! ela ([`Tipo::Desfecho`]). Sem ninguém assinando os pedidos, a recusa volta na hora: a estação não fica à espera.
+//!
+//! **O mundo.** Com a camada de mundo ([`Config::mundo`]), a grade de profundidade que a estação entrega (a função cuja
+//! entrega é `mapa`) vai ao [`rms1_mundo::Mundo`], com a hora em que a câmera tirou o quadro dela: é por essa hora que o mundo
+//! acha a torre e a pose daquele instante, e não as de quando a grade chegou. A marca do quadro ([`Tipo::Atendido`]) diz
+//! quando a função falhou nele, e o mundo passa a dizer a falha, em vez de "não vi nada". Uma linha de execução publica o
+//! mundo, reexpresso no corpo de agora, em `s1.world` (`[midia.mundo] ritmo` vezes por segundo), e as células vistas, em
+//! `s1.world.grid` (`ritmo_da_grade`), haja ou não estação na rede. Sem a camada de mundo, a grade segue só contada.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::io::{Read, Write};
@@ -32,10 +39,11 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream, UdpSocket};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use duck_detect::{Detection, Letterbox};
 
+use crate::corpo::Relogio;
 use crate::estacao::{self, Anuncio, Cabecalho, Tipo};
 use crate::quadros::Quadros;
 use crate::reducao;
@@ -159,6 +167,23 @@ pub struct Config {
     pub fala: Option<Arc<dyn Fn(Som) + Send + Sync>>,
     /// Quem cumpre no corpo o pedido que a estação manda.
     pub agente: Option<Agente>,
+    /// A camada de mundo, se este S1 a tem: quem recebe a grade de profundidade, e para onde vão as linhas dela.
+    pub mundo: Option<Mundo>,
+}
+
+/// A camada de mundo, como a percepção a usa.
+#[derive(Clone)]
+pub struct Mundo {
+    /// O mundo, partilhado com quem lhe dá a torre e a pose ([`crate::corpo::rodar`]).
+    pub mundo: Arc<Mutex<rms1_mundo::Mundo>>,
+    /// O relógio das amostras: a hora de captura de cada quadro é levada a ele.
+    pub relogio: Relogio,
+    /// Recebe cada notificação `s1.world`, uma linha JSON.
+    pub publicar: Arc<dyn Fn(String) + Send + Sync>,
+    /// Recebe cada notificação `s1.world.grid`, uma linha JSON.
+    pub publicar_grade: Arc<dyn Fn(String) + Send + Sync>,
+    /// Se há quem assine `s1.world` e `s1.world.grid`, nesta ordem: a linha que ninguém quer não é montada.
+    pub quer: Arc<dyn Fn() -> [bool; 2] + Send + Sync>,
 }
 
 /// O caminho até quem cumpre os pedidos da estação.
@@ -218,6 +243,8 @@ pub struct Estado {
     /// Pedidos que a estação mandou cumprir, e desfechos mandados de volta.
     pub requests: u64,
     pub outcomes: u64,
+    /// Quanto a última grade de profundidade levou para virar mundo, em milissegundos.
+    pub world_ms: Option<f64>,
 }
 
 /// As candidatas da resposta do detector, passadas do formato da estação (cinco números por caixa) para o que
@@ -394,13 +421,26 @@ struct Partilha {
     /// Nesta conexão a estação marca cada quadro atendido ([`Tipo::Atendido`]): a ida e volta casa pelo número do quadro, e
     /// não pelo último envio, que erra quando a resposta de um quadro chega depois do envio do seguinte.
     marcando: bool,
-    /// Os quadros mandados e ainda não marcados atendidos, do mais antigo ao mais novo: o número de cada um, contado desde o
-    /// pedido, e quando saiu.
-    em_voo: VecDeque<(u16, Instant)>,
+    /// Os quadros mandados e ainda não marcados atendidos, do mais antigo ao mais novo.
+    em_voo: VecDeque<EmVoo>,
+    /// Quando a câmera tirou o último quadro mandado: é a hora do quadro de uma entrega da estação que não marca os quadros.
+    ultima_captura: Option<Instant>,
     /// O número do próximo quadro a sair.
     proximo: u16,
     /// Se o quadro da frente da fila já teve a ida e volta medida: só a primeira entrega dele mede.
     frente_medida: bool,
+}
+
+/// Um quadro mandado e ainda não marcado atendido.
+#[derive(Debug, Clone, Copy)]
+struct EmVoo {
+    /// O número dele, contado desde o pedido da marca.
+    n: u16,
+    /// Quando saiu.
+    saiu: Instant,
+    /// Quando a câmera o tirou. A hora do quadro é de relógio de parede ([`crate::quadros::Quadro`]): ao sair, a idade dele é
+    /// levada ao relógio que não volta, que é o das amostras da torre e da pose.
+    capturado: Instant,
 }
 
 /// Quantos quadros esperam a marca da estação, no máximo: acima disto ela parou de marcar, e os mais antigos saem da fila.
@@ -422,6 +462,12 @@ pub fn rodar(
     parar: Arc<AtomicBool>,
 ) -> std::io::Result<()> {
     let udp = ouvir(cfg.porta_anuncio)?;
+    if let Some(m) = &cfg.mundo {
+        let (m, p) = (m.clone(), parar.clone());
+        std::thread::Builder::new()
+            .name("mundo".into())
+            .spawn(move || publicar_o_mundo(&m, &p))?;
+    }
     let publicar = Arc::new(publicar);
     let partilha = Arc::new(Mutex::new(Partilha::default()));
     let mut vista: Option<(SocketAddr, Instant)> = None;
@@ -573,15 +619,16 @@ pub fn rodar(
                     }
                     if let Ok(leitura) = c.try_clone() {
                         let (p, e, pub_) = (partilha.clone(), estado.clone(), publicar.clone());
-                        let conversar = cfg.conversa.as_ref().map(|c| c.publicar.clone());
-                        let falar = cfg.fala.clone();
-                        let cumprir = cfg
-                            .agente
-                            .as_ref()
-                            .map(|a| (a.pedir.clone(), a.devolver.clone()));
-                        std::thread::spawn(move || {
-                            ler_entregas(leitura, p, e, pub_, conversar, falar, cumprir)
-                        });
+                        let destinos = Destinos {
+                            conversar: cfg.conversa.as_ref().map(|c| c.publicar.clone()),
+                            falar: cfg.fala.clone(),
+                            cumprir: cfg
+                                .agente
+                                .as_ref()
+                                .map(|a| (a.pedir.clone(), a.devolver.clone())),
+                            mundo: cfg.mundo.clone(),
+                        };
+                        std::thread::spawn(move || ler_entregas(leitura, p, e, pub_, destinos));
                     }
                     conexao = Some((c, alvo));
                     fluxo = None; // numa conexão nova, o H.264 começa por um quadro inteiro
@@ -668,7 +715,7 @@ pub fn rodar(
             while p
                 .em_voo
                 .front()
-                .is_some_and(|(_, saiu)| agora.duration_since(*saiu) > SEM_MARCA)
+                .is_some_and(|q| agora.duration_since(q.saiu) > SEM_MARCA)
             {
                 p.em_voo.pop_front();
                 p.frente_medida = false;
@@ -777,7 +824,13 @@ pub fn rodar(
         {
             let mut p = partilha.lock().expect("partilha");
             let agora = Instant::now();
+            // A idade do quadro, pelo relógio de parede em que a câmera o marcou, levada ao relógio que não volta.
+            let idade = SystemTime::now()
+                .duration_since(quadro.capturado_em)
+                .unwrap_or_default();
+            let capturado = agora.checked_sub(idade).unwrap_or(agora);
             p.ultimo_envio = Some((agora, quadro.largura, quadro.altura));
+            p.ultima_captura = Some(capturado);
             p.medido = false;
             if p.marcando {
                 if p.em_voo.len() >= EM_VOO_MAX {
@@ -785,7 +838,11 @@ pub fn rodar(
                     p.frente_medida = false;
                 }
                 let n = p.proximo;
-                p.em_voo.push_back((n, agora));
+                p.em_voo.push_back(EmVoo {
+                    n,
+                    saiu: agora,
+                    capturado,
+                });
                 p.proximo = n.wrapping_add(1);
             }
         }
@@ -852,16 +909,99 @@ type Cumprir = (
     std::sync::mpsc::Sender<String>,
 );
 
+/// Para onde vai o que a estação manda, além das detecções.
+struct Destinos {
+    /// Quem assina a conversa.
+    conversar: Option<Arc<dyn Fn(String) + Send + Sync>>,
+    /// Quem toca a fala.
+    falar: Option<Arc<dyn Fn(Som) + Send + Sync>>,
+    cumprir: Option<Cumprir>,
+    /// Quem recebe a grade de profundidade.
+    mundo: Option<Mundo>,
+}
+
+/// O motivo da falha da grade num quadro, pela carga da marca dele (`tools/hailo/estacao_anuncio.py`, o tipo 11, no
+/// laboratório): a recusa do quadro inteiro, ou a função da grade (`do_mapa`, os números dela no anúncio) entre as que
+/// falharam. `Ok(None)`: a grade não falhou neste quadro. `Err`: a carga não se lê.
+fn falha_do_mapa(carga: &[u8], do_mapa: &[u16]) -> Result<Option<String>, ()> {
+    // A estação de antes da carga manda a marca vazia.
+    if carga.is_empty() {
+        return Ok(None);
+    }
+    let v: serde_json::Value = serde_json::from_slice(carga).map_err(|_| ())?;
+    if !v.is_object() {
+        return Err(());
+    }
+    if let Some(recusa) = v["recusa"].as_str() {
+        return Ok(Some(recusa.to_owned()));
+    }
+    Ok(v["falharam"].as_array().and_then(|falharam| {
+        falharam.iter().find_map(|f| {
+            let n = f["n"].as_u64()?;
+            do_mapa
+                .iter()
+                .any(|m| u64::from(*m) == n)
+                .then(|| f["motivo"].as_str().unwrap_or("").to_owned())
+        })
+    }))
+}
+
+/// Publica o mundo até `parar`: `s1.world`, reexpresso no corpo de agora, e `s1.world.grid`, cada uma no ritmo dela.
+fn publicar_o_mundo(m: &Mundo, parar: &AtomicBool) {
+    let (periodo, periodo_da_grade) = {
+        let mundo = m.mundo.lock().expect("o mundo");
+        let de = |ritmo: u32| Duration::from_secs_f64(1.0 / f64::from(ritmo.max(1)));
+        (
+            de(mundo.ajustes().ritmo),
+            de(mundo.ajustes().ritmo_da_grade),
+        )
+    };
+    let notificacao = |metodo: &str, params: serde_json::Value| {
+        serde_json::json!({"jsonrpc": "2.0", "method": metodo, "params": params}).to_string()
+    };
+    let (mut proxima, mut proxima_grade) = (Instant::now(), Instant::now());
+    while !parar.load(Ordering::Relaxed) {
+        let agora = Instant::now();
+        let falta = proxima.min(proxima_grade).saturating_duration_since(agora);
+        if !falta.is_zero() {
+            std::thread::sleep(falta.min(Duration::from_millis(20)));
+            continue;
+        }
+        let [quer_o_mundo, quer_a_grade] = (m.quer)();
+        let t = m.relogio.de(agora);
+        if agora >= proxima {
+            // A seguinte sai um período depois desta, e nunca em rajada para compensar atraso.
+            proxima = (proxima + periodo).max(agora);
+            if quer_o_mundo {
+                // A conta é feita com o mundo travado; a linha é montada com ele solto.
+                let visto = m.mundo.lock().expect("o mundo").agora(t);
+                (m.publicar)(notificacao("s1.world", visto.linha()));
+            }
+        }
+        if agora >= proxima_grade {
+            proxima_grade = (proxima_grade + periodo_da_grade).max(agora);
+            if quer_a_grade {
+                let linha = m.mundo.lock().expect("o mundo").linha_da_grade(t);
+                (m.publicar_grade)(notificacao("s1.world.grid", linha));
+            }
+        }
+    }
+}
+
 /// Lê o que a estação manda, até a conexão fechar.
 fn ler_entregas(
     mut conexao: TcpStream,
     partilha: Arc<Mutex<Partilha>>,
     estado: Arc<Mutex<Estado>>,
     publicar: Arc<impl Fn(String) + Send + Sync + 'static>,
-    conversar: Option<Arc<dyn Fn(String) + Send + Sync>>,
-    falar: Option<Arc<dyn Fn(Som) + Send + Sync>>,
-    cumprir: Option<Cumprir>,
+    destinos: Destinos,
 ) {
+    let Destinos {
+        conversar,
+        falar,
+        cumprir,
+        mundo,
+    } = destinos;
     // A conexão que cai no meio de uma fala não deixa o alto-falante à espera do resto: o que chegou toca até o fim.
     struct FalaEmCurso(bool, Option<Arc<dyn Fn(Som) + Send + Sync>>);
     impl Drop for FalaEmCurso {
@@ -895,7 +1035,7 @@ fn ler_entregas(
         }
         match c.tipo {
             Tipo::Entrega => {
-                let (funcao, tamanho, saiu_em) = {
+                let (funcao, tamanho, saiu_em, capturado) = {
                     let mut p = partilha.lock().expect("partilha");
                     let f = p
                         .anuncio
@@ -904,7 +1044,7 @@ fn ler_entregas(
                     // A ida e volta é a da primeira entrega de um quadro. Com a estação marcando cada quadro atendido, a
                     // entrega é do quadro mais antigo ainda não marcado; sem isso, supõe-se que é do último envio.
                     let saiu_em = if p.marcando {
-                        match p.em_voo.front().map(|(_, quando)| *quando) {
+                        match p.em_voo.front().map(|q| q.saiu) {
                             Some(quando) if !p.frente_medida => {
                                 p.frente_medida = true;
                                 Some(quando)
@@ -916,7 +1056,18 @@ fn ler_entregas(
                     } else {
                         None
                     };
-                    (f, p.ultimo_envio.map(|(_, l, a)| (l, a)), saiu_em)
+                    // Quando a câmera tirou o quadro desta entrega, pela mesma regra.
+                    let capturado = if p.marcando {
+                        p.em_voo.front().map(|q| q.capturado)
+                    } else {
+                        p.ultima_captura
+                    };
+                    (
+                        f,
+                        p.ultimo_envio.map(|(_, l, a)| (l, a)),
+                        saiu_em,
+                        capturado,
+                    )
                 };
                 // Entrega de uma função que o anúncio não tem, ou sem quadro mandado: não há como ler.
                 let (Some(funcao), Some((l, a))) = (funcao, tamanho) else {
@@ -959,6 +1110,25 @@ fn ler_entregas(
                             estado.lock().expect("estado da percepção").errors += 1;
                         }
                     }
+                } else if let (true, Some(m)) = (funcao.entrega == "mapa", &mundo) {
+                    // A grade de profundidade vai ao mundo, com a hora em que o quadro dela foi tirado.
+                    let comeco = Instant::now();
+                    let feito = match capturado {
+                        Some(capturado) => m.mundo.lock().expect("o mundo").grade(
+                            &carga,
+                            funcao.leitor.as_deref().unwrap_or(""),
+                            m.relogio.de(capturado),
+                        ),
+                        None => Err("a grade chegou sem quadro em voo a que casar".to_owned()),
+                    };
+                    let mut e = estado.lock().expect("estado da percepção");
+                    match feito {
+                        Ok(_) => e.world_ms = Some(comeco.elapsed().as_secs_f64() * 1000.0),
+                        Err(erro) => {
+                            tracing::warn!(erro, funcao = funcao.id, "grade que este S1 não leu");
+                            e.errors += 1;
+                        }
+                    }
                 }
             }
             Tipo::Erro => {
@@ -968,10 +1138,36 @@ fn ler_entregas(
             }
             Tipo::Atendido => {
                 // O quadro marcado sai da fila, com os mais antigos que ele: as entregas seguintes são do quadro seguinte.
-                let mut p = partilha.lock().expect("partilha");
-                if let Some(i) = p.em_voo.iter().position(|(n, _)| *n == c.canal) {
-                    p.em_voo.drain(..=i);
-                    p.frente_medida = false;
+                let (capturado, do_mapa) = {
+                    let mut p = partilha.lock().expect("partilha");
+                    let i = p.em_voo.iter().position(|q| q.n == c.canal);
+                    let capturado = i.map(|i| p.em_voo[i].capturado);
+                    if let Some(i) = i {
+                        p.em_voo.drain(..=i);
+                        p.frente_medida = false;
+                    }
+                    // As funções ligadas que entregam a grade, pelo número de cada uma no anúncio.
+                    let do_mapa: Vec<u16> = p
+                        .anuncio
+                        .iter()
+                        .flat_map(|a| &a.funcoes)
+                        .filter(|f| f.entrega == "mapa")
+                        .map(|f| f.n)
+                        .collect();
+                    (capturado, do_mapa)
+                };
+                // A marca diz o que aconteceu no quadro: a função da grade que falhou nele, ou o quadro recusado, é a
+                // percepção que falhou, e não o mesmo que não ter visto nada. Sem função de grade ligada, não há o que falhar.
+                if let (Some(m), false) = (&mundo, do_mapa.is_empty()) {
+                    match falha_do_mapa(&carga, &do_mapa) {
+                        Ok(None) => {}
+                        Ok(Some(motivo)) => {
+                            let t =
+                                capturado.map_or_else(|| m.relogio.agora(), |c| m.relogio.de(c));
+                            m.mundo.lock().expect("o mundo").falha(t, &motivo);
+                        }
+                        Err(()) => estado.lock().expect("estado da percepção").errors += 1,
+                    }
                 }
             }
             Tipo::Resultado => {

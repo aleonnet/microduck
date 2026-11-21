@@ -10,6 +10,19 @@
 //!   com o que a função entregou), com a função e o tipo do que ela entrega.
 //!   Com `"requests": true`, recebe `s1.station.request {"request", "tool", "params"}`: cada pedido validado que a estação
 //!   manda o corpo cumprir. É a assinatura do agente.
+//!   Com `"world": true`, recebe `s1.world`, `[midia.mundo] ritmo` vezes por segundo: o chão em volta do robô, no corpo de
+//!   agora. `{"frame": "body", "frame_age_ms", "lens": {"hfov_deg", "vfov_deg"}, "perception": {"state", "reason", "scale"},
+//!   "obstacle": {"ahead_m", "away", "age_s"}, "clearance": [[rumo em graus, metros, estado, idade em s], ...]}`. O rumo é
+//!   positivo à esquerda; o estado de cada direção é 0 (não visto), 1 (livre até ali) ou 2 (ocupado ali); `ahead_m` é a
+//!   folga da frente do chassi, e nulo é o corredor livre; `obstacle` nulo é o corredor nunca visto. `state` vale `ok`,
+//!   `stale` (sem grade há mais de `velho_s`), `failed` (a estação disse a falha, e `reason` o motivo), `no_floor`,
+//!   `no_metres` (o leitor ligado na estação não dá metros), `no_pose` (o `rms1d` não está publicando a torre e a pose) ou
+//!   `no_camera` (a lente do robô não foi medida); `scale` diz se a escala é a do quadro (`measured`) ou a dos de antes
+//!   (`remembered`).
+//!   Com `"world_grid": true`, recebe `s1.world.grid`, `ritmo_da_grade` vezes por segundo, para a tela: `{"frame": "odom",
+//!   "pose": [x, y, rumo em graus], "cell_m", "cells": [[ix, iy, estado, idade em s], ...]}`, só as células vistas e ainda
+//!   lembradas, com o canto de cada uma em `(ix * cell_m, iy * cell_m)` e o estado 1 (livre) ou 2 (ocupada). As duas saem
+//!   da camada de mundo ([`crate::percepcao`]); sem ela (a câmera de teste), quem as assina não recebe nada.
 //! - `s1.station.outcome {"request", "tool", "outcome", "reason"}`: como o pedido terminou no corpo (`cumprida`, `vencida`,
 //!   `interrompida` ou `recusada`), que o serviço leva de volta à estação.
 //! - `s1.media.volume {"volume": 0..100}`: o volume do alto-falante, na conta da DJI, pelo mixer do robô.
@@ -66,6 +79,9 @@ const DETECCOES_NA_FILA: usize = 8;
 /// Os acontecimentos de um pedido vêm em rajada (um por pedaço da resposta), e nenhum pode faltar a quem os junta.
 const RESULTADOS_NA_FILA: usize = 512;
 
+/// Do mundo só a linha mais nova interessa: a fila das detecções.
+const MUNDO_NA_FILA: usize = 8;
+
 /// Os pedidos a cumprir vêm um por vez; quem fica para trás deste tanto não está cumprindo nada.
 const PEDIDOS_NA_FILA: usize = 16;
 /// Como um pedido pode terminar no corpo.
@@ -82,6 +98,10 @@ pub struct Servico {
     pub resultados: broadcast::Sender<Arc<str>>,
     /// As notificações `s1.station.request`, prontas, uma linha JSON cada: os pedidos que a estação manda cumprir.
     pub pedidos: broadcast::Sender<Arc<str>>,
+    /// As notificações `s1.world`, prontas, uma linha JSON cada: quem escreve é a publicação do mundo, na percepção.
+    pub mundo: broadcast::Sender<Arc<str>>,
+    /// As notificações `s1.world.grid`, prontas, uma linha JSON cada.
+    pub grade_do_mundo: broadcast::Sender<Arc<str>>,
     /// Por onde o desfecho de um pedido vai à estação: quem lê é [`crate::percepcao::rodar`]. Vazio sem a percepção.
     pub desfechos: std::sync::OnceLock<std::sync::mpsc::Sender<String>>,
     /// O que a percepção pela estação está fazendo: quem escreve é [`crate::percepcao::rodar`].
@@ -106,6 +126,8 @@ impl Servico {
         let (deteccoes, _) = broadcast::channel(DETECCOES_NA_FILA);
         let (resultados, _) = broadcast::channel(RESULTADOS_NA_FILA);
         let (pedidos, _) = broadcast::channel(PEDIDOS_NA_FILA);
+        let (mundo, _) = broadcast::channel(MUNDO_NA_FILA);
+        let (grade_do_mundo, _) = broadcast::channel(MUNDO_NA_FILA);
         Arc::new(Self {
             quadros,
             tocador: Mutex::new(tocador),
@@ -113,6 +135,8 @@ impl Servico {
             deteccoes,
             resultados,
             pedidos,
+            mundo,
+            grade_do_mundo,
             desfechos: std::sync::OnceLock::new(),
             percepcao: Arc::default(),
             camera: Arc::default(),
@@ -248,6 +272,8 @@ where
     let mut vendo: Option<broadcast::Receiver<Arc<str>>> = None;
     let mut conversando: Option<broadcast::Receiver<Arc<str>>> = None;
     let mut cumprindo: Option<broadcast::Receiver<Arc<str>>> = None;
+    let mut no_mundo: Option<broadcast::Receiver<Arc<str>>> = None;
+    let mut na_grade: Option<broadcast::Receiver<Arc<str>>> = None;
     // A linha em leitura fica fora do laço: se um evento de som chega no meio dela, o que já foi lido não se perde.
     let mut em_leitura = Vec::new();
     loop {
@@ -289,6 +315,31 @@ where
                         escrita.flush().await?;
                     }
                     Err(broadcast::error::RecvError::Lagged(n)) => tracing::warn!(perdidos = n, "o agente ficou para trás dos pedidos"),
+                    Err(broadcast::error::RecvError::Closed) => return Ok(()),
+                }
+                continue;
+            }
+            m = receber(&mut no_mundo) => {
+                match m {
+                    Ok(linha) => {
+                        escrita.write_all(linha.as_bytes()).await?;
+                        escrita.write_all(b"\n").await?;
+                        escrita.flush().await?;
+                    }
+                    // Quem ficou para trás perde as velhas: o mundo de antes já não é o de agora.
+                    Err(broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(broadcast::error::RecvError::Closed) => return Ok(()),
+                }
+                continue;
+            }
+            g = receber(&mut na_grade) => {
+                match g {
+                    Ok(linha) => {
+                        escrita.write_all(linha.as_bytes()).await?;
+                        escrita.write_all(b"\n").await?;
+                        escrita.flush().await?;
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => {}
                     Err(broadcast::error::RecvError::Closed) => return Ok(()),
                 }
                 continue;
@@ -381,6 +432,8 @@ where
             vendo = quer("detections").then(|| s.deteccoes.subscribe());
             conversando = quer("voice").then(|| s.resultados.subscribe());
             cumprindo = quer("requests").then(|| s.pedidos.subscribe());
+            no_mundo = quer("world").then(|| s.mundo.subscribe());
+            na_grade = quer("world_grid").then(|| s.grade_do_mundo.subscribe());
             if pedido.id.is_some() {
                 escrever(
                     &mut escrita,

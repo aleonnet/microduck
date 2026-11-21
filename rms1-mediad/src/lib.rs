@@ -10,6 +10,7 @@
 pub mod alto_falante;
 pub mod camera;
 pub mod camera_s1;
+pub mod corpo;
 pub mod estacao;
 pub mod microfone;
 pub mod mixer;

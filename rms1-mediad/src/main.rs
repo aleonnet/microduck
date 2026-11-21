@@ -10,13 +10,14 @@ use std::time::{Duration, Instant};
 use clap::Parser;
 use rms1_mediad::alto_falante::{Aplay, Nula, Saida, Simulador, Tocador};
 use rms1_mediad::camera;
+use rms1_mediad::corpo::{self, Relogio};
 use rms1_mediad::microfone::{self, BLOCO, Ouvinte, Voz};
 use rms1_mediad::mixer;
 use rms1_mediad::percepcao;
 use rms1_mediad::quadros::Quadros;
 use rms1_mediad::servidor::{self, Servico};
 use rms1_mediad::trava::Trava;
-use rms1d_params::{FonteCamera, FonteMicrofone, Midia, Params, SaidaDeSom};
+use rms1d_params::{Fisica, FonteCamera, FonteMicrofone, Midia, Params, SaidaDeSom};
 
 #[derive(Parser, Debug)]
 #[command(about = "O serviço de mídia do RoboMaster S1", version)]
@@ -318,6 +319,47 @@ fn main() -> ExitCode {
                 devolver,
             }
         });
+        // A camada de mundo: com a câmera do robô ou a do simulador, a grade de profundidade da estação vira o chão em volta
+        // do robô. A lente do robô só existe na tabela depois de medida: sem ela, o mundo só diz que ela falta. A câmera de
+        // teste não olha para lugar nenhum, e fica sem mundo.
+        let fisica = Fisica::da_tabela();
+        let lente = match midia.camera.fonte {
+            FonteCamera::S1 => Some(fisica.camera),
+            FonteCamera::Simulador => Some(Some(fisica.camera_simulada)),
+            FonteCamera::Teste => None,
+        };
+        let mut mundo = None;
+        if let Some(lente) = lente {
+            let olho = lente.map(|lente| rms1_mundo::Olho { lente, no_corpo: fisica.camera_no_corpo });
+            let corpo_do_robo = rms1_mundo::Corpo { largura_m: fisica.largura_m, frente_m: fisica.frente_m };
+            let partilhado = match rms1_mundo::Mundo::novo(olho, corpo_do_robo, midia.mundo.clone()) {
+                Ok(m) => Arc::new(std::sync::Mutex::new(m)),
+                Err(e) => {
+                    eprintln!("rms1-mediad: [midia.mundo] gravar = {:?}: {e}", midia.mundo.gravar);
+                    return ExitCode::FAILURE;
+                }
+            };
+            let relogio = Relogio::default();
+            // A torre e a pose vêm do `rms1d`, por um cliente que só lê.
+            let (m, p, robo) = (partilhado.clone(), parar.clone(), PathBuf::from(&midia.robo));
+            let subiu = std::thread::Builder::new().name("corpo".into()).spawn(move || {
+                corpo::rodar(&robo, relogio, move |a| m.lock().expect("o mundo").amostra(a), p);
+            });
+            if let Err(e) = subiu {
+                eprintln!("rms1-mediad: o cliente do rms1d não subiu: {e}");
+                return ExitCode::FAILURE;
+            }
+            let (s, g, q) = (servico.clone(), servico.clone(), servico.clone());
+            mundo = Some(percepcao::Mundo {
+                mundo: partilhado,
+                relogio,
+                // Sem assinante, a linha não tem para quem ir.
+                publicar: Arc::new(move |linha: String| drop(s.mundo.send(linha.into()))),
+                publicar_grade: Arc::new(move |linha: String| drop(g.grade_do_mundo.send(linha.into()))),
+                quer: Arc::new(move || [q.mundo.receiver_count() > 0, q.grade_do_mundo.receiver_count() > 0]),
+            });
+            tracing::info!(robo = %midia.robo, lente = if olho.is_some() { "na tabela" } else { "por medir" }, "a camada de mundo está de pé");
+        }
         // O codificador de hardware do robô, se o arquivo o dá: a percepção e a imagem da tela usam o mesmo, um pedido por vez.
         if !midia.venc.is_empty() {
             let _ = servico.venc.set(Arc::new(std::sync::Mutex::new(rms1_mediad::venc::Venc::novo(&midia.venc))));
@@ -347,6 +389,7 @@ fn main() -> ExitCode {
                         }) as Arc<dyn Fn(percepcao::Som) + Send + Sync>
                     }),
                     agente: agente.take(),
+                    mundo: mundo.take(),
                 };
                 let (estado, deteccoes) = (s.percepcao.clone(), s.deteccoes.clone());
                 // Sem assinante, a detecção não tem para quem ir.

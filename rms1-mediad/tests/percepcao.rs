@@ -262,24 +262,38 @@ fn subir_percepcao_com(
         porta_anuncio,
         ritmo_max,
         anuncio_vale,
-        venc,
-        None,
-        None,
-        None,
+        Pecas {
+            venc,
+            ..Pecas::default()
+        },
     )
 }
 
-/// O mesmo, com a conversa (de onde vêm os trechos de voz, e para onde vai o que a estação responde) e com quem toca a
-/// fala da estação.
-fn subir_percepcao_inteira(
-    porta_anuncio: u16,
-    ritmo_max: f64,
-    anuncio_vale: Duration,
+/// O que a percepção de um teste tem além da câmera: o codificador, a conversa (de onde vêm os trechos de voz, e para onde
+/// vai o que a estação responde), quem toca a fala da estação, quem cumpre os pedidos dela, e a camada de mundo.
+#[derive(Default)]
+struct Pecas {
     venc: Option<std::path::PathBuf>,
     conversa: Option<percepcao::Conversa>,
     fala: Option<Arc<dyn Fn(percepcao::Som) + Send + Sync>>,
     agente: Option<percepcao::Agente>,
+    mundo: Option<percepcao::Mundo>,
+}
+
+/// O mesmo, com as peças dadas.
+fn subir_percepcao_inteira(
+    porta_anuncio: u16,
+    ritmo_max: f64,
+    anuncio_vale: Duration,
+    pecas: Pecas,
 ) -> Percepcao {
+    let Pecas {
+        venc,
+        conversa,
+        fala,
+        agente,
+        mundo,
+    } = pecas;
     let quadros = Quadros::default();
     let parar = Arc::new(AtomicBool::new(false));
     let (q, p) = (quadros.clone(), parar.clone());
@@ -296,6 +310,7 @@ fn subir_percepcao_inteira(
             conversa,
             fala,
             agente,
+            mundo,
         };
         percepcao::rodar(
             cfg,
@@ -1059,10 +1074,10 @@ fn subir_com_a_conversa(porta: u16) -> (Percepcao, mpsc::Sender<Vec<i16>>, Publi
         porta,
         22.0,
         Duration::from_secs(3),
-        None,
-        Some(conversa),
-        None,
-        None,
+        Pecas {
+            conversa: Some(conversa),
+            ..Pecas::default()
+        },
     );
     (p, dizer, resultados)
 }
@@ -1215,10 +1230,11 @@ fn subir_com_a_fala(porta: u16, com_microfone: bool) -> (Percepcao, Sons) {
         porta,
         22.0,
         Duration::from_secs(3),
-        None,
-        conversa,
-        Some(Arc::new(move |som| s.lock().unwrap().push(som))),
-        None,
+        Pecas {
+            conversa,
+            fala: Some(Arc::new(move |som| s.lock().unwrap().push(som))),
+            ..Pecas::default()
+        },
     );
     (p, sons)
 }
@@ -1343,10 +1359,10 @@ fn subir_com_o_agente(
         porta,
         22.0,
         Duration::from_secs(3),
-        None,
-        None,
-        None,
-        Some(agente),
+        Pecas {
+            agente: Some(agente),
+            ..Pecas::default()
+        },
     );
     (p, pedidos, devolver)
 }
@@ -1428,4 +1444,439 @@ fn o_pedido_da_estacao_vai_ao_agente_e_o_desfecho_volta_a_ela() {
     // A ordem de largar, sem agente, não tem o que largar: nada volta.
     estacao.mandar(Tipo::Pedido, 0, br#"{"pedido":41,"cancelar":true}"#);
     assert!(estacao.colher(Duration::from_millis(400)).is_empty());
+}
+
+// ---- a grade de profundidade que vira mundo (2026-11-20) ------------------------------------------------------------------
+
+/// A cena de mentira do pacote do mundo: o chão, as caixas, e a grade que o `scdepthv3` daria delas. É a mesma dos testes de
+/// lá, e não uma cópia.
+#[path = "../../rms1-mundo/tests/comum/mod.rs"]
+mod cena;
+
+use rms1_mediad::corpo::Relogio;
+
+const QUADRO_A_10: &str = r#"[{"n":1,"id":"quadro_continuo","formato":"rgb_640x360","ritmo":10}]"#;
+/// Os Objetos e a Distância ligados, como a estação os anuncia: a Distância entrega a grade (`mapa`), pelo leitor do modelo.
+const OBJETOS_E_DISTANCIA: &str = r#"[{"n":1,"id":"detector","entrega":"caixas","leitor":"caixas_padrao_hailo","publica":"media.detections","nota":0.35},{"n":2,"id":"profundidade","entrega":"mapa","leitor":"scdepthv3"}]"#;
+/// A escala que o modelo esconde: nenhum número do S1 pode depender dela.
+const K: f64 = 0.1;
+
+/// A percepção com a camada de mundo: o mundo e o relógio dele, por onde o teste dá a torre e a pose (como o cliente do
+/// `rms1d` as daria), e as linhas publicadas em `s1.world` e em `s1.world.grid`.
+struct ComOMundo {
+    p: Percepcao,
+    mundo: Arc<Mutex<rms1_mundo::Mundo>>,
+    relogio: Relogio,
+    linhas: Publicadas,
+    grades: Publicadas,
+}
+
+fn subir_com_o_mundo(porta: u16, ajustes: rms1_mundo::Ajustes) -> ComOMundo {
+    let mundo = Arc::new(Mutex::new(
+        rms1_mundo::Mundo::novo(Some(cena::olho_do_simulador()), cena::corpo(), ajustes).unwrap(),
+    ));
+    let relogio = Relogio::default();
+    let linhas: Publicadas = Arc::new(Mutex::new(Vec::new()));
+    let grades: Publicadas = Arc::new(Mutex::new(Vec::new()));
+    let (l, g) = (linhas.clone(), grades.clone());
+    let p = subir_percepcao_inteira(
+        porta,
+        22.0,
+        Duration::from_secs(3),
+        Pecas {
+            mundo: Some(percepcao::Mundo {
+                mundo: mundo.clone(),
+                relogio,
+                publicar: Arc::new(move |linha| l.lock().unwrap().push(linha)),
+                publicar_grade: Arc::new(move |linha| g.lock().unwrap().push(linha)),
+                quer: Arc::new(|| [true, true]),
+            }),
+            ..Pecas::default()
+        },
+    );
+    ComOMundo {
+        p,
+        mundo,
+        relogio,
+        linhas,
+        grades,
+    }
+}
+
+impl ComOMundo {
+    /// Dá ao mundo a torre e a pose, 100 vezes por segundo, até o teste acabar: `giro` diz o giro da torre, em graus, na
+    /// hora dada. O corpo fica parado na origem, com a torre nivelada.
+    fn dar_amostras(&self, giro: impl Fn(f64) -> f64 + Send + 'static) {
+        let (m, relogio, parar) = (self.mundo.clone(), self.relogio, self.p.parar.clone());
+        std::thread::spawn(move || {
+            while !parar.load(Ordering::Relaxed) {
+                let t = relogio.agora();
+                m.lock()
+                    .unwrap()
+                    .amostra(cena::amostra(t, giro(t), 0.0, [0.0; 3]));
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        });
+    }
+
+    /// Os parâmetros da linha `s1.world` mais nova.
+    fn ultima(&self) -> Option<serde_json::Value> {
+        let linha = self.linhas.lock().unwrap().last().cloned()?;
+        let v: serde_json::Value = serde_json::from_str(&linha).unwrap();
+        assert_eq!(
+            (v["jsonrpc"].as_str(), v["method"].as_str(), v.get("id")),
+            (Some("2.0"), Some("s1.world"), None),
+            "é notificação, sem id: {v}"
+        );
+        Some(v["params"].clone())
+    }
+
+    /// Espera o estado da percepção, em `s1.world`, ser `nome`; devolve os parâmetros da linha que o disse.
+    fn esperar_estado(&self, nome: &str, por: Duration) -> serde_json::Value {
+        let fim = Instant::now() + por;
+        loop {
+            let ultima = self.ultima();
+            if let Some(u) = &ultima
+                && u["perception"]["state"] == nome
+            {
+                return u.clone();
+            }
+            assert!(
+                Instant::now() < fim,
+                "o estado da percepção não chegou a {nome} em {por:?}: {ultima:?}"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+}
+
+/// O próximo quadro tirado de agora em diante, e o número dele. Os que esperavam na fila da estação são marcados atendidos,
+/// sem nada: são de antes, e a grade de um quadro velho não acharia a torre do instante dele.
+fn quadro_novo(estacao: &Estacao, n: &mut u16) -> (u16, Recebida) {
+    while let Ok(r) = estacao.recebidas.try_recv() {
+        if r.cab.tipo == Tipo::Entrada {
+            estacao.atender(*n);
+            *n += 1;
+        }
+    }
+    loop {
+        let r = estacao
+            .recebidas
+            .recv_timeout(Duration::from_secs(3))
+            .expect("um quadro");
+        if r.cab.tipo == Tipo::Entrada {
+            *n += 1;
+            return (*n - 1, r);
+        }
+    }
+}
+
+/// A marca de um quadro com o que aconteceu nele, como a estação a manda desde 2026-11-20.
+fn marcar(estacao: &Estacao, n: u16, carga: &str) {
+    estacao.mandar(Tipo::Atendido, n, carga.as_bytes());
+}
+
+/// A cena dos testes: uma caixa a 1 m, bem à frente do robô, e uma parede a 4 m, além do alcance do mapa.
+fn caixa_a_um_metro() -> [cena::Caixa; 2] {
+    [cena::caixa_em(1.0, 0.0), cena::parede_em(4.0)]
+}
+
+#[test]
+fn a_grade_e_casada_com_a_torre_do_instante_em_que_o_quadro_foi_tirado_e_o_mundo_e_publicado() {
+    let porta = porta_livre();
+    let c = subir_com_o_mundo(porta, cena::ajustes());
+    // A torre parada a 30 graus para a direita, até o primeiro quadro chegar à estação; daí em diante varre para a esquerda
+    // a 60 graus por segundo.
+    let comeco: Arc<Mutex<Option<f64>>> = Arc::default();
+    let giro = {
+        let comeco = comeco.clone();
+        move |t: f64| {
+            comeco
+                .lock()
+                .unwrap()
+                .map_or(-30.0, |t0| (-30.0 + 60.0 * (t - t0)).min(30.0))
+        }
+    };
+    c.dar_amostras(giro.clone());
+    let estacao = Estacao::subir_com(
+        porta,
+        QUADRO_A_10,
+        OBJETOS_E_DISTANCIA,
+        r#","atendido":true"#,
+    );
+    let mut n = 0;
+    let (primeiro, chegou) = quadro_novo(&estacao, &mut n);
+    *comeco.lock().unwrap() = Some(c.relogio.de(chegou.quando));
+    estacao.atender(primeiro);
+    // O quadro seguinte é tirado com a torre em movimento. A estação vê a cena como a câmera a via naquele instante, leva
+    // 300 ms para responder (18 graus de giro), e só então entrega a grade e marca o quadro.
+    let (segundo, chegou) = quadro_novo(&estacao, &mut n);
+    let t = c.relogio.de(chegou.quando);
+    let na_captura = cena::amostra(t, giro(t), 0.0, [0.0; 3]);
+    let grade = cena::ver(
+        &cena::olho_do_simulador(),
+        &na_captura,
+        &caixa_a_um_metro(),
+        K,
+    );
+    std::thread::sleep(Duration::from_millis(300));
+    estacao.entregar(2, &grade);
+    marcar(
+        &estacao,
+        segundo,
+        r#"{"entregaram":[2],"falharam":[],"recusa":null}"#,
+    );
+
+    // A caixa está parada a 1 m, bem à frente do corpo (rumo zero). Casada com a torre do instante da captura, é lá que ela
+    // cai no mapa; casada com a de quando a grade chegou, cairia 18 graus à esquerda.
+    let agora = c.esperar_estado("ok", Duration::from_secs(3));
+    let fim = Instant::now() + Duration::from_secs(2);
+    let ocupadas = loop {
+        let ultima = c.grades.lock().unwrap().last().cloned();
+        let v: serde_json::Value = ultima.as_deref().map_or(serde_json::Value::Null, |l| {
+            serde_json::from_str(l).unwrap()
+        });
+        let lado = v["params"]["cell_m"].as_f64().unwrap_or(0.0);
+        let ocupadas: Vec<[f64; 2]> = v["params"]["cells"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|cel| cel[2] == 2)
+            .map(|cel| {
+                [
+                    (cel[0].as_f64().unwrap() + 0.5) * lado,
+                    (cel[1].as_f64().unwrap() + 0.5) * lado,
+                ]
+            })
+            .collect();
+        if !ocupadas.is_empty() {
+            assert_eq!(
+                (
+                    v["method"].as_str(),
+                    v["params"]["frame"].as_str(),
+                    v.get("id")
+                ),
+                (Some("s1.world.grid"), Some("odom"), None),
+                "{v}"
+            );
+            assert_eq!(v["params"]["pose"][0].as_f64(), Some(0.0), "{v}");
+            break ocupadas;
+        }
+        assert!(
+            Instant::now() < fim,
+            "nenhuma célula ocupada foi publicada: {v}"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let meio = ocupadas.iter().fold([0.0, 0.0], |s, p| {
+        [
+            s[0] + p[0] / ocupadas.len() as f64,
+            s[1] + p[1] / ocupadas.len() as f64,
+        ]
+    });
+    let rumo = meio[1].atan2(meio[0]).to_degrees();
+    assert!(
+        rumo.abs() < 6.0,
+        "o rumo da caixa saiu a {rumo:.1} graus, com ela a 0: a grade foi casada com a torre de outro instante (as ocupadas, \
+         em volta de {meio:?})"
+    );
+    assert!(
+        (meio[0] - 1.0).abs() < 0.08,
+        "a face da caixa está a 1 m, e as ocupadas ficaram em volta de {meio:?}"
+    );
+
+    // `s1.world`: o mundo no corpo de agora. O corredor à frente está barrado pela caixa: da frente do chassi (a 0,16 m do
+    // centro) até a face dela, a 1 m.
+    assert_eq!(agora["frame"], "body", "{agora}");
+    assert_eq!(agora["perception"]["scale"], "measured", "{agora}");
+    assert!(agora["perception"]["reason"].is_null(), "{agora}");
+    assert_eq!(agora["clearance"].as_array().map(Vec::len), Some(36));
+    let a_frente = agora["obstacle"]["ahead_m"]
+        .as_f64()
+        .expect("o obstáculo à frente");
+    assert!(
+        (a_frente - 0.84).abs() < 0.06,
+        "a folga à frente deu {a_frente:.2} m, com a caixa a 0,84 m da frente do chassi"
+    );
+    let campo = agora["lens"]["hfov_deg"].as_f64().unwrap();
+    assert!(
+        (campo - 120.0).abs() < 0.01,
+        "a lente do simulador: {agora}"
+    );
+    assert!(agora["frame_age_ms"].as_f64().is_some_and(|i| i >= 300.0));
+
+    // A entrega foi contada, sem erro, e o estado diz quanto a grade levou para virar mundo. A grade não é detecção: quem
+    // assina só as detecções não recebe nada de novo.
+    let e = c.p.estado.lock().unwrap().clone();
+    assert_eq!((e.deliveries.get("profundidade"), e.errors), (Some(&1), 0));
+    assert!(e.world_ms.is_some_and(|ms| ms > 0.0), "{:?}", e.world_ms);
+    assert!(c.p.publicadas.lock().unwrap().is_empty());
+
+    // As duas linhas saem no ritmo de `[midia.mundo]`: 20 e 5 por segundo.
+    let (antes, antes_da_grade) = (
+        c.linhas.lock().unwrap().len(),
+        c.grades.lock().unwrap().len(),
+    );
+    std::thread::sleep(Duration::from_secs(1));
+    let (por_s, da_grade_por_s) = (
+        c.linhas.lock().unwrap().len() - antes,
+        c.grades.lock().unwrap().len() - antes_da_grade,
+    );
+    assert!(
+        (16..=22).contains(&por_s) && (3..=7).contains(&da_grade_por_s),
+        "{por_s} linhas de s1.world e {da_grade_por_s} de s1.world.grid num segundo"
+    );
+}
+
+#[test]
+fn sem_a_camada_de_mundo_a_grade_e_so_contada_e_a_grade_que_nao_se_le_e_erro() {
+    // O S1 sem a camada de mundo (a câmera de teste): a grade é contada, como até aqui, e nada é publicado.
+    let porta = porta_livre();
+    let p = subir_percepcao(porta, 22.0, Duration::from_secs(3));
+    let estacao = Estacao::subir_com(
+        porta,
+        QUADRO_A_10,
+        OBJETOS_E_DISTANCIA,
+        r#","atendido":true"#,
+    );
+    let mut n = 0;
+    let (quadro, _) = quadro_novo(&estacao, &mut n);
+    let parada = cena::amostra(0.0, 0.0, 0.0, [0.0; 3]);
+    let grade = cena::ver(&cena::olho_do_simulador(), &parada, &caixa_a_um_metro(), K);
+    estacao.entregar(2, &grade);
+    // A marca que diz a falha da grade, a quem não tem mundo, não é nada.
+    marcar(
+        &estacao,
+        quadro,
+        r#"{"entregaram":[2],"falharam":[{"n":2,"motivo":"nada"}],"recusa":null}"#,
+    );
+    std::thread::sleep(Duration::from_millis(300));
+    let e = p.estado.lock().unwrap().clone();
+    assert_eq!(
+        (e.deliveries.get("profundidade"), e.errors, e.world_ms),
+        (Some(&1), 0, None)
+    );
+    assert!(p.publicadas.lock().unwrap().is_empty());
+
+    // Com a camada de mundo: a carga que não é uma grade conta a entrega e um erro, e o mundo fica como estava.
+    let porta = porta_livre();
+    let c = subir_com_o_mundo(porta, cena::ajustes());
+    c.dar_amostras(|_| 0.0);
+    let estacao = Estacao::subir_com(
+        porta,
+        QUADRO_A_10,
+        OBJETOS_E_DISTANCIA,
+        r#","atendido":true"#,
+    );
+    let mut n = 0;
+    let (quadro, _) = quadro_novo(&estacao, &mut n);
+    estacao.entregar(2, &grade[..grade.len() - 1]);
+    estacao.atender(quadro);
+    std::thread::sleep(Duration::from_millis(300));
+    let e = c.p.estado.lock().unwrap().clone();
+    assert_eq!(
+        (e.deliveries.get("profundidade"), e.errors, e.world_ms),
+        (Some(&1), 1, None)
+    );
+    // Sem grade nenhuma lida, o que o mundo diz é que não tem medida recente; e nenhuma célula.
+    let agora = c.esperar_estado("stale", Duration::from_secs(1));
+    assert!(agora["obstacle"].is_null(), "{agora}");
+    assert!(
+        c.mundo
+            .lock()
+            .unwrap()
+            .celulas(c.relogio.agora())
+            .is_empty()
+    );
+    // A mesma grade, inteira, num quadro novo: agora vira mundo.
+    let (quadro, _) = quadro_novo(&estacao, &mut n);
+    estacao.entregar(2, &grade);
+    estacao.atender(quadro);
+    c.esperar_estado("ok", Duration::from_secs(2));
+}
+
+#[test]
+fn a_marca_que_diz_a_falha_da_grade_vira_failed_e_a_grade_que_para_de_chegar_vira_stale() {
+    let porta = porta_livre();
+    let c = subir_com_o_mundo(porta, cena::ajustes());
+    c.dar_amostras(|_| 0.0);
+    let estacao = Estacao::subir_com(
+        porta,
+        QUADRO_A_10,
+        OBJETOS_E_DISTANCIA,
+        r#","atendido":true"#,
+    );
+    let parada = cena::amostra(0.0, 0.0, 0.0, [0.0; 3]);
+    let grade = cena::ver(&cena::olho_do_simulador(), &parada, &caixa_a_um_metro(), K);
+    let mut n = 0;
+    let (quadro, _) = quadro_novo(&estacao, &mut n);
+    estacao.entregar(2, &grade);
+    marcar(
+        &estacao,
+        quadro,
+        r#"{"entregaram":[2],"falharam":[],"recusa":null}"#,
+    );
+    c.esperar_estado("ok", Duration::from_secs(3));
+
+    // No quadro seguinte quem falhou foram os Objetos: a grade não falhou, e o mundo segue como estava.
+    let (quadro, _) = quadro_novo(&estacao, &mut n);
+    marcar(
+        &estacao,
+        quadro,
+        r#"{"entregaram":[],"falharam":[{"n":1,"motivo":"o detector não respondeu"}],"recusa":null}"#,
+    );
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(c.ultima().unwrap()["perception"]["state"], "ok");
+
+    // Agora a Distância falha: a percepção falhou, com o motivo que a estação deu. Não é o mesmo que não ver nada.
+    let (quadro, _) = quadro_novo(&estacao, &mut n);
+    marcar(
+        &estacao,
+        quadro,
+        r#"{"entregaram":[1],"falharam":[{"n":2,"motivo":"o modelo de profundidade não respondeu"}],"recusa":null}"#,
+    );
+    let agora = c.esperar_estado("failed", Duration::from_secs(1));
+    assert_eq!(
+        agora["perception"]["reason"],
+        "o modelo de profundidade não respondeu"
+    );
+    assert!(
+        agora["perception"]["scale"].is_null(),
+        "sem medida, não há escala a dizer: {agora}"
+    );
+
+    // Uma grade boa depois da falha: a percepção voltou.
+    let (quadro, _) = quadro_novo(&estacao, &mut n);
+    estacao.entregar(2, &grade);
+    marcar(
+        &estacao,
+        quadro,
+        r#"{"entregaram":[2],"falharam":[],"recusa":null}"#,
+    );
+    c.esperar_estado("ok", Duration::from_secs(2));
+
+    // O quadro recusado inteiro também é falha da percepção.
+    let (quadro, _) = quadro_novo(&estacao, &mut n);
+    marcar(
+        &estacao,
+        quadro,
+        r#"{"entregaram":[],"falharam":[],"recusa":"o quadro em jpeg não abriu"}"#,
+    );
+    let agora = c.esperar_estado("failed", Duration::from_secs(1));
+    assert_eq!(agora["perception"]["reason"], "o quadro em jpeg não abriu");
+
+    // A marca que não se lê é contada como erro, e não muda o que o mundo diz.
+    let (quadro, _) = quadro_novo(&estacao, &mut n);
+    marcar(&estacao, quadro, "nao e json");
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(c.p.estado.lock().unwrap().errors, 1);
+
+    // E a grade para de chegar: passado `velho_s` (1,5 s), a percepção está velha. Nunca "livre": o que o mundo lembra segue
+    // no mapa, com a idade, e o estado diz que não há medida nova.
+    let agora = c.esperar_estado("stale", Duration::from_secs(4));
+    assert!(agora["perception"]["reason"].is_null(), "{agora}");
+    assert!(
+        agora["obstacle"]["ahead_m"].as_f64().is_some(),
+        "a caixa vista segue lembrada à frente: {agora}"
+    );
 }
