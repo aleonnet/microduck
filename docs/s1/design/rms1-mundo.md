@@ -121,6 +121,22 @@ O programa passa a sessão pelo mesmo caminho do robô e escreve o que `s1.world
 `REPRODUCAO CONFERE`. Com `--camera`, troca a câmera da gravação: é como a calibração experimenta uma lente ou um atraso
 sem voltar ao robô.
 
+O que a calibração usa a mais:
+
+- `--janela <de> <até> <metros>`, quantas vezes for preciso: a mesma conferência só nos mundos entre as duas horas da
+  gravação, contra a distância daquela janela (a caixa em várias marcas, numa sessão só). O veredito é um só: `REPRODUCAO
+  CONFERE` se todas as janelas, e o `--esperado`, ficam dentro da regra.
+- `--exame`: cada linha leva também `exam` e `fresh`. `exam` é a escala que levou a grade aos metros (`scale`), de onde ela
+  veio (`origin`: `measured` ou `remembered`) e o exame da faixa de baixo do quadro (`frame`): quantos pontos a faixa tem
+  (`total`), quantos podiam ser chão (`points`) e quantos ficaram perto do quartil de baixo (`kept`); a escala pela razão
+  (`ratio`) e pela inclinação da reta (`line`), o desvio entre as duas (`deviation`) e a dispersão (`dispersion`); e por que
+  a escala do quadro não valeu (`refused`: `few_points`, `scattered`, `no_slope` ou `deviation`; nulo, se valeu). `fresh` é o
+  meio de cada célula que aquele quadro marcou como ocupada, na odometria, em metros.
+
+No código, o exame é `escala::examinar` (a conta da escala passo a passo; `escala::do_quadro` é o exame aceito), cada grade
+devolve em `Tratada` o exame e a escala usada, e `gravacao::reproduzir_em_passos` devolve, de cada grade, o mundo, o
+`Tratada` e as ocupadas do quadro. As ferramentas da calibração, no laboratório (`tools/calibracao/`), leem estas linhas.
+
 ## 8. Provar
 
 ```sh

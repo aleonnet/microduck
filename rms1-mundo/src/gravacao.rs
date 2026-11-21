@@ -21,7 +21,8 @@ use serde::{Deserialize, Serialize};
 use crate::folga::Corpo;
 use crate::geometria::Olho;
 use crate::historia::Amostra;
-use crate::{Agora, Ajustes, Mundo};
+use crate::ocupacao::Estado;
+use crate::{Agora, Ajustes, Mundo, Tratada};
 
 const MARCA: &[u8] = b"rms1-mundo 1\n";
 
@@ -214,6 +215,17 @@ pub fn ler(caminho: &Path) -> Result<Sessao, String> {
     })
 }
 
+/// Um passo da reprodução: o mundo depois de uma grade ou de uma falha.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Passo {
+    pub t: f64,
+    pub agora: Agora,
+    /// O que a grade deste passo deu; nada, se o passo é uma falha dita pela estação.
+    pub tratada: Option<Tratada>,
+    /// O meio de cada célula que este quadro marcou como ocupada, na odometria, em metros.
+    pub ocupadas: Vec<[f64; 2]>,
+}
+
 /// Passa a sessão pelo mesmo caminho do robô, com estes ajustes, e devolve o mundo depois de cada grade e de cada falha, com
 /// a hora. `olho` troca a câmera da gravação: é como a calibração experimenta uma lente sem voltar ao robô.
 pub fn reproduzir(
@@ -221,11 +233,25 @@ pub fn reproduzir(
     olho: Option<Olho>,
     ajustes: &Ajustes,
 ) -> Result<Vec<(f64, Agora)>, String> {
+    Ok(reproduzir_em_passos(sessao, olho, ajustes)?
+        .into_iter()
+        .map(|p| (p.t, p.agora))
+        .collect())
+}
+
+/// A mesma reprodução, com o que cada grade deu: a escala e o exame dela, e as células que ela marcou como ocupadas. É o que
+/// a calibração mede.
+pub fn reproduzir_em_passos(
+    sessao: &Sessao,
+    olho: Option<Olho>,
+    ajustes: &Ajustes,
+) -> Result<Vec<Passo>, String> {
     // A reprodução não grava por cima da sessão que lê.
     let ajustes = Ajustes {
         gravar: String::new(),
         ..ajustes.clone()
     };
+    let lado = ajustes.celula_m;
     let mut mundo = Mundo::novo(olho.or(sessao.olho), sessao.corpo, ajustes)
         .map_err(|e| format!("o mundo não abriu: {e}"))?;
     let mut saida = Vec::new();
@@ -237,12 +263,34 @@ pub fn reproduzir(
                 leitor,
                 carga,
             } => {
-                mundo.grade(carga, leitor, *t_captura)?;
-                saida.push((*t_captura, mundo.agora(*t_captura)));
+                let tratada = mundo.grade(carga, leitor, *t_captura)?;
+                // As ocupadas deste quadro: as que ele acabou de marcar, com a idade em zero.
+                let ocupadas = mundo
+                    .celulas(*t_captura)
+                    .into_iter()
+                    .filter(|(_, estado, idade)| *estado == Estado::Ocupada && *idade == 0.0)
+                    .map(|(c, _, _)| {
+                        [
+                            (f64::from(c[0]) + 0.5) * lado,
+                            (f64::from(c[1]) + 0.5) * lado,
+                        ]
+                    })
+                    .collect();
+                saida.push(Passo {
+                    t: *t_captura,
+                    agora: mundo.agora(*t_captura),
+                    tratada: Some(tratada),
+                    ocupadas,
+                });
             }
             Registro::Falha { t, motivo } => {
                 mundo.falha(*t, motivo);
-                saida.push((*t, mundo.agora(*t)));
+                saida.push(Passo {
+                    t: *t,
+                    agora: mundo.agora(*t),
+                    tratada: None,
+                    ocupadas: Vec::new(),
+                });
             }
         }
     }

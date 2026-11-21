@@ -176,3 +176,97 @@ fn a_gravacao_para_no_limite_e_o_mundo_segue() {
     };
     assert!(Mundo::novo(Some(olho), comum::corpo(), sem_pasta).is_err());
 }
+
+/// A reprodução em passos leva, de cada grade, o que a calibração mede: a escala que a levou aos metros, o exame da faixa de
+/// baixo, e as células que aquele quadro marcou como ocupadas.
+#[test]
+fn a_reproducao_em_passos_leva_a_escala_o_exame_e_as_ocupadas_de_cada_grade() {
+    let pasta = tempfile::tempdir().unwrap();
+    let arquivo = pasta.path().join("sessao.mundo");
+    let ajustes = Ajustes {
+        gravar: arquivo.to_str().unwrap().to_owned(),
+        ..comum::ajustes()
+    };
+    let mut m = Mundo::novo(
+        Some(comum::olho_do_simulador()),
+        comum::corpo(),
+        ajustes.clone(),
+    )
+    .unwrap();
+    let ao_vivo = sessao(&mut m);
+    drop(m);
+    let lida = gravacao::ler(&arquivo).unwrap();
+    let passos = gravacao::reproduzir_em_passos(&lida, None, &ajustes).unwrap();
+    // Os mesmos mundos da reprodução de sempre, na mesma ordem.
+    let de_sempre = gravacao::reproduzir(&lida, None, &ajustes).unwrap();
+    assert_eq!(
+        passos
+            .iter()
+            .map(|p| (p.t, p.agora.clone()))
+            .collect::<Vec<_>>(),
+        de_sempre
+    );
+    assert_eq!(passos.len(), ao_vivo.len());
+
+    // A primeira grade: a torre nivelada, de frente para a caixa a 1 m. A escala é a do quadro e é a do modelo; o exame a
+    // aceitou; e as ocupadas deste quadro estão na face da caixa.
+    let primeira = &passos[0];
+    let tratada = primeira
+        .tratada
+        .expect("o passo de uma grade leva o que ela deu");
+    let valor = tratada
+        .valor
+        .expect("a escala que levou a grade aos metros");
+    assert!(
+        (valor / K - 1.0).abs() < 0.02,
+        "a escala saiu {valor}, e a do modelo é {K}"
+    );
+    assert_eq!(tratada.exame.map(|e| e.recusa), Some(None), "{tratada:?}");
+    assert_eq!(tratada.exame.and_then(|e| e.aceito()), tratada.do_quadro);
+    assert!(
+        !primeira.ocupadas.is_empty(),
+        "o quadro que vê a caixa marca ocupadas"
+    );
+    let na_face = primeira
+        .ocupadas
+        .iter()
+        .filter(|c| (c[0] - 1.0).abs() < 0.08 && c[1].abs() < 0.2)
+        .count();
+    assert!(
+        na_face >= 3,
+        "das {} ocupadas do primeiro quadro, {na_face} estão na face da caixa a 1 m: {:?}",
+        primeira.ocupadas.len(),
+        primeira.ocupadas
+    );
+    // E nenhuma no chão vazio: toda ocupada do quadro está numa das duas caixas ou na parede, a menos de duas células.
+    let folga = 0.08;
+    let em_algo = |c: &[f64; 2]| {
+        let na_caixa = |x: f64, y: f64| {
+            c[0] > x - folga && c[0] < x + 0.3 + folga && (c[1] - y).abs() < 0.15 + folga
+        };
+        na_caixa(1.0, 0.0) || na_caixa(0.3, 1.2) || c[0] > 4.0 - folga
+    };
+    let no_chao: Vec<_> = primeira.ocupadas.iter().filter(|c| !em_algo(c)).collect();
+    assert!(
+        no_chao.is_empty(),
+        "o primeiro quadro deu por ocupadas células do chão vazio: {no_chao:?}"
+    );
+
+    // O passo da falha dita pela estação não é de grade nenhuma; o da grade de outro leitor é, e não tem exame nem escala.
+    let da_falha = &passos[passos.len() - 2];
+    assert_eq!(da_falha.agora.percepcao, Percepcao::Falhou);
+    assert!(da_falha.tratada.is_none() && da_falha.ocupadas.is_empty());
+    let de_outro_leitor = passos
+        .last()
+        .unwrap()
+        .tratada
+        .expect("é o passo de uma grade");
+    assert_eq!(
+        (
+            de_outro_leitor.percepcao,
+            de_outro_leitor.exame,
+            de_outro_leitor.valor
+        ),
+        (Percepcao::SemMetros, None, None)
+    );
+}

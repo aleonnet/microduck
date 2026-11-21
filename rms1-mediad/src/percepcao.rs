@@ -245,6 +245,11 @@ pub struct Estado {
     pub outcomes: u64,
     /// Quanto a última grade de profundidade levou para virar mundo, em milissegundos.
     pub world_ms: Option<f64>,
+    /// A hora no relógio das amostras e das capturas, em segundos, dita a cada publicação do mundo: é o relógio da sessão
+    /// gravada (`[midia.mundo] gravar`), e quem mede com a gravação marca as janelas por ele. Nulo sem a camada de mundo.
+    pub world_clock_s: Option<f64>,
+    /// Se a sessão está sendo gravada: falso sem `gravar`, ou depois de a gravação parar no limite dela.
+    pub world_recording: Option<bool>,
 }
 
 /// As candidatas da resposta do detector, passadas do formato da estação (cinco números por caixa) para o que
@@ -464,9 +469,10 @@ pub fn rodar(
     let udp = ouvir(cfg.porta_anuncio)?;
     if let Some(m) = &cfg.mundo {
         let (m, p) = (m.clone(), parar.clone());
-        std::thread::Builder::new()
-            .name("mundo".into())
-            .spawn(move || publicar_o_mundo(&m, &p))?;
+        std::thread::Builder::new().name("mundo".into()).spawn({
+            let estado = estado.clone();
+            move || publicar_o_mundo(&m, &estado, &p)
+        })?;
     }
     let publicar = Arc::new(publicar);
     let partilha = Arc::new(Mutex::new(Partilha::default()));
@@ -947,7 +953,7 @@ fn falha_do_mapa(carga: &[u8], do_mapa: &[u16]) -> Result<Option<String>, ()> {
 }
 
 /// Publica o mundo até `parar`: `s1.world`, reexpresso no corpo de agora, e `s1.world.grid`, cada uma no ritmo dela.
-fn publicar_o_mundo(m: &Mundo, parar: &AtomicBool) {
+fn publicar_o_mundo(m: &Mundo, estado: &Mutex<Estado>, parar: &AtomicBool) {
     let (periodo, periodo_da_grade) = {
         let mundo = m.mundo.lock().expect("o mundo");
         let de = |ritmo: u32| Duration::from_secs_f64(1.0 / f64::from(ritmo.max(1)));
@@ -972,6 +978,14 @@ fn publicar_o_mundo(m: &Mundo, parar: &AtomicBool) {
         if agora >= proxima {
             // A seguinte sai um período depois desta, e nunca em rajada para compensar atraso.
             proxima = (proxima + periodo).max(agora);
+            // A hora do mundo e a gravação vão ao estado no mesmo ritmo, haja ou não quem assine: é por elas que quem mede
+            // sabe a que instante da sessão gravada cada medida pertence, e que a sessão segue sendo gravada.
+            let gravando = m.mundo.lock().expect("o mundo").gravando();
+            {
+                let mut e = estado.lock().expect("estado da percepção");
+                e.world_clock_s = Some(t);
+                e.world_recording = Some(gravando);
+            }
             if quer_o_mundo {
                 // A conta é feita com o mundo travado; a linha é montada com ele solto.
                 let visto = m.mundo.lock().expect("o mundo").agora(t);

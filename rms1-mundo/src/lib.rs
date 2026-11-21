@@ -76,6 +76,11 @@ pub struct Tratada {
     pub escala: Option<Escala>,
     /// A escala do próprio quadro, com a qualidade dela, quando ele a deu.
     pub do_quadro: Option<escala::DoQuadro>,
+    /// O exame da faixa de baixo do quadro, valha a escala dele ou não; nada, se a conta nem chegou a ele (sem a câmera, sem
+    /// metros, sem a pose do instante).
+    pub exame: Option<escala::Exame>,
+    /// A escala que levou esta grade aos metros: a do quadro, ou a lembrada.
+    pub valor: Option<f64>,
     pub visto: ocupacao::Visto,
 }
 
@@ -217,6 +222,8 @@ impl Mundo {
             percepcao: Percepcao::Ok,
             escala: None,
             do_quadro: None,
+            exame: None,
+            valor: None,
             visto: ocupacao::Visto::default(),
         };
         tratada.percepcao = 'conta: {
@@ -246,8 +253,9 @@ impl Mundo {
                 self.raios = Some(Raios::da_grade(&olho, g.largura, g.altura));
             }
             let raios = self.raios.as_ref().expect("os raios desta grade");
-            tratada.do_quadro =
-                escala::do_quadro(&g, &self.conversor, &vista, raios, &self.ajustes);
+            let exame = escala::examinar(&g, &self.conversor, &vista, raios, &self.ajustes);
+            tratada.exame = Some(exame);
+            tratada.do_quadro = exame.aceito();
             let valor = match tratada.do_quadro {
                 Some(e) => {
                     self.escalas.guardar(t_captura, e.valor);
@@ -265,6 +273,7 @@ impl Mundo {
                     None => break 'conta Percepcao::SemChao,
                 },
             };
+            tratada.valor = Some(valor);
             tratada.visto = self.mapa.observar(
                 &g,
                 &self.conversor,

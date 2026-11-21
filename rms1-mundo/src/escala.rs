@@ -41,6 +41,66 @@ fn mediana(valores: &mut [f32]) -> f32 {
     *valores.select_nth_unstable_by(meio, f32::total_cmp).1
 }
 
+/// Por que a escala de um quadro não valeu.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Recusa {
+    /// A faixa de baixo tem pontos de menos abaixo do horizonte e dentro do alcance.
+    PoucoChao,
+    /// Poucos pontos ficam perto do quartil de baixo das razões: a faixa não mostra um chão só.
+    ChaoEspalhado,
+    /// A reta do inverso da profundidade contra a linha é deitada ou desce: uma parede enchendo a faixa.
+    SemReta,
+    /// A escala pela razão e a escala pela inclinação da reta diferem mais que a tolerância.
+    Desvio,
+}
+
+impl Recusa {
+    pub fn nome(self) -> &'static str {
+        match self {
+            Self::PoucoChao => "few_points",
+            Self::ChaoEspalhado => "scattered",
+            Self::SemReta => "no_slope",
+            Self::Desvio => "deviation",
+        }
+    }
+}
+
+/// O exame da faixa de baixo de um quadro: tudo o que a conta da escala viu, valha a escala ou não. É o que a calibração lê
+/// para saber por que um quadro não foi dado por medido.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Exame {
+    /// Quantos pontos a faixa de baixo tem.
+    pub total: usize,
+    /// Quantos deles podiam ser chão: abaixo do horizonte, dentro do alcance, com profundidade.
+    pub pontos: usize,
+    /// Quantos ficaram perto do quartil de baixo das razões.
+    pub ficaram: usize,
+    /// A escala pela razão (a mediana das que ficaram) e a pela inclinação da reta.
+    pub pela_razao: Option<f64>,
+    pub pela_reta: Option<f64>,
+    /// Quanto as duas diferem, em fração.
+    pub desvio: Option<f64>,
+    /// A dispersão das razões que ficaram: a mediana do desvio, em fração da escala.
+    pub dispersao: Option<f64>,
+    /// Por que a escala não valeu; nada, se valeu.
+    pub recusa: Option<Recusa>,
+}
+
+impl Exame {
+    /// A escala do quadro, se o exame a aceitou.
+    pub fn aceito(&self) -> Option<DoQuadro> {
+        if self.recusa.is_some() {
+            return None;
+        }
+        Some(DoQuadro {
+            valor: self.pela_razao?,
+            chao: self.ficaram as f64 / self.total as f64,
+            dispersao: self.dispersao?,
+            desvio: self.desvio?,
+        })
+    }
+}
+
 /// A escala deste quadro. Nenhuma, se a faixa de baixo não tem chão bastante ou o que ela mostra não é chão.
 pub fn do_quadro(
     g: &Grade<'_>,
@@ -49,10 +109,31 @@ pub fn do_quadro(
     raios: &Raios,
     ajustes: &Ajustes,
 ) -> Option<DoQuadro> {
+    examinar(g, conversor, vista, raios, ajustes).aceito()
+}
+
+/// O exame da faixa de baixo deste quadro: a conta da escala, passo a passo, com o motivo de ela não valer quando não vale.
+pub fn examinar(
+    g: &Grade<'_>,
+    conversor: &Conversor,
+    vista: &Vista,
+    raios: &Raios,
+    ajustes: &Ajustes,
+) -> Exame {
     let de = ((ajustes.semente_de * g.altura as f64).ceil() as usize).min(g.altura);
     let total = (g.altura - de) * g.largura;
     let minimo = ((ajustes.chao_minimo * total as f64).ceil() as usize).max(8);
     let altura = vista.altura;
+    let mut exame = Exame {
+        total,
+        pontos: 0,
+        ficaram: 0,
+        pela_razao: None,
+        pela_reta: None,
+        desvio: None,
+        dispersao: None,
+        recusa: None,
+    };
     // Cada ponto da faixa que pode ser chão: a linha dele, a razão entre a profundidade do chão ali e a da grade, e o inverso
     // da profundidade que a grade diz.
     let mut pontos: Vec<(f32, f32, f32)> = Vec::with_capacity(total);
@@ -72,19 +153,26 @@ pub fn do_quadro(
             }
         }
     }
+    exame.pontos = pontos.len();
     if pontos.len() < minimo {
-        return None;
+        exame.recusa = Some(Recusa::PoucoChao);
+        return exame;
     }
     let mut razoes: Vec<f32> = pontos.iter().map(|p| p.1).collect();
     let quarto = razoes.len() / 4;
     let de_baixo = *razoes.select_nth_unstable_by(quarto, f32::total_cmp).1;
     let folga = ajustes.tolerancia as f32 * de_baixo;
     pontos.retain(|p| (p.1 - de_baixo).abs() <= folga);
+    exame.ficaram = pontos.len();
     if pontos.len() < minimo {
-        return None;
+        exame.recusa = Some(Recusa::ChaoEspalhado);
+        return exame;
     }
     let mut razoes: Vec<f32> = pontos.iter().map(|p| p.1).collect();
     let valor = f64::from(mediana(&mut razoes));
+    exame.pela_razao = Some(valor);
+    let mut desvios: Vec<f32> = razoes.iter().map(|r| (r - valor as f32).abs()).collect();
+    exame.dispersao = Some(f64::from(mediana(&mut desvios)) / valor);
     // A reta do inverso da profundidade contra a linha, por mínimos quadrados, e a escala que a inclinação dela dá.
     let n = pontos.len() as f64;
     let (mut sy, mut su, mut syy, mut syu) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
@@ -97,24 +185,22 @@ pub fn do_quadro(
     }
     let espalhamento = n * syy - sy * sy;
     if espalhamento <= 1e-12 {
-        return None;
+        exame.recusa = Some(Recusa::SemReta);
+        return exame;
     }
     let pela_reta = (n * syu - sy * su) / espalhamento * vista.escala_por_inclinacao_da_reta();
     // A reta deitada ou descendo (uma parede enchendo a faixa) não é chão.
     if pela_reta.is_nan() || pela_reta <= 0.0 {
-        return None;
+        exame.recusa = Some(Recusa::SemReta);
+        return exame;
     }
+    exame.pela_reta = Some(pela_reta);
     let desvio = (valor / pela_reta - 1.0).abs();
+    exame.desvio = Some(desvio);
     if desvio > ajustes.tolerancia {
-        return None;
+        exame.recusa = Some(Recusa::Desvio);
     }
-    let mut desvios: Vec<f32> = razoes.iter().map(|r| (r - valor as f32).abs()).collect();
-    Some(DoQuadro {
-        valor,
-        chao: pontos.len() as f64 / total as f64,
-        dispersao: f64::from(mediana(&mut desvios)) / valor,
-        desvio,
-    })
+    exame
 }
 
 /// As escalas boas dos últimos quadros, para o quadro em que o chão sai da faixa de baixo (a torre inclinada para cima, um

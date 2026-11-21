@@ -4,7 +4,7 @@
 mod comum;
 
 use comum::{amostra, br, caixa_em, entrega, parede_em, profundidades};
-use rms1_mundo::escala::{self, DoQuadro};
+use rms1_mundo::escala::{self, DoQuadro, Recusa};
 use rms1_mundo::grade::{self, Conversor};
 use rms1_mundo::{Amostra, Escala, Olho, Percepcao, Raios, Vista};
 
@@ -264,4 +264,76 @@ fn com_a_inclinacao_errada_o_quadro_nao_e_dado_por_medido() {
             }
         }
     }
+}
+
+/// O exame da faixa de baixo diz o que a conta viu, valha a escala ou não: é o que a calibração lê para saber por que um
+/// quadro não foi dado por medido.
+#[test]
+fn o_exame_diz_por_que_a_escala_do_quadro_nao_valeu() {
+    let olho = comum::olho_de_teste();
+    let examinar = |dita: &Amostra, carga: &[u8]| {
+        let g = grade::ler(carga).unwrap();
+        let mut conversor = Conversor::default();
+        conversor.preparar(&g);
+        let vista = Vista::nova(&olho, dita);
+        let raios = Raios::da_grade(&olho, g.largura, g.altura);
+        let ajustes = comum::ajustes();
+        let exame = escala::examinar(&g, &conversor, &vista, &raios, &ajustes);
+        assert_eq!(
+            exame.aceito(),
+            escala::do_quadro(&g, &conversor, &vista, &raios, &ajustes),
+            "o exame aceito é a escala do quadro"
+        );
+        // A faixa de baixo é o quinto de baixo da grade de 320 por 180.
+        assert_eq!(exame.total, 36 * 320);
+        assert!(
+            exame.ficaram <= exame.pontos && exame.pontos <= exame.total,
+            "{exame:?}"
+        );
+        exame
+    };
+    let nivelada = amostra(0.0, 0.0, 0.0, [0.0; 3]);
+    let chao = comum::ver(&olho, &nivelada, &[parede_em(4.0)], 0.1);
+
+    // O chão limpo: a escala vale, e as duas contas dela dão a do modelo.
+    let e = examinar(&nivelada, &chao);
+    assert_eq!(e.recusa, None, "{e:?}");
+    for (nome, conta) in [("pela razão", e.pela_razao), ("pela reta", e.pela_reta)] {
+        let valor = conta.unwrap_or_else(|| panic!("o chão limpo não deu a escala {nome}: {e:?}"));
+        assert!(
+            (valor / 0.1 - 1.0).abs() < 0.02,
+            "no chão limpo a escala {nome} saiu {valor}, e a do modelo é 0,1"
+        );
+    }
+    assert!(e.desvio.unwrap() < 0.02 && e.ficaram > e.total / 2, "{e:?}");
+
+    // A torre a 30° para cima: a faixa de baixo não tem ponto que possa ser chão, e é isso que o exame diz.
+    let para_cima = amostra(0.0, 0.0, 30.0, [0.0; 3]);
+    let e = examinar(
+        &para_cima,
+        &comum::ver(&olho, &para_cima, &[parede_em(4.0)], 0.1),
+    );
+    assert_eq!((e.recusa, e.pontos), (Some(Recusa::PoucoChao), 0), "{e:?}");
+
+    // A grade do chão limpo casada com a torre 15° acima do que estava: recusada, e não por falta de pontos (a faixa segue
+    // abaixo do horizonte): o que ela mostra não é o chão que a conta espera.
+    // As duas contas da escala se separam (a pela razão dá mais que o dobro da pela reta), e o motivo dito é o desvio.
+    let e = examinar(&amostra(0.0, 0.0, 15.0, [0.0; 3]), &chao);
+    assert!(
+        e.recusa == Some(Recusa::Desvio) && e.desvio.unwrap() > 1.0 && e.pontos > e.total / 2,
+        "com a torre dita 15° acima, o exame tem de recusar pelo desvio entre as duas contas: {e:?}"
+    );
+
+    // Uma parede a 45 cm enchendo a faixa de baixo: o inverso da profundidade não cresce com a linha, a escala pela reta sai
+    // perto de zero, e o motivo dito é o desvio, e não a falta de pontos.
+    let e = examinar(
+        &nivelada,
+        &comum::ver(&olho, &nivelada, &[parede_em(0.45)], 0.1),
+    );
+    assert!(
+        e.recusa == Some(Recusa::Desvio)
+            && e.pela_reta.unwrap() < 0.1 * e.pela_razao.unwrap()
+            && e.pontos == e.total,
+        "com a parede enchendo a faixa, o exame tem de recusar pelo desvio, com a reta deitada: {e:?}"
+    );
 }

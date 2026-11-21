@@ -1795,6 +1795,50 @@ fn sem_a_camada_de_mundo_a_grade_e_so_contada_e_a_grade_que_nao_se_le_e_erro() {
     c.esperar_estado("ok", Duration::from_secs(2));
 }
 
+/// Uma pasta de teste que some ao sair, com o que tiver dentro.
+struct PastaDeTeste(std::path::PathBuf);
+
+impl Drop for PastaDeTeste {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+#[test]
+fn o_estado_diz_a_hora_do_mundo_e_se_a_sessao_esta_sendo_gravada() {
+    // Sem `gravar`: a hora é a do relógio das amostras, e a sessão não é gravada.
+    let c = subir_com_o_mundo(porta_livre(), cena::ajustes());
+    std::thread::sleep(Duration::from_millis(300));
+    let e = c.p.estado.lock().unwrap().clone();
+    let hora = e.world_clock_s.expect("a hora do mundo");
+    let atraso = c.relogio.agora() - hora;
+    assert!(
+        (0.0..0.2).contains(&atraso),
+        "a hora do mundo no estado está {atraso:.3} s atrás do relógio das amostras"
+    );
+    assert_eq!(e.world_recording, Some(false));
+    // A hora anda.
+    std::thread::sleep(Duration::from_millis(300));
+    let depois = c.p.estado.lock().unwrap().world_clock_s.unwrap();
+    assert!(
+        depois - hora > 0.2,
+        "a hora do mundo foi de {hora:.3} a {depois:.3} em 0,3 s"
+    );
+
+    // Com `gravar`: o estado diz que a sessão está sendo gravada.
+    let pasta = PastaDeTeste(
+        std::env::temp_dir().join(format!("rms1-mediad-gravando-{}", std::process::id())),
+    );
+    std::fs::create_dir_all(&pasta.0).unwrap();
+    let ajustes = rms1_mundo::Ajustes {
+        gravar: pasta.0.join("sessao.mundo").to_string_lossy().into_owned(),
+        ..cena::ajustes()
+    };
+    let c = subir_com_o_mundo(porta_livre(), ajustes);
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(c.p.estado.lock().unwrap().world_recording, Some(true));
+}
+
 #[test]
 fn a_marca_que_diz_a_falha_da_grade_vira_failed_e_a_grade_que_para_de_chegar_vira_stale() {
     let porta = porta_livre();
