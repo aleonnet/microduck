@@ -12,8 +12,8 @@ contraprovas). Ainda não está ligado ao `rms1-mediad`, e a câmera do robô n�
 
 **Estado em 2026-11-21:** o pacote está ligado ao `rms1-mediad` e publica (seção da camada de mundo em
 [`rms1-mediad.md`](rms1-mediad.md)). **O robô mostra o mundo sem esperar a calibração:** sem a entrada `camera` na tabela, vale a lente
-que ele mesmo traz de fábrica (o `rms1-mediad` a lê no arquivo do próprio robô, e os números dela, que são de cada robô, não
-moram neste repositório), dita provisória, e a linha diz `lens.calibrated: false`; a calibração grava a lente medida na
+que ele mesmo traz de fábrica (o texto do arquivo de fábrica chega ao `rms1-mediad` em `[midia.mundo] lente_de_fabrica`, posto por quem
+ativa o robô, que o lê nele; os números, que são de cada robô, não moram neste repositório), dita provisória, e a linha diz `lens.calibrated: false`; a calibração grava a lente medida na
 tabela e só diz se a medida está certa. O cano do lançador, que a lente do robô vê embaixo, no meio do quadro, sai da conta pela
 geometria dele (`cano_na_lente`, da malha do app, com a folga `corpo_folga_m`). E a conferência das duas contas da escala
 tem o limite dela, `reta_tolerancia`: no quadro real guardado (no laboratório,
@@ -120,6 +120,7 @@ medida: com a provisória o mundo aparece do mesmo jeito, e quem mostra os metro
 
 Os padrões são de partida, e a origem de cada um está em `rms1d-params/src/lib.rs`, em `Default` de `MidiaMundo`: `ritmo`,
 `ritmo_da_grade`, `setores`, `alcance_m`, `semente_de`, `tolerancia`, `chao_minimo`, `reta_tolerancia`, `corpo_folga_m`,
+`lente_de_fabrica`,
 `escala_vale_ms`, `celula_m`,
 `janela_m`, `altura_minima_m`, `altura_maxima_m`, `confirma_livre`, `lembra_s`, `fresco_s`, `velho_s`, `torre_vale_ms`,
 `gravar` e `gravar_limite_mb`. Cada um tem faixa, e o valor fora dela é recusado pelo nome.

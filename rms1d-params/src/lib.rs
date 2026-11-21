@@ -421,6 +421,10 @@ pub struct MidiaMundo {
     pub gravar_limite_mb: u64,
     /// De onde vem a grade de profundidade que vira mundo.
     pub profundidade: FonteProfundidade,
+    /// O texto do arquivo de calibração da câmera que o robô traz de fábrica (`/data/vision/cali/calipara_cd_960_720.txt`, no
+    /// robô; o serviço roda num chroot e não o alcança): quem ativa o robô o lê nele e o põe aqui. É a lente provisória,
+    /// usada enquanto a tabela física não traz a medida (`Fisica::camera_pela_de_fabrica`). Vazio, não há lente provisória.
+    pub lente_de_fabrica: String,
 }
 
 /// De onde vem a grade de profundidade.
@@ -484,6 +488,7 @@ impl Default for MidiaMundo {
             // uma sessão esquecida encheria o disco do robô, como as gravações do corpo encheram em 2026-11-15.
             gravar_limite_mb: 512,
             profundidade: FonteProfundidade::Estacao,
+            lente_de_fabrica: String::new(),
         }
     }
 }
@@ -510,14 +515,10 @@ pub struct CanoNaLente {
     pub raio_m: f64,
 }
 
-/// O arquivo de calibração da câmera que cada robô traz de fábrica: os três primeiros números, separados por vírgula, são o
-/// foco e o centro num quadro de `camera_de_fabrica` (960 por 720). Os números são de cada robô, e por isso são lidos nele, e
-/// não guardados na tabela.
-pub const ARQUIVO_DA_CAMERA_DE_FABRICA: &str = "/data/vision/cali/calipara_cd_960_720.txt";
-
 /// A lente da câmera: o foco e o centro, em pontos de um quadro de `largura` por `altura`, o zero da inclinação e o atraso do
 /// quadro. A do robô é a entrada `camera` da tabela física, medida na calibração; até ela existir, vale a que o robô traz de
-/// fábrica (`Fisica::camera_pela_de_fabrica`), dita provisória. A do simulador sai do campo de visão, por construção.
+/// fábrica (`Fisica::camera_pela_de_fabrica`, do texto que chega em `[midia.mundo] lente_de_fabrica`), dita provisória. A do
+/// simulador sai do campo de visão, por construção.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Camera {
     pub fx: f64,
@@ -884,8 +885,10 @@ impl Fisica {
         Self::de_json(TABELA).expect("robo_s1.json inválido")
     }
 
-    /// A lente provisória, do texto do arquivo de calibração que o robô traz de fábrica (`ARQUIVO_DA_CAMERA_DE_FABRICA`): o
-    /// foco e o centro que ele dá, tomados no meio do quadro da câmera (a mesma lente, com as colunas e as linhas que o quadro
+    /// A lente provisória, do texto do arquivo de calibração que o robô traz de fábrica (os três primeiros números, separados
+    /// por vírgula, são o foco e o centro num quadro de `camera_de_fabrica`; os números são de cada robô, e por isso chegam
+    /// por `[midia.mundo] lente_de_fabrica`, e não pela tabela): o foco e o centro que ele dá, tomados no meio do quadro da
+    /// câmera (a mesma lente, com as colunas e as linhas que o quadro
     /// tem a mais divididas pelos dois lados), sem a distorção do arquivo, com o zero da inclinação e o atraso em zero.
     pub fn camera_pela_de_fabrica(&self, texto: &str) -> Result<Camera, String> {
         let mut numeros = texto.split(',').map(|n| n.trim().parse::<f64>());
@@ -1391,6 +1394,12 @@ impl Params {
                     w.fresco_s, w.velho_s
                 ));
             }
+            // A lente de fábrica que não se lê deixaria o robô sem mundo, calado.
+            if !w.lente_de_fabrica.is_empty()
+                && let Err(e) = Fisica::da_tabela().camera_pela_de_fabrica(&w.lente_de_fabrica)
+            {
+                return ruim(format!("midia.mundo.lente_de_fabrica: {e}"));
+            }
             // A janela tem de caber o alcance para os dois lados, e não pode ter mais células do que o mapa guarda.
             if w.janela_m < 2.0 * w.alcance_m {
                 return ruim(format!(
@@ -1767,10 +1776,6 @@ mod testes {
         // números de teste, na forma do arquivo: o foco e o centro em 960 por 720, e mais números que não são lidos.
         assert_eq!(f.camera, None);
         assert_eq!(f.camera_de_fabrica, [960.0, 720.0]);
-        assert_eq!(
-            ARQUIVO_DA_CAMERA_DE_FABRICA,
-            "/data/vision/cali/calipara_cd_960_720.txt"
-        );
         let r = f
             .camera_pela_de_fabrica("700.5,481.25,349.5,0.000000,700.5,481.25,349.5,0.000000,0.1,-0.3\n")
             .unwrap();
@@ -1870,6 +1875,16 @@ mod testes {
             (3.0, 0.8, 0.1, 0.3)
         );
         assert_eq!((w.reta_tolerancia, w.corpo_folga_m), (0.3, 0.005));
+        assert!(
+            w.lente_de_fabrica.is_empty(),
+            "sem a chave, não há lente provisória"
+        );
+        // O texto do arquivo de fábrica, como quem ativa o robô o põe: aceito, e o que não se lê é recusado pelo nome.
+        let com_lente = de("[midia.mundo]\nlente_de_fabrica = \"700.5,481.25,349.5,0.000000,700.5\"\n")
+            .unwrap()
+            .midia
+            .unwrap();
+        assert_eq!(com_lente.mundo.lente_de_fabrica, "700.5,481.25,349.5,0.000000,700.5");
         assert_eq!(
             (w.celula_m, w.janela_m, w.altura_minima_m, w.altura_maxima_m),
             (0.04, 8.0, 0.03, 0.4)
@@ -1927,6 +1942,10 @@ mod testes {
             ("[midia.mundo]\nalcance_m = 0.2\n", "midia.mundo.alcance_m"),
             ("[midia.mundo]\nalcance_m = 11.0\n", "midia.mundo.alcance_m"),
             ("[midia.mundo]\nalcance_m = nan\n", "midia.mundo.alcance_m"),
+            (
+                "[midia.mundo]\nlente_de_fabrica = \"700.5,481.25\"\n",
+                "midia.mundo.lente_de_fabrica",
+            ),
             (
                 "[midia.mundo]\nreta_tolerancia = 0.0\n",
                 "midia.mundo.reta_tolerancia",

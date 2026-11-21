@@ -329,6 +329,6 @@
     },
     "unidade": "pontos",
     "origem": "dji",
-    "prova": "o quadro do arquivo de calibração que cada robô traz de fábrica, /data/vision/cali/calipara_cd_960_720.txt (o dji_vision o cita por esse caminho): os três primeiros números dele são o foco e o centro num quadro de 960 por 720. Os números são de cada robô e não moram nesta tabela: o rms1-mediad os lê no próprio robô e toma a lente no meio do quadro de 1280 por 720 (160 colunas a mais de cada lado), como provisória, até a calibração gravar aqui a entrada camera, medida. A foto real confirma essa leitura (o cano aparece onde a malha o põe: out/2026-11-20-o-s1-ve-em-metros/mede_cano.py, no laboratório)"
+    "prova": "o quadro do arquivo de calibração que cada robô traz de fábrica, /data/vision/cali/calipara_cd_960_720.txt (o dji_vision o cita por esse caminho): os três primeiros números dele são o foco e o centro num quadro de 960 por 720. Os números são de cada robô e não moram nesta tabela: quem ativa o robô lê o arquivo nele e o passa ao rms1-mediad em [midia.mundo] lente_de_fabrica (o serviço roda num chroot e não alcança o arquivo), e o serviço toma a lente no meio do quadro de 1280 por 720 (160 colunas a mais de cada lado), como provisória, até a calibração gravar aqui a entrada camera, medida. A foto real confirma essa leitura (o cano aparece onde a malha o põe: out/2026-11-20-o-s1-ve-em-metros/mede_cano.py, no laboratório)"
   }
 }
