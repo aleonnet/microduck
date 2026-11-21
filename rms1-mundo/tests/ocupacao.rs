@@ -166,13 +166,21 @@ fn o_ocupado_fica_no_lugar_com_a_torre_virada_o_chassi_girado_e_o_robo_andando()
         Estado::NaoVista,
         "o robô andou, e a caixa não andou com ele"
     );
-    // Com a torre inclinada 20° para baixo, o chão é visto de mais perto.
+    // Com a torre inclinada 20° para baixo (o limite dela), o chão é visto de mais perto: com a lente do robô, nivelada, a
+    // linha de baixo do quadro vê o chão a 53 cm do centro do corpo; a 20° para baixo, a 27 cm.
+    let mut m = comum::mundo(olho);
+    olhar(&mut m, &olho, amostra(2.0, 0.0, 0.0, [0.0; 3]), &cena);
+    assert_eq!(
+        m.estado_em([0.3, 0.0], 2.0),
+        Estado::NaoVista,
+        "com a torre nivelada, o chão a 30 cm fica abaixo do quadro"
+    );
     let mut m = comum::mundo(olho);
     olhar(&mut m, &olho, amostra(2.0, 0.0, -20.0, [0.0; 3]), &cena);
     assert_eq!(
-        m.estado_em([0.2, 0.0], 2.0),
+        m.estado_em([0.3, 0.0], 2.0),
         Estado::Livre,
-        "com a torre para baixo, o chão a 20 cm é visto"
+        "com a torre para baixo, o chão a 30 cm é visto"
     );
     assert_eq!(
         na_face(&m, 1.0, 2.0),

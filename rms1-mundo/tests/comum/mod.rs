@@ -14,24 +14,21 @@ pub const ALTURA: usize = 180;
 pub const ESCALA_Q: f32 = 0.000_263_199_68;
 pub const ZERO_Q: f32 = 32767.0;
 
-/// A câmera do simulador, que é exata por construção.
+/// A câmera do simulador: a mesma lente do robô, exata por construção, sem o cano no quadro.
 pub fn olho_do_simulador() -> Olho {
     let f = Fisica::da_tabela();
     Olho {
-        lente: f.camera_simulada,
+        lente: f.camera_no_simulador(),
         no_corpo: f.camera_no_corpo,
         cano: None,
     }
 }
 
-/// A câmera do robô, como ele a tem hoje: a lente provisória, do arquivo de fábrica (aqui com números de teste, na forma
-/// dele: os do arquivo são de cada robô), com o cano do lançador no quadro.
+/// A câmera do robô, como a tabela a traz hoje: a lente provisória, com o cano do lançador no quadro.
 pub fn olho_do_robo() -> Olho {
     let f = Fisica::da_tabela();
     Olho {
-        lente: f
-            .camera_pela_de_fabrica("700.5,481.25,349.5,0.000000")
-            .expect("a lente de fábrica de teste"),
+        lente: f.camera,
         no_corpo: f.camera_no_corpo,
         cano: Some(f.cano_na_lente),
     }

@@ -92,7 +92,7 @@ fn o_cliente_leva_as_amostras_ao_mundo_diz_quando_faltam_e_religa_sozinho() {
 
     let f = Fisica::da_tabela();
     let olho = Olho {
-        lente: f.camera_simulada,
+        lente: f.camera_no_simulador(),
         no_corpo: f.camera_no_corpo,
         cano: None,
     };

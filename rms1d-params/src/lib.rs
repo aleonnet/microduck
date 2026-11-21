@@ -421,10 +421,6 @@ pub struct MidiaMundo {
     pub gravar_limite_mb: u64,
     /// De onde vem a grade de profundidade que vira mundo.
     pub profundidade: FonteProfundidade,
-    /// O texto do arquivo de calibração da câmera que o robô traz de fábrica (`/data/vision/cali/calipara_cd_960_720.txt`, no
-    /// robô; o serviço roda num chroot e não o alcança): quem ativa o robô o lê nele e o põe aqui. É a lente provisória,
-    /// usada enquanto a tabela física não traz a medida (`Fisica::camera_pela_de_fabrica`). Vazio, não há lente provisória.
-    pub lente_de_fabrica: String,
 }
 
 /// De onde vem a grade de profundidade.
@@ -488,7 +484,6 @@ impl Default for MidiaMundo {
             // uma sessão esquecida encheria o disco do robô, como as gravações do corpo encheram em 2026-11-15.
             gravar_limite_mb: 512,
             profundidade: FonteProfundidade::Estacao,
-            lente_de_fabrica: String::new(),
         }
     }
 }
@@ -516,9 +511,8 @@ pub struct CanoNaLente {
 }
 
 /// A lente da câmera: o foco e o centro, em pontos de um quadro de `largura` por `altura`, o zero da inclinação e o atraso do
-/// quadro. A do robô é a entrada `camera` da tabela física, medida na calibração; até ela existir, vale a que o robô traz de
-/// fábrica (`Fisica::camera_pela_de_fabrica`, do texto que chega em `[midia.mundo] lente_de_fabrica`), dita provisória. A do
-/// simulador sai do campo de visão, por construção.
+/// quadro. É a entrada `camera` da tabela física, uma só, para o robô e para o simulador: o robô é um só. Enquanto a
+/// calibração não a mede, é a nominal (do campo de visão que o código da DJI usa), dita provisória.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Camera {
     pub fx: f64,
@@ -531,8 +525,8 @@ pub struct Camera {
     pub zero_inclinacao_grau: f64,
     /// Quanto o quadro é mais velho do que a hora em que chega ao serviço diz, em milissegundos.
     pub atraso_ms: f64,
-    /// A lente ainda não foi medida por nós (a de fábrica, ou a origem `provisorio` na tabela): os metros que saem dela não
-    /// estão calibrados, e quem os mostra diz isso. A gravação e a câmera candidata que não trazem o campo são de lente medida.
+    /// A lente ainda não foi medida por nós (a origem `provisorio` na tabela): no robô, os metros que saem dela não estão
+    /// calibrados, e quem os mostra diz isso. A gravação e a câmera candidata que não trazem o campo são de lente medida.
     #[serde(default)]
     pub provisoria: bool,
 }
@@ -865,15 +859,10 @@ pub struct Fisica {
     pub seguranca: Seguranca,
     pub geometria: Geometria,
     pub velocidade_torre: u16,
-    /// A lente da câmera do robô, quando a tabela a traz: a entrada `camera`, que a calibração grava. Sem ela, vale a de
-    /// fábrica do próprio robô (`camera_pela_de_fabrica`).
-    pub camera: Option<Camera>,
-    /// O quadro em que o arquivo de fábrica dá a lente: a largura e a altura, em pontos.
-    pub camera_de_fabrica: [f64; 2],
+    /// A lente da câmera: a entrada `camera` da tabela, a mesma no robô e no simulador.
+    pub camera: Camera,
     pub camera_no_corpo: CameraNoCorpo,
     pub cano_na_lente: CanoNaLente,
-    /// A lente da câmera do simulador: a página a desenha com o campo de visão da tabela, e por isso ela é exata.
-    pub camera_simulada: Camera,
     /// A largura do robô e a distância do centro à frente do chassi, de `dimensoes`.
     pub largura_m: f64,
     pub frente_m: f64,
@@ -885,39 +874,16 @@ impl Fisica {
         Self::de_json(TABELA).expect("robo_s1.json inválido")
     }
 
-    /// A lente provisória, do texto do arquivo de calibração que o robô traz de fábrica (os três primeiros números, separados
-    /// por vírgula, são o foco e o centro num quadro de `camera_de_fabrica`; os números são de cada robô, e por isso chegam
-    /// por `[midia.mundo] lente_de_fabrica`, e não pela tabela): o foco e o centro que ele dá, tomados no meio do quadro da
-    /// câmera (a mesma lente, com as colunas e as linhas que o quadro
-    /// tem a mais divididas pelos dois lados), sem a distorção do arquivo, com o zero da inclinação e o atraso em zero.
-    pub fn camera_pela_de_fabrica(&self, texto: &str) -> Result<Camera, String> {
-        let mut numeros = texto.split(',').map(|n| n.trim().parse::<f64>());
-        let mut proximo = |nome: &str| match numeros.next() {
-            Some(Ok(v)) if v.is_finite() && v > 0.0 => Ok(v),
-            Some(_) => Err(format!(
-                "o arquivo de fábrica da câmera não traz {nome} como um número acima de zero"
-            )),
-            None => Err(format!("o arquivo de fábrica da câmera acaba antes de {nome}")),
-        };
-        let (foco, cx, cy) = (proximo("o foco")?, proximo("o centro em x")?, proximo("o centro em y")?);
-        let [largura_de_fabrica, altura_de_fabrica] = self.camera_de_fabrica;
-        if cx >= largura_de_fabrica || cy >= altura_de_fabrica {
-            return Err(format!(
-                "o arquivo de fábrica da câmera dá o centro em {cx} e {cy}, fora do quadro de {largura_de_fabrica} por {altura_de_fabrica}"
-            ));
-        }
-        let [largura, altura] = QUADRO_DA_CAMERA;
-        Ok(Camera {
-            fx: foco,
-            fy: foco,
-            cx: cx + (largura - largura_de_fabrica) / 2.0,
-            cy: cy + (altura - altura_de_fabrica) / 2.0,
-            largura,
-            altura,
+    /// A câmera do simulador: a mesma lente do robô, que a página desenha sem zero de inclinação nem atraso. No simulador ela
+    /// é exata por construção (a imagem e a profundidade nascem dela), e por isso os metros de lá não levam o aviso de não
+    /// calibrado, seja a lente da tabela medida ou provisória.
+    pub fn camera_no_simulador(&self) -> Camera {
+        Camera {
             zero_inclinacao_grau: 0.0,
             atraso_ms: 0.0,
-            provisoria: true,
-        })
+            provisoria: false,
+            ..self.camera
+        }
     }
 
     /// Qualquer tabela, para os testes provarem que o número vem daqui.
@@ -930,45 +896,33 @@ impl Fisica {
                 .as_f64()
                 .ok_or_else(|| format!("tabela física sem {chave}"))
         };
-        // A câmera do robô entra na tabela inteira, ou não entra; a origem diz se ela já foi medida.
-        let camera = if t["camera"].is_null() {
-            None
-        } else {
-            Some(Camera {
-                fx: n("camera", Some("fx"))?,
-                fy: n("camera", Some("fy"))?,
-                cx: n("camera", Some("cx"))?,
-                cy: n("camera", Some("cy"))?,
-                largura: n("camera", Some("largura"))?,
-                altura: n("camera", Some("altura"))?,
-                zero_inclinacao_grau: n("camera", Some("zero_inclinacao"))?,
-                atraso_ms: n("camera", Some("atraso_ms"))?,
-                provisoria: match t["camera"]["origem"].as_str() {
-                    Some("provisorio") => true,
-                    Some("medido") => false,
-                    outra => {
-                        return Err(format!(
-                            "a camera da tabela física tem de ter a origem provisorio ou medido, e tem {outra:?}"
-                        ));
-                    }
-                },
-            })
+        // A câmera entra na tabela inteira; a origem diz se ela já foi medida.
+        let camera = Camera {
+            fx: n("camera", Some("fx"))?,
+            fy: n("camera", Some("fy"))?,
+            cx: n("camera", Some("cx"))?,
+            cy: n("camera", Some("cy"))?,
+            largura: n("camera", Some("largura"))?,
+            altura: n("camera", Some("altura"))?,
+            zero_inclinacao_grau: n("camera", Some("zero_inclinacao"))?,
+            atraso_ms: n("camera", Some("atraso_ms"))?,
+            provisoria: match t["camera"]["origem"].as_str() {
+                Some("provisorio") => true,
+                Some("medido") => false,
+                outra => {
+                    return Err(format!(
+                        "a camera da tabela física tem de ter a origem provisorio ou medido, e tem {outra:?}"
+                    ));
+                }
+            },
         };
-        // A conta de `FOV_CAMERA_ROBO` (`viewer/js/app.js`, no laboratório): o campo de visão da tabela é o horizontal, e o
-        // ponto do quadro é quadrado.
-        let [largura, altura] = QUADRO_DA_CAMERA;
-        let foco = largura / 2.0 / (n("campo_de_visao", None)?.to_radians() / 2.0).tan();
-        let camera_simulada = Camera {
-            fx: foco,
-            fy: foco,
-            cx: largura / 2.0,
-            cy: altura / 2.0,
-            largura,
-            altura,
-            zero_inclinacao_grau: 0.0,
-            atraso_ms: 0.0,
-            provisoria: false,
-        };
+        // O quadro da lente é o que a câmera entrega (`QUADRO_DA_CAMERA`): outro tamanho poria cada ponto no lugar errado.
+        if [camera.largura, camera.altura] != QUADRO_DA_CAMERA {
+            return Err(format!(
+                "a camera da tabela física é de {} por {}, e o quadro da câmera é de {} por {}",
+                camera.largura, camera.altura, QUADRO_DA_CAMERA[0], QUADRO_DA_CAMERA[1]
+            ));
+        }
         Ok(Self {
             camera,
             camera_no_corpo: CameraNoCorpo {
@@ -976,17 +930,12 @@ impl Fisica {
                 lente_frente_m: n("camera_no_corpo", Some("lente_frente"))?,
                 lente_acima_m: n("camera_no_corpo", Some("lente_acima"))?,
             },
-            camera_de_fabrica: [
-                n("camera_de_fabrica", Some("largura"))?,
-                n("camera_de_fabrica", Some("altura"))?,
-            ],
             cano_na_lente: CanoNaLente {
                 frente_m: n("cano_na_lente", Some("frente"))?,
                 abaixo_m: n("cano_na_lente", Some("abaixo"))?,
                 esquerda_m: n("cano_na_lente", Some("esquerda"))?,
                 raio_m: n("cano_na_lente", Some("raio"))?,
             },
-            camera_simulada,
             largura_m: n("dimensoes", Some("largura"))?,
             frente_m: n("dimensoes", Some("comprimento"))? / 2.0,
             seguranca: Seguranca {
@@ -1394,12 +1343,6 @@ impl Params {
                     w.fresco_s, w.velho_s
                 ));
             }
-            // A lente de fábrica que não se lê deixaria o robô sem mundo, calado.
-            if !w.lente_de_fabrica.is_empty()
-                && let Err(e) = Fisica::da_tabela().camera_pela_de_fabrica(&w.lente_de_fabrica)
-            {
-                return ruim(format!("midia.mundo.lente_de_fabrica: {e}"));
-            }
             // A janela tem de caber o alcance para os dois lados, e não pode ter mais células do que o mapa guarda.
             if w.janela_m < 2.0 * w.alcance_m {
                 return ruim(format!(
@@ -1748,11 +1691,11 @@ mod testes {
         }
     }
 
-    /// A câmera na tabela única: onde a lente e o cano ficam vem da malha do app, a lente do simulador sai do campo de visão, e
-    /// a do robô é a que a tabela traz, inteira, depois de medida; até lá, a de fábrica do próprio robô, lida do arquivo dele
-    /// e dita provisória.
+    /// A câmera na tabela única: onde a lente e o cano ficam vem da malha do app, e a lente é uma só, para o robô e para o
+    /// simulador. Hoje é a nominal, do campo de visão vertical que o código da DJI usa (54 graus), dita provisória; no
+    /// simulador a mesma lente é exata por construção.
     #[test]
-    fn a_camera_vem_da_tabela_e_diz_se_e_provisoria() {
+    fn a_camera_e_uma_so_para_o_robo_e_para_o_simulador() {
         let f = Fisica::da_tabela();
         assert_eq!(
             f.camera_no_corpo,
@@ -1772,54 +1715,30 @@ mod testes {
                 raio_m: 0.0147
             }
         );
-        // A do robô, hoje: a tabela não a traz (não foi medida), e vale a de fábrica, lida do arquivo do próprio robô. Com
-        // números de teste, na forma do arquivo: o foco e o centro em 960 por 720, e mais números que não são lidos.
-        assert_eq!(f.camera, None);
-        assert_eq!(f.camera_de_fabrica, [960.0, 720.0]);
-        let r = f
-            .camera_pela_de_fabrica("700.5,481.25,349.5,0.000000,700.5,481.25,349.5,0.000000,0.1,-0.3\n")
-            .unwrap();
-        assert!(r.provisoria, "a lente de fábrica não foi medida por nós: {r:?}");
-        // O mesmo foco, e o centro 160 colunas adiante: o quadro de 1280 por 720 tem 160 colunas a mais de cada lado.
+        // A lente de hoje: 54 graus na vertical, em 720 linhas, com o ponto quadrado e o centro no meio.
+        let r = f.camera;
+        assert!(r.provisoria, "a lente nominal não foi medida por nós: {r:?}");
+        let vertical = 2.0 * (r.altura / 2.0 / r.fy).atan().to_degrees();
+        assert!((vertical - 54.0).abs() < 0.01 && r.fx == r.fy, "{r:?}");
         assert_eq!(
-            (r.fx, r.fy, r.cx, r.cy, r.largura, r.altura),
-            (700.5, 700.5, 641.25, 349.5, 1280.0, 720.0)
-        );
-        assert_eq!((r.zero_inclinacao_grau, r.atraso_ms), (0.0, 0.0));
-        for (texto, motivo) in [
-            ("", "o foco"),
-            ("700.5,481.25", "o centro em y"),
-            ("700.5,abc,349.5", "o centro em x"),
-            ("-700.5,481.25,349.5", "o foco"),
-            ("700.5,981.25,349.5", "fora do quadro"),
-        ] {
-            let e = f.camera_pela_de_fabrica(texto).unwrap_err();
-            assert!(e.contains(motivo), "{texto:?}: {e}");
-        }
-        // 120 graus na horizontal, em 1280 por 720: o foco é 640 / tan(60°).
-        let s = f.camera_simulada;
-        assert!((s.fx - 369.504).abs() < 1e-3 && s.fx == s.fy, "{s:?}");
-        assert_eq!(
-            (s.cx, s.cy, s.largura, s.altura),
+            (r.cx, r.cy, r.largura, r.altura),
             (640.0, 360.0, 1280.0, 720.0)
         );
-        assert_eq!((s.zero_inclinacao_grau, s.atraso_ms), (0.0, 0.0));
-        assert!(!s.provisoria, "a lente do simulador é exata por construção");
-        // Com outro campo de visão na tabela, a lente do simulador muda junto: o número vem de lá.
-        let mut t: serde_json::Value = serde_json::from_str(TABELA).unwrap();
-        t["campo_de_visao"]["valor"] = serde_json::json!(90);
-        let noventa = Fisica::de_json(&t.to_string()).unwrap().camera_simulada;
-        assert!((noventa.fx - 640.0).abs() < 1e-9, "{noventa:?}");
+        assert_eq!((r.zero_inclinacao_grau, r.atraso_ms), (0.0, 0.0));
+        // A do simulador é a mesma lente, sem aviso: lá ela é exata.
+        let s = f.camera_no_simulador();
+        assert_eq!((s.fx, s.fy, s.cx, s.cy), (r.fx, r.fy, r.cx, r.cy));
+        assert!(!s.provisoria);
 
-        // A do robô: inteira, ou nenhuma; medida, deixa de ser provisória; e a origem tem de ser uma das duas.
+        // Medida, deixa de ser provisória, e o simulador segue com a mesma lente, sem o zero da inclinação nem o atraso, que
+        // são do robô.
         let mut t: serde_json::Value = serde_json::from_str(TABELA).unwrap();
-        t.as_object_mut().unwrap().remove("camera");
-        assert_eq!(Fisica::de_json(&t.to_string()).unwrap().camera, None);
         t["camera"] = serde_json::json!({"valor": {"fx": 900.0, "fy": 910.0, "cx": 630.0, "cy": 350.0, "largura": 1280, "altura": 720,
             "zero_inclinacao": -1.5, "atraso_ms": 80.0}, "unidade": "pontos, graus e ms", "origem": "medido", "prova": "teste"});
+        let medida = Fisica::de_json(&t.to_string()).unwrap();
         assert_eq!(
-            Fisica::de_json(&t.to_string()).unwrap().camera,
-            Some(Camera {
+            medida.camera,
+            Camera {
                 fx: 900.0,
                 fy: 910.0,
                 cx: 630.0,
@@ -1829,34 +1748,34 @@ mod testes {
                 zero_inclinacao_grau: -1.5,
                 atraso_ms: 80.0,
                 provisoria: false
-            })
+            }
         );
-        t["camera"]["origem"] = serde_json::json!("provisorio");
-        assert!(
-            Fisica::de_json(&t.to_string())
-                .unwrap()
-                .camera
-                .unwrap()
-                .provisoria
+        assert_eq!(
+            medida.camera_no_simulador(),
+            Camera {
+                zero_inclinacao_grau: 0.0,
+                atraso_ms: 0.0,
+                ..medida.camera
+            }
         );
+        // A origem tem de ser uma das duas, o quadro tem de ser o da câmera, e a entrada tem de vir inteira.
         t["camera"]["origem"] = serde_json::json!("calculado");
         let e = Fisica::de_json(&t.to_string()).unwrap_err();
         assert!(e.contains("provisorio ou medido"), "{e}");
         t["camera"]["origem"] = serde_json::json!("medido");
+        t["camera"]["valor"]["largura"] = serde_json::json!(960);
+        let e = Fisica::de_json(&t.to_string()).unwrap_err();
+        assert!(e.contains("960 por 720"), "{e}");
+        t["camera"]["valor"]["largura"] = serde_json::json!(1280);
         t["camera"]["valor"].as_object_mut().unwrap().remove("cy");
         let e = Fisica::de_json(&t.to_string()).unwrap_err();
         assert!(e.contains("camera"), "{e}");
-        t.as_object_mut().unwrap().remove("camera");
-        t.as_object_mut().unwrap().remove("camera_no_corpo");
-        let e = Fisica::de_json(&t.to_string()).unwrap_err();
-        assert!(e.contains("camera_no_corpo"), "{e}");
-        let mut t: serde_json::Value = serde_json::from_str(TABELA).unwrap();
-        t["cano_na_lente"]["valor"]
-            .as_object_mut()
-            .unwrap()
-            .remove("raio");
-        let e = Fisica::de_json(&t.to_string()).unwrap_err();
-        assert!(e.contains("cano_na_lente"), "{e}");
+        for chave in ["camera", "camera_no_corpo", "cano_na_lente"] {
+            let mut t: serde_json::Value = serde_json::from_str(TABELA).unwrap();
+            t.as_object_mut().unwrap().remove(chave);
+            let e = Fisica::de_json(&t.to_string()).unwrap_err();
+            assert!(e.contains(chave), "{chave}: {e}");
+        }
     }
 
     /// A camada de mundo: os padrões, um valor mudado, e cada limiar fora da faixa recusado pelo nome.
@@ -1875,16 +1794,6 @@ mod testes {
             (3.0, 0.8, 0.1, 0.3)
         );
         assert_eq!((w.reta_tolerancia, w.corpo_folga_m), (0.3, 0.005));
-        assert!(
-            w.lente_de_fabrica.is_empty(),
-            "sem a chave, não há lente provisória"
-        );
-        // O texto do arquivo de fábrica, como quem ativa o robô o põe: aceito, e o que não se lê é recusado pelo nome.
-        let com_lente = de("[midia.mundo]\nlente_de_fabrica = \"700.5,481.25,349.5,0.000000,700.5\"\n")
-            .unwrap()
-            .midia
-            .unwrap();
-        assert_eq!(com_lente.mundo.lente_de_fabrica, "700.5,481.25,349.5,0.000000,700.5");
         assert_eq!(
             (w.celula_m, w.janela_m, w.altura_minima_m, w.altura_maxima_m),
             (0.04, 8.0, 0.03, 0.4)
@@ -1942,10 +1851,6 @@ mod testes {
             ("[midia.mundo]\nalcance_m = 0.2\n", "midia.mundo.alcance_m"),
             ("[midia.mundo]\nalcance_m = 11.0\n", "midia.mundo.alcance_m"),
             ("[midia.mundo]\nalcance_m = nan\n", "midia.mundo.alcance_m"),
-            (
-                "[midia.mundo]\nlente_de_fabrica = \"700.5,481.25\"\n",
-                "midia.mundo.lente_de_fabrica",
-            ),
             (
                 "[midia.mundo]\nreta_tolerancia = 0.0\n",
                 "midia.mundo.reta_tolerancia",

@@ -11,10 +11,12 @@ contraprovas). Ainda não está ligado ao `rms1-mediad`, e a câmera do robô n�
 `no_camera`. Nenhum número deste documento vem do robô.
 
 **Estado em 2026-11-21:** o pacote está ligado ao `rms1-mediad` e publica (seção da camada de mundo em
-[`rms1-mediad.md`](rms1-mediad.md)). **O robô mostra o mundo sem esperar a calibração:** sem a entrada `camera` na tabela, vale a lente
-que ele mesmo traz de fábrica (o texto do arquivo de fábrica chega ao `rms1-mediad` em `[midia.mundo] lente_de_fabrica`, posto por quem
-ativa o robô, que o lê nele; os números, que são de cada robô, não moram neste repositório), dita provisória, e a linha diz `lens.calibrated: false`; a calibração grava a lente medida na
-tabela e só diz se a medida está certa. O cano do lançador, que a lente do robô vê embaixo, no meio do quadro, sai da conta pela
+[`rms1-mediad.md`](rms1-mediad.md)). **A câmera é uma só, para o robô e para o simulador:** a entrada `camera` da tabela
+física. Hoje é a nominal: 54 graus na vertical, o campo com que o código da DJI trata o quadro (96 por 54), com o ponto
+quadrado e o centro no meio, sem distorção, e a origem `provisorio`. **O robô mostra o mundo sem esperar a calibração:** com a
+lente provisória a linha diz `lens.calibrated: false`; a calibração grava a lente medida na tabela, para os dois, e só diz se
+a medida está certa. No simulador a mesma lente é exata por construção (a página desenha com ela), e a linha diz `true`.
+O cano do lançador, que a lente do robô vê embaixo, no meio do quadro, sai da conta pela
 geometria dele (`cano_na_lente`, da malha do app, com a folga `corpo_folga_m`). E a conferência das duas contas da escala
 tem o limite dela, `reta_tolerancia`: no quadro real guardado (no laboratório,
 `out/2026-11-20-o-s1-ve-em-metros/exame-da-grade-real.txt`) a foto indica a torre a 6,5 graus para baixo, e nessa
@@ -26,7 +28,7 @@ erro de inclinação de 20 graus ou mais é sempre recusado, e o que passa erra 
 
 | Entra | De onde | Forma |
 |---|---|---|
-| a câmera | a tabela física (`rms1d-params/robo_s1.json`) | a lente (`camera`, que a calibração grava; até lá, a de fábrica do próprio robô, provisória, lida do arquivo dele pela regra de `camera_de_fabrica`; no simulador, `camera_simulada`, que sai do campo de visão), onde ela fica (`camera_no_corpo`, da malha do app) e o cano do lançador que ela vê (`cano_na_lente`, da malha; só na câmera do robô) |
+| a câmera | a tabela física (`rms1d-params/robo_s1.json`) | a lente (`camera`, uma só: a nominal até a calibração a medir; o simulador usa a mesma, `Fisica::camera_no_simulador`), onde ela fica (`camera_no_corpo`, da malha do app) e o cano do lançador que ela vê (`cano_na_lente`, da malha; só na câmera do robô) |
 | uma amostra | o `rms1d`, por `s1.subscribe` | a hora, o giro e a inclinação da torre (a inclinação em relação ao chão) e a pose `[x, y, rumo]` |
 | uma grade | a estação, pela entrega `mapa` | 16 bytes de cabeçalho e a grade, como o leitor de profundidade a escreve; com o nome do leitor e a hora em que o quadro foi tirado |
 | uma falha | a marca do quadro, da estação | a hora e o motivo |
@@ -120,7 +122,6 @@ medida: com a provisória o mundo aparece do mesmo jeito, e quem mostra os metro
 
 Os padrões são de partida, e a origem de cada um está em `rms1d-params/src/lib.rs`, em `Default` de `MidiaMundo`: `ritmo`,
 `ritmo_da_grade`, `setores`, `alcance_m`, `semente_de`, `tolerancia`, `chao_minimo`, `reta_tolerancia`, `corpo_folga_m`,
-`lente_de_fabrica`,
 `escala_vale_ms`, `celula_m`,
 `janela_m`, `altura_minima_m`, `altura_maxima_m`, `confirma_livre`, `lembra_s`, `fresco_s`, `velho_s`, `torre_vale_ms`,
 `gravar` e `gravar_limite_mb`. Cada um tem faixa, e o valor fora dela é recusado pelo nome.

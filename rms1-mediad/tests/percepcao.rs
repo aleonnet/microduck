@@ -1710,7 +1710,7 @@ fn a_grade_e_casada_com_a_torre_do_instante_em_que_o_quadro_foi_tirado_e_o_mundo
     );
     let campo = agora["lens"]["hfov_deg"].as_f64().unwrap();
     assert!(
-        (campo - 120.0).abs() < 0.01,
+        (campo - 84.34).abs() < 0.01,
         "a lente do simulador: {agora}"
     );
     assert!(agora["frame_age_ms"].as_f64().is_some_and(|i| i >= 300.0));

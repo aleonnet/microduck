@@ -261,7 +261,7 @@
     "valor": 120,
     "unidade": "°",
     "origem": "dji",
-    "prova": "fontes/manual/s1-manual.txt, especificações, câmera",
+    "prova": "fontes/manual/s1-manual.txt, especificações, câmera. O manual não diz o eixo, e nada lê esta entrada: a lente da câmera, no robô e no simulador, é a entrada camera",
     "informativo": true
   },
   "raio_roda": {
@@ -322,13 +322,19 @@
     "origem": "calculado",
     "prova": "da malha do app (assets/robomaster-s1/modelo/robomaster_s1.glb, a peça Water Bullet Gun, no laboratório): a ponta do cano do lançador à frente da lente, o eixo do corpo dele abaixo e ao lado do eixo da lente, e o maior raio dele nos últimos 5 mm. É o que a lente vê do próprio robô, sempre no mesmo lugar do quadro. out/2026-11-20-o-s1-ve-em-metros/mede_cano.py refaz a conta e a confere com a foto real da câmera; tools/simulador/test_midia.mjs confere a ponta com a malha a 1 mm"
   },
-  "camera_de_fabrica": {
+  "camera": {
     "valor": {
-      "largura": 960,
-      "altura": 720
+      "fx": 706.54,
+      "fy": 706.54,
+      "cx": 640,
+      "cy": 360,
+      "largura": 1280,
+      "altura": 720,
+      "zero_inclinacao": 0,
+      "atraso_ms": 0
     },
-    "unidade": "pontos",
-    "origem": "dji",
-    "prova": "o quadro do arquivo de calibração que cada robô traz de fábrica, /data/vision/cali/calipara_cd_960_720.txt (o dji_vision o cita por esse caminho): os três primeiros números dele são o foco e o centro num quadro de 960 por 720. Os números são de cada robô e não moram nesta tabela: quem ativa o robô lê o arquivo nele e o passa ao rms1-mediad em [midia.mundo] lente_de_fabrica (o serviço roda num chroot e não alcança o arquivo), e o serviço toma a lente no meio do quadro de 1280 por 720 (160 colunas a mais de cada lado), como provisória, até a calibração gravar aqui a entrada camera, medida. A foto real confirma essa leitura (o cano aparece onde a malha o põe: out/2026-11-20-o-s1-ve-em-metros/mede_cano.py, no laboratório)"
+    "unidade": "pontos, graus e ms",
+    "origem": "provisorio",
+    "como_verificar": "a lente nominal, pelo campo de visão: o código da própria DJI trata o quadro da câmera como 96 graus na horizontal e 54 na vertical (rm_ctrl.py:4308-4309, ao mirar num marcador), e 54 graus em 720 linhas dão o foco de 706.54 pontos, com o ponto quadrado e o centro no meio do quadro de 1280 por 720; sem distorção, e por isso a lente cobre 84,3 graus na horizontal onde a de verdade cobre 96 (o erro fica nas bordas laterais). O zero da inclinação e o atraso em zero. O arquivo de calibração que o robô traz de fábrica concorda (foco 0,7% abaixo; o laboratório o guarda, e os números dele não entram aqui). É a câmera do robô e a do simulador, a mesma: quem mostra metros por ela no robô diz não calibrado. A calibração (tools/calibracao, no laboratório) troca esta entrada pela medida, com a origem medido"
   }
 }

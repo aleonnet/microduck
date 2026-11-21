@@ -262,7 +262,11 @@ fn as_duas_linhas_levam_o_mundo_a_quem_assina() {
     let linha = m.agora(1.04).linha();
     assert_eq!(linha["frame"], "body");
     assert_eq!(linha["frame_age_ms"], 40.0);
-    assert_eq!(linha["lens"]["hfov_deg"], 120.0);
+    // A lente do simulador é a do robô: 54 graus na vertical, e 84,34 na horizontal.
+    assert_eq!(
+        (&linha["lens"]["hfov_deg"], &linha["lens"]["vfov_deg"]),
+        (&serde_json::json!(84.34), &serde_json::json!(54.0))
+    );
     assert_eq!(
         linha["lens"]["calibrated"], true,
         "a lente do simulador é exata por construção"

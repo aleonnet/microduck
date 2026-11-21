@@ -204,26 +204,6 @@ fn subir_microfone(
     Ok(())
 }
 
-/// A lente provisória da câmera do robô: a do arquivo de calibração que ele mesmo traz de fábrica, cujo texto chega em
-/// `[midia.mundo] lente_de_fabrica` (quem ativa o robô o lê nele). Sem ele não há lente, e o mundo diz `no_camera`: o motivo
-/// fica no registro. O texto que não se lê já foi recusado ao carregar os parâmetros.
-fn lente_de_fabrica(fisica: &Fisica, texto: &str) -> Option<rms1d_params::Camera> {
-    if texto.is_empty() {
-        tracing::error!("a tabela física não traz a lente da câmera, e [midia.mundo] lente_de_fabrica está vazio: o mundo vai dizer no_camera");
-        return None;
-    }
-    match fisica.camera_pela_de_fabrica(texto) {
-        Ok(lente) => {
-            tracing::warn!(foco = lente.fx, cx = lente.cx, cy = lente.cy, "a lente da câmera é a de fábrica, provisória: os metros do mundo não estão calibrados");
-            Some(lente)
-        }
-        Err(motivo) => {
-            tracing::error!(%motivo, "a lente de fábrica da câmera não se lê: o mundo vai dizer no_camera");
-            None
-        }
-    }
-}
-
 fn main() -> ExitCode {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -340,19 +320,22 @@ fn main() -> ExitCode {
             }
         });
         // A camada de mundo: com a câmera do robô ou a do simulador, a grade de profundidade vira o chão em volta do robô. A
-        // lente do robô é a da tabela, depois de medida; até lá, a que o próprio robô traz de fábrica, que chega em
-        // `[midia.mundo] lente_de_fabrica`, provisória: o mundo aparece com ela, e diz que não está calibrado. A câmera do robô vê o cano do lançador, que sai da conta; a do
-        // simulador não o vê (o sensor de profundidade da página não desenha o robô). A câmera de teste não olha para lugar
-        // nenhum, e fica sem mundo.
+        // lente é uma só, a da tabela física, para os dois: o robô é um só. No robô, enquanto ela é a provisória, o mundo
+        // aparece e diz que não está calibrado; no simulador ela é exata por construção. A câmera do robô vê o cano do
+        // lançador, que sai da conta; a do simulador não o vê (o sensor de profundidade da página não desenha o robô). A
+        // câmera de teste não olha para lugar nenhum, e fica sem mundo.
         let fisica = Fisica::da_tabela();
         let lente = match midia.camera.fonte {
-            FonteCamera::S1 => Some((fisica.camera.or_else(|| lente_de_fabrica(&fisica, &midia.mundo.lente_de_fabrica)), Some(fisica.cano_na_lente))),
-            FonteCamera::Simulador => Some((Some(fisica.camera_simulada), None)),
+            FonteCamera::S1 => Some((fisica.camera, Some(fisica.cano_na_lente))),
+            FonteCamera::Simulador => Some((fisica.camera_no_simulador(), None)),
             FonteCamera::Teste => None,
         };
         let mut mundo = None;
         if let Some((lente, cano)) = lente {
-            let olho = lente.map(|lente| rms1_mundo::Olho { lente, no_corpo: fisica.camera_no_corpo, cano });
+            if lente.provisoria {
+                tracing::warn!(foco = lente.fx, "a lente da câmera é a provisória da tabela: os metros do mundo não estão calibrados");
+            }
+            let olho = Some(rms1_mundo::Olho { lente, no_corpo: fisica.camera_no_corpo, cano });
             let corpo_do_robo = rms1_mundo::Corpo { largura_m: fisica.largura_m, frente_m: fisica.frente_m };
             let partilhado = match rms1_mundo::Mundo::novo(olho, corpo_do_robo, midia.mundo.clone()) {
                 Ok(m) => Arc::new(std::sync::Mutex::new(m)),

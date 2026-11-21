@@ -226,14 +226,13 @@ fn com_a_torre_para_cima_o_chao_sai_da_faixa_e_o_quadro_nao_e_medido() {
 /// contas da escala tem o limite `reta_tolerancia`, largo o bastante para o chão de uma imagem real passar: ela recusa o erro
 /// grande, e o pequeno passa, com o custo de escala que este teste mede e limita. Com a câmera do robô (a lente de fábrica),
 /// 20° ou mais de erro nunca são dados por medidos, e o que passa erra a escala em até 32,4% (medido em 2026-11-21; 5° de
-/// erro custam até 30%). Com a lente larga do simulador a conferência vê menos (a mesma inclinação muda menos a reta): lá, 30°
-/// ou mais nunca passam, e o que passa erra em até 37,5%. O desvio entre as duas contas é perto de 0,8 do erro de escala: o
+/// erro custam até 30%). A do simulador é a mesma lente. O desvio entre as duas contas é perto de 0,8 do erro de escala: o
 /// limite de 0,3 deixa passar o que erraria até uns 35%. O erro pequeno de inclinação quem mede é a calibração (o zero da
 /// inclinação e o atraso do quadro), e não esta conferência.
 #[test]
 fn com_a_inclinacao_muito_errada_o_quadro_nao_e_dado_por_medido() {
     for (nome, olho, erro_recusado, custo) in [
-        ("simulador", comum::olho_do_simulador(), 30.0, 0.4),
+        ("simulador", comum::olho_do_simulador(), 20.0, 0.35),
         ("teste", comum::olho_de_teste(), 20.0, 0.35),
         ("robô", comum::olho_do_robo(), 20.0, 0.35),
     ] {

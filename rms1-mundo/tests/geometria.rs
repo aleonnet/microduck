@@ -176,12 +176,13 @@ fn a_grade_cobre_o_quadro_inteiro_da_lente() {
     );
     let [u, v] = olho.no_quadro(raios.xn[100], raios.yn[50]);
     assert!(perto(u, 402.0) && perto(v, 202.0), "({u}, {v})");
-    // A lente do simulador: 120° na horizontal, e 2 × atan(360 / foco) na vertical.
+    // A lente do simulador é a do robô: 54° na vertical, e 2 × atan(640 / foco) na horizontal.
     let [h, v] = comum::olho_do_simulador().campo_grau();
     assert!(
-        (h - 120.0).abs() < 1e-9 && (v - 88.50).abs() < 0.01,
+        (v - 54.0).abs() < 0.01 && (h - 84.34).abs() < 0.01,
         "{h} por {v}"
     );
+    assert_eq!(comum::olho_do_robo().campo_grau(), [h, v]);
 }
 
 /// O cano do lançador aparece embaixo, no meio do quadro da câmera do robô: os pontos da grade que olham para ele ficam fora da
