@@ -7,7 +7,7 @@
 
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 pub const CAMINHO_PADRAO: &str = "/etc/robot/rms1d.toml";
 
@@ -363,7 +363,129 @@ pub struct Midia {
     /// O socket do `rms1-venc`, o programa do lado Android do robô que comanda o codificador de hardware (H.264 e JPEG).
     /// Vazio: não há codificador, e o quadro vai cru à estação e a imagem da tela é codificada por software.
     pub venc: String,
+    /// O socket do `rms1d`, de onde o serviço lê a torre e a pose para situar no chão o que a câmera vê. Só leitura: o
+    /// serviço de mídia não pede canal nenhum do corpo.
+    pub robo: String,
+    /// A camada de mundo: o que o serviço faz da grade de profundidade que a estação entrega.
+    pub mundo: MidiaMundo,
 }
+
+/// A camada de mundo (`rms1-mundo`): os limiares da conta que leva a grade de profundidade aos metros, à ocupação do chão em
+/// volta do robô e à folga por direção. Nenhum é número do robô: a câmera, a largura e a frente do chassi vêm da tabela
+/// física. Os padrões são de partida, e a origem de cada um está em `Default`.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct MidiaMundo {
+    /// Quantas vezes por segundo o mundo é publicado em `s1.world`, reexpresso no corpo de agora.
+    pub ritmo: u32,
+    /// Quantas vezes por segundo as células vistas são publicadas em `s1.world.grid`, para a tela.
+    pub ritmo_da_grade: u32,
+    /// Em quantas direções, em volta do corpo, a folga é dita.
+    pub setores: u32,
+    /// Até que distância um ponto do chão ou de um objeto entra no mapa.
+    pub alcance_m: f64,
+    /// A faixa de baixo do quadro em que a escala é procurada: desta fração da altura para baixo.
+    pub semente_de: f64,
+    /// Quanto a profundidade de um ponto pode diferir da que o chão teria ali para ele contar como chão, em fração.
+    pub tolerancia: f64,
+    /// A fração da faixa de baixo que tem de ser chão para a escala do quadro valer.
+    pub chao_minimo: f64,
+    /// Por quanto tempo a escala dos quadros de antes vale, quando o quadro de agora não tem chão bastante.
+    pub escala_vale_ms: u64,
+    /// O lado de uma célula do mapa.
+    pub celula_m: f64,
+    /// O lado da janela do mapa, que anda com o robô.
+    pub janela_m: f64,
+    /// Abaixo desta altura acima do chão, um ponto não é obstáculo.
+    pub altura_minima_m: f64,
+    /// Acima desta altura, um ponto não está no caminho: o robô passa por baixo.
+    pub altura_maxima_m: f64,
+    /// Quantos quadros seguidos uma célula ocupada tem de ser vista livre para deixar de ser ocupada.
+    pub confirma_livre: u32,
+    /// Por quanto tempo o que foi visto fica no mapa sem ser visto de novo.
+    pub lembra_s: f64,
+    /// O caminho conta como visto há pouco por este tempo depois da última grade que o cobriu.
+    pub fresco_s: f64,
+    /// Passado este tempo sem grade, a percepção está velha.
+    pub velho_s: f64,
+    /// Sem amostra da torre e da pose mais nova que isto, o serviço não situa o que a câmera vê.
+    pub torre_vale_ms: u64,
+    /// O arquivo em que a sessão é gravada (as grades, a telemetria e a câmera), para reproduzir sem o robô. Vazio não grava.
+    pub gravar: String,
+    /// O limite desse arquivo, em MiB: chegando nele a gravação para, e o serviço segue.
+    pub gravar_limite_mb: u64,
+}
+
+impl Default for MidiaMundo {
+    fn default() -> Self {
+        Self {
+            // Acima do ritmo da grade (15 por segundo, o da função Distância): o lembrado anda com o corpo entre duas grades.
+            ritmo: 20,
+            ritmo_da_grade: 5,
+            // Uma direção a cada 10 graus.
+            setores: 36,
+            // A meta de precisão da frente vai até 3 m.
+            alcance_m: 3.0,
+            // De 0,80 da altura para baixo, o inverso da profundidade do `scdepthv3` deu reta com R² de 0,955 na grade guardada
+            // em 2026-11-20 (`out/2026-11-20-distancia-na-estacao/reta_do_chao.py`, no laboratório).
+            semente_de: 0.8,
+            // De partida: 10% da profundidade do chão, que é 10% da altura da lente em altura acima do chão. A dispersão de
+            // verdade sai da calibração no robô.
+            tolerancia: 0.1,
+            chao_minimo: 0.3,
+            // De partida, até a calibração medir a dispersão da escala entre quadros.
+            escala_vale_ms: 2000,
+            celula_m: 0.04,
+            janela_m: 8.0,
+            altura_minima_m: 0.03,
+            // O robô tem 0,27 m de altura pelo manual e 0,33 pela malha do app (`dimensoes`, na tabela física): com folga.
+            altura_maxima_m: 0.4,
+            confirma_livre: 3,
+            // De partida: quanto a tela e a folga lembram do que a torre deixou de olhar. A odometria escorrega, e lembrar
+            // por muito tempo poria o lembrado no lugar errado.
+            lembra_s: 10.0,
+            // Os dois do cérebro do pato (`autod/src/obstacle.rs`, `FRESH_S` e `STALE_S`): o olhar que se desvia por até 0,8 s
+            // não rebaixa o caminho. Quem os acerta para o S1 é o cérebro dele.
+            fresco_s: 0.9,
+            velho_s: 1.5,
+            // A telemetria chega a 50 por segundo: 15 amostras perdidas.
+            torre_vale_ms: 300,
+            gravar: String::new(),
+            // Perto de cinco minutos: a grade do `scdepthv3` tem 115 kB, e a 15 por segundo são 104 MB por minuto. Sem limite,
+            // uma sessão esquecida encheria o disco do robô, como as gravações do corpo encheram em 2026-11-15.
+            gravar_limite_mb: 512,
+        }
+    }
+}
+
+/// Onde a lente da câmera fica no corpo, da tabela física (`camera_no_corpo`).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct CameraNoCorpo {
+    /// A altura do eixo de inclinação da torre acima do chão.
+    pub eixo_altura_m: f64,
+    /// A lente em relação a esse eixo, com a torre nivelada: para a frente e para cima.
+    pub lente_frente_m: f64,
+    pub lente_acima_m: f64,
+}
+
+/// A lente da câmera: o foco e o centro, em pontos de um quadro de `largura` por `altura`, o zero da inclinação e o atraso do
+/// quadro. A do robô só existe medida (`camera`, na tabela física); a do simulador sai do campo de visão, por construção.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Camera {
+    pub fx: f64,
+    pub fy: f64,
+    pub cx: f64,
+    pub cy: f64,
+    pub largura: f64,
+    pub altura: f64,
+    /// Quanto o eixo da lente aponta acima do que a torre diz, em graus: somado à inclinação da torre.
+    pub zero_inclinacao_grau: f64,
+    /// Quanto o quadro é mais velho do que a hora em que chega ao serviço diz, em milissegundos.
+    pub atraso_ms: f64,
+}
+
+/// O quadro da câmera do robô e da simulada, em pontos (`rms1-mediad`, `FonteCamera`).
+pub const QUADRO_DA_CAMERA: [f64; 2] = [1280.0, 720.0];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -494,6 +616,9 @@ impl Default for Midia {
             mixer: false,
             porta_video: 0,
             venc: String::new(),
+            // O socket do contrato (`duck-ipc-proto`, `socket::ROBOT`): é nele que o `rms1d` serve no robô.
+            robo: "/run/robotd.sock".to_owned(),
+            mundo: MidiaMundo::default(),
         }
     }
 }
@@ -687,6 +812,14 @@ pub struct Fisica {
     pub seguranca: Seguranca,
     pub geometria: Geometria,
     pub velocidade_torre: u16,
+    /// A lente da câmera do robô. Só existe depois de medida: sem a entrada `camera` na tabela, ninguém diz metros por ela.
+    pub camera: Option<Camera>,
+    pub camera_no_corpo: CameraNoCorpo,
+    /// A lente da câmera do simulador: a página a desenha com o campo de visão da tabela, e por isso ela é exata.
+    pub camera_simulada: Camera,
+    /// A largura do robô e a distância do centro à frente do chassi, de `dimensoes`.
+    pub largura_m: f64,
+    pub frente_m: f64,
 }
 
 impl Fisica {
@@ -705,7 +838,45 @@ impl Fisica {
                 .as_f64()
                 .ok_or_else(|| format!("tabela física sem {chave}"))
         };
+        // A câmera do robô entra na tabela inteira, medida, ou não entra.
+        let camera = if t["camera"].is_null() {
+            None
+        } else {
+            Some(Camera {
+                fx: n("camera", Some("fx"))?,
+                fy: n("camera", Some("fy"))?,
+                cx: n("camera", Some("cx"))?,
+                cy: n("camera", Some("cy"))?,
+                largura: n("camera", Some("largura"))?,
+                altura: n("camera", Some("altura"))?,
+                zero_inclinacao_grau: n("camera", Some("zero_inclinacao"))?,
+                atraso_ms: n("camera", Some("atraso_ms"))?,
+            })
+        };
+        // A conta de `FOV_CAMERA_ROBO` (`viewer/js/app.js`, no laboratório): o campo de visão da tabela é o horizontal, e o
+        // ponto do quadro é quadrado.
+        let [largura, altura] = QUADRO_DA_CAMERA;
+        let foco = largura / 2.0 / (n("campo_de_visao", None)?.to_radians() / 2.0).tan();
+        let camera_simulada = Camera {
+            fx: foco,
+            fy: foco,
+            cx: largura / 2.0,
+            cy: altura / 2.0,
+            largura,
+            altura,
+            zero_inclinacao_grau: 0.0,
+            atraso_ms: 0.0,
+        };
         Ok(Self {
+            camera,
+            camera_no_corpo: CameraNoCorpo {
+                eixo_altura_m: n("camera_no_corpo", Some("eixo_altura"))?,
+                lente_frente_m: n("camera_no_corpo", Some("lente_frente"))?,
+                lente_acima_m: n("camera_no_corpo", Some("lente_acima"))?,
+            },
+            camera_simulada,
+            largura_m: n("dimensoes", Some("largura"))?,
+            frente_m: n("dimensoes", Some("comprimento"))? / 2.0,
             seguranca: Seguranca {
                 prazo_ms: 0,
                 vezes_modo_ao_armar: 0,
@@ -1049,6 +1220,85 @@ impl Params {
                     m.alto_falante.banco
                 ));
             }
+            if !m.robo.starts_with('/') {
+                return ruim(format!(
+                    "midia.robo tem de ser um caminho absoluto: {}",
+                    m.robo
+                ));
+            }
+            let w = &m.mundo;
+            // Cada limiar fora da faixa desligaria a camada de mundo, ou a faria dizer metros errados, sem ninguém saber.
+            for (nome, v, min, max) in [
+                ("midia.mundo.ritmo", u64::from(w.ritmo), 1, 50),
+                (
+                    "midia.mundo.ritmo_da_grade",
+                    u64::from(w.ritmo_da_grade),
+                    1,
+                    15,
+                ),
+                ("midia.mundo.setores", u64::from(w.setores), 4, 360),
+                ("midia.mundo.escala_vale_ms", w.escala_vale_ms, 0, 60_000),
+                (
+                    "midia.mundo.confirma_livre",
+                    u64::from(w.confirma_livre),
+                    1,
+                    30,
+                ),
+                ("midia.mundo.torre_vale_ms", w.torre_vale_ms, 40, 5000),
+                ("midia.mundo.gravar_limite_mb", w.gravar_limite_mb, 1, 4096),
+            ] {
+                if !(min..=max).contains(&v) {
+                    return ruim(format!("{nome} fora de {min} a {max}: {v}"));
+                }
+            }
+            for (nome, v, min, max) in [
+                ("midia.mundo.alcance_m", w.alcance_m, 0.5, 10.0),
+                ("midia.mundo.semente_de", w.semente_de, 0.5, 0.95),
+                ("midia.mundo.tolerancia", w.tolerancia, 0.01, 0.5),
+                ("midia.mundo.chao_minimo", w.chao_minimo, 0.1, 1.0),
+                ("midia.mundo.celula_m", w.celula_m, 0.01, 0.5),
+                ("midia.mundo.janela_m", w.janela_m, 1.0, 40.0),
+                ("midia.mundo.altura_minima_m", w.altura_minima_m, 0.0, 0.5),
+                ("midia.mundo.altura_maxima_m", w.altura_maxima_m, 0.1, 3.0),
+                ("midia.mundo.lembra_s", w.lembra_s, 0.1, 300.0),
+                ("midia.mundo.fresco_s", w.fresco_s, 0.1, 60.0),
+                ("midia.mundo.velho_s", w.velho_s, 0.1, 60.0),
+            ] {
+                if !(v.is_finite() && (min..=max).contains(&v)) {
+                    return ruim(format!("{nome} fora de {min} a {max}: {v}"));
+                }
+            }
+            if w.altura_minima_m >= w.altura_maxima_m {
+                return ruim(format!(
+                    "midia.mundo.altura_minima_m ({}) tem de ficar abaixo de altura_maxima_m ({})",
+                    w.altura_minima_m, w.altura_maxima_m
+                ));
+            }
+            if w.fresco_s > w.velho_s {
+                return ruim(format!(
+                    "midia.mundo.fresco_s ({}) não pode passar de velho_s ({})",
+                    w.fresco_s, w.velho_s
+                ));
+            }
+            // A janela tem de caber o alcance para os dois lados, e não pode ter mais células do que o mapa guarda.
+            if w.janela_m < 2.0 * w.alcance_m {
+                return ruim(format!(
+                    "midia.mundo.janela_m ({}) tem de ser ao menos o dobro de alcance_m ({})",
+                    w.janela_m, w.alcance_m
+                ));
+            }
+            if w.janela_m / w.celula_m > 1024.0 {
+                return ruim(format!(
+                    "midia.mundo.celula_m ({}) pequena demais para a janela_m ({}): o mapa passaria de 1024 células de lado",
+                    w.celula_m, w.janela_m
+                ));
+            }
+            if !w.gravar.is_empty() && !w.gravar.starts_with('/') {
+                return ruim(format!(
+                    "midia.mundo.gravar tem de ser um caminho absoluto: {}",
+                    w.gravar
+                ));
+            }
         }
         Ok(())
     }
@@ -1218,7 +1468,15 @@ mod testes {
             assert!(e["unidade"].is_string(), "{chave}: sem unidade");
             let origem = e["origem"].as_str().unwrap_or_default();
             assert!(
-                ["pesado", "dji", "calculado", "constante", "provisorio"].contains(&origem),
+                [
+                    "pesado",
+                    "dji",
+                    "calculado",
+                    "constante",
+                    "medido",
+                    "provisorio"
+                ]
+                .contains(&origem),
                 "{chave}: origem {origem}"
             );
             let prova = if origem == "provisorio" {
@@ -1250,6 +1508,8 @@ mod testes {
             "rms1d/src/bin",
             "rms1d-params/src",
             "rms1-mediad/src",
+            "rms1-mundo/src",
+            "rms1-mundo/src/bin",
         ] {
             for a in std::fs::read_dir(format!("{raiz}/{pasta}"))
                 .unwrap()
@@ -1356,6 +1616,213 @@ mod testes {
             ("[midia.voz]\nentra = 2.0\nsai = 3.0\n", "midia.voz.entra"),
             ("[midia.voz]\nsai = 0.5\n", "midia.voz.sai"),
             ("[midia.voz]\nvolume = 1\n", "volume"),
+        ] {
+            let e = de(t).unwrap_err().to_string();
+            assert!(e.contains(nome), "{t}: {e}");
+        }
+    }
+
+    /// A câmera na tabela única: onde a lente fica vem da malha do app, a lente do simulador sai do campo de visão, e a do
+    /// robô só existe quando a tabela a traz, medida e inteira.
+    #[test]
+    fn a_camera_vem_da_tabela_e_a_do_robo_so_existe_medida() {
+        let f = Fisica::da_tabela();
+        assert_eq!(
+            f.camera_no_corpo,
+            CameraNoCorpo {
+                eixo_altura_m: 0.1995,
+                lente_frente_m: 0.0789,
+                lente_acima_m: 0.0294
+            }
+        );
+        assert_eq!((f.largura_m, f.frente_m), (0.24, 0.16));
+        // 120 graus na horizontal, em 1280 por 720: o foco é 640 / tan(60°).
+        let s = f.camera_simulada;
+        assert!((s.fx - 369.504).abs() < 1e-3 && s.fx == s.fy, "{s:?}");
+        assert_eq!(
+            (s.cx, s.cy, s.largura, s.altura),
+            (640.0, 360.0, 1280.0, 720.0)
+        );
+        assert_eq!((s.zero_inclinacao_grau, s.atraso_ms), (0.0, 0.0));
+        // Com outro campo de visão na tabela, a lente do simulador muda junto: o número vem de lá.
+        let mut t: serde_json::Value = serde_json::from_str(TABELA).unwrap();
+        t["campo_de_visao"]["valor"] = serde_json::json!(90);
+        let noventa = Fisica::de_json(&t.to_string()).unwrap().camera_simulada;
+        assert!((noventa.fx - 640.0).abs() < 1e-9, "{noventa:?}");
+
+        // A do robô: inteira e medida, ou nenhuma.
+        let mut t: serde_json::Value = serde_json::from_str(TABELA).unwrap();
+        t.as_object_mut().unwrap().remove("camera");
+        assert_eq!(Fisica::de_json(&t.to_string()).unwrap().camera, None);
+        t["camera"] = serde_json::json!({"valor": {"fx": 900.0, "fy": 910.0, "cx": 630.0, "cy": 350.0, "largura": 1280, "altura": 720,
+            "zero_inclinacao": -1.5, "atraso_ms": 80.0}, "unidade": "pontos, graus e ms", "origem": "medido", "prova": "teste"});
+        assert_eq!(
+            Fisica::de_json(&t.to_string()).unwrap().camera,
+            Some(Camera {
+                fx: 900.0,
+                fy: 910.0,
+                cx: 630.0,
+                cy: 350.0,
+                largura: 1280.0,
+                altura: 720.0,
+                zero_inclinacao_grau: -1.5,
+                atraso_ms: 80.0
+            })
+        );
+        t["camera"]["valor"].as_object_mut().unwrap().remove("cy");
+        let e = Fisica::de_json(&t.to_string()).unwrap_err();
+        assert!(e.contains("camera"), "{e}");
+        t.as_object_mut().unwrap().remove("camera");
+        t.as_object_mut().unwrap().remove("camera_no_corpo");
+        let e = Fisica::de_json(&t.to_string()).unwrap_err();
+        assert!(e.contains("camera_no_corpo"), "{e}");
+    }
+
+    /// A camada de mundo: os padrões, um valor mudado, e cada limiar fora da faixa recusado pelo nome.
+    #[test]
+    fn mundo_errado_e_recusado_pelo_nome() {
+        let m = de("[midia]\n").unwrap().midia.unwrap();
+        assert_eq!(m.robo, "/run/robotd.sock");
+        assert_eq!(m.mundo, MidiaMundo::default());
+        let w = &m.mundo;
+        assert_eq!(
+            (w.ritmo, w.ritmo_da_grade, w.setores, w.confirma_livre),
+            (20, 5, 36, 3)
+        );
+        assert_eq!(
+            (w.alcance_m, w.semente_de, w.tolerancia, w.chao_minimo),
+            (3.0, 0.8, 0.1, 0.3)
+        );
+        assert_eq!(
+            (w.celula_m, w.janela_m, w.altura_minima_m, w.altura_maxima_m),
+            (0.04, 8.0, 0.03, 0.4)
+        );
+        assert_eq!(
+            (
+                w.escala_vale_ms,
+                w.lembra_s,
+                w.fresco_s,
+                w.velho_s,
+                w.torre_vale_ms
+            ),
+            (2000, 10.0, 0.9, 1.5, 300)
+        );
+        assert!(w.gravar.is_empty(), "sem a chave, nada é gravado");
+        assert_eq!(w.gravar_limite_mb, 512);
+        let p = de(
+            "[midia]\nrobo = \"/tmp/rms1d.sock\"\n[midia.mundo]\nalcance_m = 2.0\ngravar = \"/tmp/sessao.mundo\"\n",
+        )
+        .unwrap()
+        .midia
+        .unwrap();
+        assert_eq!(
+            (p.robo.as_str(), p.mundo.alcance_m, p.mundo.gravar.as_str()),
+            ("/tmp/rms1d.sock", 2.0, "/tmp/sessao.mundo")
+        );
+        assert_eq!(p.mundo.setores, 36, "o resto segue o padrão");
+        for (t, nome) in [
+            ("[midia]\nrobo = \"rms1d.sock\"\n", "midia.robo"),
+            ("[midia.mundo]\nritmo = 0\n", "midia.mundo.ritmo"),
+            ("[midia.mundo]\nritmo = 51\n", "midia.mundo.ritmo"),
+            (
+                "[midia.mundo]\nritmo_da_grade = 0\n",
+                "midia.mundo.ritmo_da_grade",
+            ),
+            (
+                "[midia.mundo]\nritmo_da_grade = 16\n",
+                "midia.mundo.ritmo_da_grade",
+            ),
+            ("[midia.mundo]\nsetores = 3\n", "midia.mundo.setores"),
+            ("[midia.mundo]\nsetores = 361\n", "midia.mundo.setores"),
+            ("[midia.mundo]\nalcance_m = 0.2\n", "midia.mundo.alcance_m"),
+            ("[midia.mundo]\nalcance_m = 11.0\n", "midia.mundo.alcance_m"),
+            ("[midia.mundo]\nalcance_m = nan\n", "midia.mundo.alcance_m"),
+            (
+                "[midia.mundo]\nsemente_de = 0.4\n",
+                "midia.mundo.semente_de",
+            ),
+            (
+                "[midia.mundo]\nsemente_de = 1.0\n",
+                "midia.mundo.semente_de",
+            ),
+            (
+                "[midia.mundo]\ntolerancia = 0.0\n",
+                "midia.mundo.tolerancia",
+            ),
+            (
+                "[midia.mundo]\ntolerancia = 0.6\n",
+                "midia.mundo.tolerancia",
+            ),
+            (
+                "[midia.mundo]\nchao_minimo = 0.0\n",
+                "midia.mundo.chao_minimo",
+            ),
+            (
+                "[midia.mundo]\nchao_minimo = 1.1\n",
+                "midia.mundo.chao_minimo",
+            ),
+            (
+                "[midia.mundo]\nescala_vale_ms = 60001\n",
+                "midia.mundo.escala_vale_ms",
+            ),
+            ("[midia.mundo]\ncelula_m = 0.001\n", "midia.mundo.celula_m"),
+            ("[midia.mundo]\ncelula_m = 0.6\n", "midia.mundo.celula_m"),
+            // A janela menor que o dobro do alcance, e a que pediria células demais.
+            ("[midia.mundo]\njanela_m = 4.0\n", "midia.mundo.janela_m"),
+            ("[midia.mundo]\njanela_m = 41.0\n", "midia.mundo.janela_m"),
+            (
+                "[midia.mundo]\ncelula_m = 0.01\njanela_m = 20.0\n",
+                "midia.mundo.celula_m",
+            ),
+            (
+                "[midia.mundo]\naltura_minima_m = -0.1\n",
+                "midia.mundo.altura_minima_m",
+            ),
+            (
+                "[midia.mundo]\naltura_maxima_m = 3.1\n",
+                "midia.mundo.altura_maxima_m",
+            ),
+            (
+                "[midia.mundo]\naltura_minima_m = 0.4\naltura_maxima_m = 0.3\n",
+                "midia.mundo.altura_minima_m",
+            ),
+            (
+                "[midia.mundo]\nconfirma_livre = 0\n",
+                "midia.mundo.confirma_livre",
+            ),
+            (
+                "[midia.mundo]\nconfirma_livre = 31\n",
+                "midia.mundo.confirma_livre",
+            ),
+            ("[midia.mundo]\nlembra_s = 0.0\n", "midia.mundo.lembra_s"),
+            ("[midia.mundo]\nlembra_s = 301.0\n", "midia.mundo.lembra_s"),
+            ("[midia.mundo]\nfresco_s = 0.0\n", "midia.mundo.fresco_s"),
+            ("[midia.mundo]\nvelho_s = 61.0\n", "midia.mundo.velho_s"),
+            (
+                "[midia.mundo]\nfresco_s = 2.0\nvelho_s = 1.0\n",
+                "midia.mundo.fresco_s",
+            ),
+            (
+                "[midia.mundo]\ntorre_vale_ms = 10\n",
+                "midia.mundo.torre_vale_ms",
+            ),
+            (
+                "[midia.mundo]\ntorre_vale_ms = 5001\n",
+                "midia.mundo.torre_vale_ms",
+            ),
+            (
+                "[midia.mundo]\ngravar = \"sessao.mundo\"\n",
+                "midia.mundo.gravar",
+            ),
+            (
+                "[midia.mundo]\ngravar_limite_mb = 0\n",
+                "midia.mundo.gravar_limite_mb",
+            ),
+            (
+                "[midia.mundo]\ngravar_limite_mb = 4097\n",
+                "midia.mundo.gravar_limite_mb",
+            ),
+            ("[midia.mundo]\nalcance = 3.0\n", "alcance"),
         ] {
             let e = de(t).unwrap_err().to_string();
             assert!(e.contains(nome), "{t}: {e}");

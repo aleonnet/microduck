@@ -300,5 +300,15 @@
     "unidade": "°/s",
     "origem": "provisorio",
     "como_verificar": "30°/s é o padrão da DJI (rm_ctrl.py:1369) e não acompanha um arrasto; o limite é giro_torre. Conferir no robô"
+  },
+  "camera_no_corpo": {
+    "valor": {
+      "eixo_altura": 0.1995,
+      "lente_frente": 0.0789,
+      "lente_acima": 0.0294
+    },
+    "unidade": "m",
+    "origem": "calculado",
+    "prova": "da malha do app (assets/robomaster-s1/dados/robo_fisica.json, no laboratório): a altura do eixo de inclinação da torre (gimbalPitch.origin) acima do chão das rodas, e a lente (camera.front e camera.centre) à frente e acima dele, com a torre nivelada. O eixo fica a 5 mm do centro das rodas e a lente a 1 mm do plano do meio do robô: tomados como zero. tools/simulador/test_midia.mjs confere a 1 mm; a trena, na calibração da câmera, confirma a altura"
   }
 }

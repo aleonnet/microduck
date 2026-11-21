@@ -4,7 +4,7 @@
 # docs/design/architecture.md §1. `robotd`, `btd` and `mediad` are all siblings now.
 [workspace]
 resolver = "3"
-members = ["autod", "btd", "configd", "duck-auth", "duck-ble", "duck-control", "duck-detect", "duck-ether", "duck-gateway", "duck-ipc-proto", "duckctl", "kinematics", "mapd", "maploc", "mediad", "netpadd", "nfc", "odometry", "pad-imu", "pad-map", "padd", "pet-detect", "sounds", "tof", "updater", "robotctl", "robotd", "robotd-params", "rms1-agente", "rms1-control", "rms1-mediad", "rms1-proto", "rms1d", "rms1d-params", "s1-duml", "test-support", "uyvy", "xtask"]
+members = ["autod", "btd", "configd", "duck-auth", "duck-ble", "duck-control", "duck-detect", "duck-ether", "duck-gateway", "duck-ipc-proto", "duckctl", "kinematics", "mapd", "maploc", "mediad", "netpadd", "nfc", "odometry", "pad-imu", "pad-map", "padd", "pet-detect", "sounds", "tof", "updater", "robotctl", "robotd", "robotd-params", "rms1-agente", "rms1-control", "rms1-mediad", "rms1-mundo", "rms1-proto", "rms1d", "rms1d-params", "s1-duml", "test-support", "uyvy", "xtask"]
 # O `s1d` ficou no contrato 47 (usa `Call::RobotRemoteSessionActive`, que o contrato 68 não tem) e não compila mais.
 # Segue na árvore só como leitura e comparação; o serviço do corpo do S1 é o `rms1d`.
 exclude = ["s1d"]

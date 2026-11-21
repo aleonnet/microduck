@@ -4718,6 +4718,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rms1-mundo"
+version = "0.23.0"
+dependencies = [
+ "rms1d-params",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "rms1-proto"
 version = "0.23.0"
 dependencies = [

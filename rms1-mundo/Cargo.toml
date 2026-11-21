@@ -1,0 +1,28 @@
+# `rms1-mundo`: a camada de mundo do S1. Recebe a grade de profundidade que a estação entrega, as amostras da torre e da pose e
+# a câmera, e devolve o chão em volta do robô em metros: livre, ocupado ou não visto, a folga por direção e o obstáculo na forma
+# que o cérebro consome. Puro, sem soquete e sem tokio, como `rms1-control`: quem fala com a estação e com o `rms1d` é o
+# `rms1-mediad`. Desenho: docs/s1/design/rms1-mundo.md.
+[package]
+name = "rms1-mundo"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "A camada de mundo do RoboMaster S1: da grade de profundidade aos metros, à ocupação do chão e à folga por direção"
+
+[lib]
+name = "rms1_mundo"
+
+# Passa uma sessão gravada pelo mesmo caminho do robô, sem o robô, e escreve o que `s1.world` diria.
+[[bin]]
+name = "rms1-mundo-reproduz"
+path = "src/bin/rms1-mundo-reproduz.rs"
+
+[dependencies]
+# Os limiares (`[midia.mundo]`) e a câmera da tabela física: os tipos são os de lá, sem cópia.
+rms1d-params = { path = "../rms1d-params" }
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
