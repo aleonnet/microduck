@@ -27,6 +27,9 @@
 //!   `interrompida` ou `recusada`), que o serviço leva de volta à estação.
 //! - `s1.media.volume {"volume": 0..100}`: o volume do alto-falante, na conta da DJI, pelo mixer do robô.
 //! - `s1.media.status`: o que o serviço está fazendo.
+//! - `s1.media.depth {"bytes": N}`, seguido de N bytes crus: uma grade de profundidade no formato da entrega `mapa` da estação,
+//!   que vira mundo na hora em que chega. Só com `[midia.mundo] profundidade = "simulador"`: é por onde a página do simulador
+//!   entrega a profundidade de verdade da cena. Com a profundidade da estação, o pedido é recusado.
 //! - `s1.media.preview {"width": 640}`: o quadro reduzido a RGB, para quem só quer olhar (a tela "Sentidos"): o cabeçalho de
 //!   `media.frame`, com `format: "RGB"`, e os bytes. A conexão fica aberta, e serve o pedido seguinte. Com
 //!   `"format": "jpeg"` (e `"quality"`, de 30 a 90, padrão 70) o quadro vem em JPEG, `format: "JPEG"`: é o que a tela usa,
@@ -55,6 +58,8 @@ use crate::quadros::Quadros;
 
 /// O maior pedido que o socket lê.
 const PEDIDO_MAXIMO: usize = 4096;
+/// A maior grade de profundidade que `s1.media.depth` aceita: a do `scdepthv3` tem 115 kB.
+const GRADE_MAXIMA: usize = 1 << 20;
 const MODO_SOCKET: u32 = 0o660;
 /// Quantos eventos de som ficam guardados para um assinante lento. Quem fica para trás perde os mais velhos.
 const OUVIDOS_NA_FILA: usize = 32;
@@ -118,7 +123,14 @@ pub struct Servico {
     pub volume: AtomicU32,
     /// O codificador de hardware do robô, se há um (`[midia] venc`): a imagem da tela sai dele.
     pub venc: std::sync::OnceLock<Arc<Mutex<crate::venc::Venc>>>,
+    /// Por onde entra a grade de profundidade que não vem da estação: a da cena do simulador (`s1.media.depth`). Vazio
+    /// quando a profundidade é a da estação, e aí o pedido é recusado.
+    pub grade_de_fora: std::sync::OnceLock<GradeDeFora>,
 }
+
+/// Quem recebe uma grade de profundidade chegada pelo socket, no formato da entrega `mapa` da estação. O erro é o motivo de
+/// ela não ter virado mundo.
+pub type GradeDeFora = Arc<dyn Fn(&[u8]) -> Result<(), String> + Send + Sync>;
 
 impl Servico {
     pub fn novo(quadros: Quadros, tocador: Tocador) -> Arc<Self> {
@@ -146,6 +158,7 @@ impl Servico {
             mixer: Mutex::new(None),
             volume: AtomicU32::new(u32::from(crate::mixer::VOLUME_DE_PARTIDA)),
             venc: std::sync::OnceLock::new(),
+            grade_de_fora: std::sync::OnceLock::new(),
         })
     }
 
@@ -493,6 +506,50 @@ where
                     proto::code::INVALID_PARAMS,
                     "volume must be an integer from 0 to 100",
                 ),
+            };
+            if pedido.id.is_some() {
+                escrever(&mut escrita, &resposta).await?;
+            }
+            continue;
+        }
+        if metodo == "s1.media.depth" {
+            // A grade vem logo depois da linha do pedido, em bytes crus, como o quadro vai na resposta de `media.frame`.
+            let bytes = pedido
+                .params
+                .as_ref()
+                .and_then(|p| p["bytes"].as_u64())
+                .map(|b| b as usize)
+                .filter(|b| (1..=GRADE_MAXIMA).contains(b));
+            let Some(bytes) = bytes else {
+                // Sem o tamanho não há como saber onde a grade acaba: a conversa não tem conserto, e fecha.
+                let texto = format!("s1.media.depth needs bytes, from 1 to {GRADE_MAXIMA}");
+                return escrever(
+                    &mut escrita,
+                    &erro(pedido.id, proto::code::INVALID_PARAMS, &texto),
+                )
+                .await;
+            };
+            let mut grade = vec![0u8; bytes];
+            leitor.read_exact(&mut grade).await?;
+            let resposta = match s.grade_de_fora.get() {
+                // A grade já foi lida: a conexão segue no passo, e serve o pedido seguinte.
+                None => erro(
+                    pedido.id.clone(),
+                    proto::code::METHOD_NOT_FOUND,
+                    "this rms1-mediad takes the depth from the station ([midia.mundo] profundidade)",
+                ),
+                Some(receber) => {
+                    let receber = receber.clone();
+                    match tokio::task::spawn_blocking(move || receber(&grade)).await? {
+                        Ok(()) => proto::Response::ok(
+                            pedido.id.clone(),
+                            &serde_json::json!({"accepted": true}),
+                        ),
+                        Err(motivo) => {
+                            erro(pedido.id.clone(), proto::code::INVALID_PARAMS, &motivo)
+                        }
+                    }
+                }
             };
             if pedido.id.is_some() {
                 escrever(&mut escrita, &resposta).await?;

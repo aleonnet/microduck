@@ -551,3 +551,101 @@ async fn quem_assina_o_mundo_recebe_as_duas_linhas_e_quem_assina_so_as_deteccoes
     );
     assert_eq!(servico.mundo.receiver_count(), 1);
 }
+
+/// `s1.media.depth`: a grade de profundidade que não vem da estação entra pelo socket, em bytes crus depois da linha do pedido.
+/// É por onde a página do simulador entrega a profundidade de verdade da cena.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_grade_de_profundidade_entra_pelo_socket_so_quando_o_servico_a_espera() {
+    let (_pasta, _anota, servico) = montar();
+    let (cliente, servidor_) = UnixStream::pair().unwrap();
+    tokio::spawn(servidor::atender(servidor_, servico.clone()));
+    let mut c = BufReader::new(cliente);
+    let grade: Vec<u8> = (0..5000u32).map(|i| (i % 251) as u8).collect();
+    let pedido = |id: u32, bytes: usize| {
+        format!(
+            "{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"s1.media.depth\",\"params\":{{\"bytes\":{bytes}}}}}\n"
+        )
+    };
+
+    // Com a profundidade da estação, o pedido é recusado pelo motivo; a grade já foi lida, e a conexão segue no passo.
+    c.get_mut()
+        .write_all(pedido(1, grade.len()).as_bytes())
+        .await
+        .unwrap();
+    c.get_mut().write_all(&grade).await.unwrap();
+    let r = linha(&mut c).await;
+    assert!(
+        r["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("from the station")),
+        "{r}"
+    );
+    c.get_mut()
+        .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"s1.media.status\"}\n")
+        .await
+        .unwrap();
+    let r = linha(&mut c).await;
+    assert_eq!(
+        r["id"], 2,
+        "depois da grade recusada, o pedido seguinte é atendido: {r}"
+    );
+
+    // Com quem a receba: a grade chega inteira, byte a byte, e a resposta diz que foi aceita.
+    let recebidas: Arc<Mutex<Vec<Vec<u8>>>> = Arc::default();
+    let guarda = recebidas.clone();
+    let receber: servidor::GradeDeFora = Arc::new(move |carga: &[u8]| {
+        if carga.len() < 16 {
+            return Err("a grade tem menos que o cabeçalho".to_owned());
+        }
+        guarda.lock().unwrap().push(carga.to_vec());
+        Ok(())
+    });
+    assert!(servico.grade_de_fora.set(receber).is_ok());
+    c.get_mut()
+        .write_all(pedido(3, grade.len()).as_bytes())
+        .await
+        .unwrap();
+    c.get_mut().write_all(&grade).await.unwrap();
+    let r = linha(&mut c).await;
+    assert_eq!(
+        (r["id"].as_u64(), r["result"]["accepted"].as_bool()),
+        (Some(3), Some(true)),
+        "{r}"
+    );
+    assert_eq!(recebidas.lock().unwrap().as_slice(), std::slice::from_ref(&grade));
+
+    // A que quem recebe recusa volta com o motivo dele, e a conexão segue.
+    c.get_mut()
+        .write_all(pedido(4, 8).as_bytes())
+        .await
+        .unwrap();
+    c.get_mut().write_all(&grade[..8]).await.unwrap();
+    let r = linha(&mut c).await;
+    assert!(
+        r["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("menos que o cabeçalho")),
+        "{r}"
+    );
+    assert_eq!(recebidas.lock().unwrap().len(), 1);
+
+    // Sem tamanho, ou com um tamanho que passa do limite, não há como saber onde a grade acaba: recusa, e fecha.
+    c.get_mut()
+        .write_all(pedido(5, 2 << 20).as_bytes())
+        .await
+        .unwrap();
+    let r = linha(&mut c).await;
+    assert!(
+        r["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("needs bytes")),
+        "{r}"
+    );
+    let mut resto = String::new();
+    let lidos = tokio::time::timeout(Duration::from_secs(2), c.read_line(&mut resto)).await;
+    assert_eq!(
+        lidos.expect("a conexão fecha").unwrap(),
+        0,
+        "a conexão tinha de fechar: {resto}"
+    );
+}

@@ -184,7 +184,42 @@ pub struct Mundo {
     pub publicar_grade: Arc<dyn Fn(String) + Send + Sync>,
     /// Se há quem assine `s1.world` e `s1.world.grid`, nesta ordem: a linha que ninguém quer não é montada.
     pub quer: Arc<dyn Fn() -> [bool; 2] + Send + Sync>,
+    /// Se a grade que vira mundo é a que a estação entrega. Falso no simulador com a profundidade da cena
+    /// (`[midia.mundo] profundidade = "simulador"`): aí a grade entra por [`grade_de_fora`], e a da estação é só contada.
+    pub da_estacao: bool,
 }
+
+/// Por onde entra no mundo a grade de profundidade que não vem da estação: a da cena do simulador, chegada pelo socket
+/// (`s1.media.depth`). A hora dela é a de chegada: a página a tira e a manda no mesmo quadro. Conta a entrega e o tempo que a
+/// grade levou para virar mundo, como a da estação; a que não se lê conta erro, e o motivo volta a quem a mandou.
+pub fn grade_de_fora(m: &Mundo, estado: Arc<Mutex<Estado>>) -> crate::servidor::GradeDeFora {
+    let (mundo, relogio) = (m.mundo.clone(), m.relogio);
+    Arc::new(move |carga: &[u8]| {
+        let comeco = Instant::now();
+        let feito = mundo.lock().expect("o mundo").grade(
+            carga,
+            rms1_mundo::LEITOR_COM_METROS,
+            relogio.agora(),
+        );
+        let mut e = estado.lock().expect("estado da percepção");
+        match feito {
+            Ok(_) => {
+                *e.deliveries
+                    .entry(PROFUNDIDADE_DA_CENA.to_owned())
+                    .or_default() += 1;
+                e.world_ms = Some(comeco.elapsed().as_secs_f64() * 1000.0);
+                Ok(())
+            }
+            Err(erro) => {
+                e.errors += 1;
+                Err(erro)
+            }
+        }
+    })
+}
+
+/// O nome com que as grades da cena do simulador são contadas em `s1.media.status`, ao lado das funções da estação.
+pub const PROFUNDIDADE_DA_CENA: &str = "profundidade_da_cena";
 
 /// O caminho até quem cumpre os pedidos da estação.
 pub struct Agente {
@@ -1124,7 +1159,10 @@ fn ler_entregas(
                             estado.lock().expect("estado da percepção").errors += 1;
                         }
                     }
-                } else if let (true, Some(m)) = (funcao.entrega == "mapa", &mundo) {
+                } else if let (true, Some(m)) = (
+                    funcao.entrega == "mapa",
+                    mundo.as_ref().filter(|m| m.da_estacao),
+                ) {
                     // A grade de profundidade vai ao mundo, com a hora em que o quadro dela foi tirado.
                     let comeco = Instant::now();
                     let feito = match capturado {
@@ -1172,7 +1210,9 @@ fn ler_entregas(
                 };
                 // A marca diz o que aconteceu no quadro: a função da grade que falhou nele, ou o quadro recusado, é a
                 // percepção que falhou, e não o mesmo que não ter visto nada. Sem função de grade ligada, não há o que falhar.
-                if let (Some(m), false) = (&mundo, do_mapa.is_empty()) {
+                if let (Some(m), false) =
+                    (mundo.as_ref().filter(|m| m.da_estacao), do_mapa.is_empty())
+                {
                     match falha_do_mapa(&carga, &do_mapa) {
                         Ok(None) => {}
                         Ok(Some(motivo)) => {

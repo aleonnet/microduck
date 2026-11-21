@@ -414,6 +414,22 @@ pub struct MidiaMundo {
     pub gravar: String,
     /// O limite desse arquivo, em MiB: chegando nele a gravação para, e o serviço segue.
     pub gravar_limite_mb: u64,
+    /// De onde vem a grade de profundidade que vira mundo.
+    pub profundidade: FonteProfundidade,
+}
+
+/// De onde vem a grade de profundidade.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FonteProfundidade {
+    /// Da estação Hailo, que roda o modelo de profundidade no quadro da câmera. É a do robô.
+    #[default]
+    Estacao,
+    /// Da cena do simulador: a página dá a profundidade de verdade de cada ponto que a câmera simulada vê, no formato da
+    /// grade do `scdepthv3`, e ela entra pelo socket do serviço (`s1.media.depth`). O modelo de profundidade não lê a
+    /// imagem desenhada do simulador como lê a de uma câmera (medido em 2026-11-21: nela ele não dá um chão coerente), e
+    /// o sensor do simulador é exato por construção, como a lente dele. Só com a câmera do simulador.
+    Simulador,
 }
 
 impl Default for MidiaMundo {
@@ -454,6 +470,7 @@ impl Default for MidiaMundo {
             // Perto de cinco minutos: a grade do `scdepthv3` tem 115 kB, e a 15 por segundo são 104 MB por minuto. Sem limite,
             // uma sessão esquecida encheria o disco do robô, como as gravações do corpo encheram em 2026-11-15.
             gravar_limite_mb: 512,
+            profundidade: FonteProfundidade::Estacao,
         }
     }
 }
@@ -1293,6 +1310,12 @@ impl Params {
                     w.celula_m, w.janela_m
                 ));
             }
+            if w.profundidade == FonteProfundidade::Simulador && m.camera.fonte != FonteCamera::Simulador {
+                return ruim(
+                    "midia.mundo.profundidade = \"simulador\" só vale com midia.camera.fonte = \"simulador\": a profundidade da cena é a do que a câmera simulada vê"
+                        .to_owned(),
+                );
+            }
             if !w.gravar.is_empty() && !w.gravar.starts_with('/') {
                 return ruim(format!(
                     "midia.mundo.gravar tem de ser um caminho absoluto: {}",
@@ -1720,7 +1743,20 @@ mod testes {
             ("/tmp/rms1d.sock", 2.0, "/tmp/sessao.mundo")
         );
         assert_eq!(p.mundo.setores, 36, "o resto segue o padrão");
+        // A profundidade vem da estação, salvo dito; a da cena do simulador só vale com a câmera dele.
+        assert_eq!(p.mundo.profundidade, FonteProfundidade::Estacao);
+        let s = de(
+            "[midia.camera]\nfonte = \"simulador\"\n[midia.mundo]\nprofundidade = \"simulador\"\n",
+        )
+        .unwrap()
+        .midia
+        .unwrap();
+        assert_eq!(s.mundo.profundidade, FonteProfundidade::Simulador);
         for (t, nome) in [
+            (
+                "[midia.mundo]\nprofundidade = \"simulador\"\n",
+                "midia.mundo.profundidade",
+            ),
             ("[midia]\nrobo = \"rms1d.sock\"\n", "midia.robo"),
             ("[midia.mundo]\nritmo = 0\n", "midia.mundo.ritmo"),
             ("[midia.mundo]\nritmo = 51\n", "midia.mundo.ritmo"),

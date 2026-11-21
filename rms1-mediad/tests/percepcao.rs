@@ -1469,9 +1469,16 @@ struct ComOMundo {
     relogio: Relogio,
     linhas: Publicadas,
     grades: Publicadas,
+    /// A camada de mundo como a percepção a recebeu: é por ela que a grade de fora da estação entra.
+    da_percepcao: percepcao::Mundo,
 }
 
 fn subir_com_o_mundo(porta: u16, ajustes: rms1_mundo::Ajustes) -> ComOMundo {
+    subir_com_o_mundo_de(porta, ajustes, true)
+}
+
+/// `da_estacao`: se a grade que vira mundo é a que a estação entrega. Falso é o simulador com a profundidade da cena.
+fn subir_com_o_mundo_de(porta: u16, ajustes: rms1_mundo::Ajustes, da_estacao: bool) -> ComOMundo {
     let mundo = Arc::new(Mutex::new(
         rms1_mundo::Mundo::novo(Some(cena::olho_do_simulador()), cena::corpo(), ajustes).unwrap(),
     ));
@@ -1479,18 +1486,20 @@ fn subir_com_o_mundo(porta: u16, ajustes: rms1_mundo::Ajustes) -> ComOMundo {
     let linhas: Publicadas = Arc::new(Mutex::new(Vec::new()));
     let grades: Publicadas = Arc::new(Mutex::new(Vec::new()));
     let (l, g) = (linhas.clone(), grades.clone());
+    let da_percepcao = percepcao::Mundo {
+        mundo: mundo.clone(),
+        relogio,
+        publicar: Arc::new(move |linha| l.lock().unwrap().push(linha)),
+        publicar_grade: Arc::new(move |linha| g.lock().unwrap().push(linha)),
+        quer: Arc::new(|| [true, true]),
+        da_estacao,
+    };
     let p = subir_percepcao_inteira(
         porta,
         22.0,
         Duration::from_secs(3),
         Pecas {
-            mundo: Some(percepcao::Mundo {
-                mundo: mundo.clone(),
-                relogio,
-                publicar: Arc::new(move |linha| l.lock().unwrap().push(linha)),
-                publicar_grade: Arc::new(move |linha| g.lock().unwrap().push(linha)),
-                quer: Arc::new(|| [true, true]),
-            }),
+            mundo: Some(da_percepcao.clone()),
             ..Pecas::default()
         },
     );
@@ -1500,6 +1509,7 @@ fn subir_com_o_mundo(porta: u16, ajustes: rms1_mundo::Ajustes) -> ComOMundo {
         relogio,
         linhas,
         grades,
+        da_percepcao,
     }
 }
 
@@ -1793,6 +1803,67 @@ fn sem_a_camada_de_mundo_a_grade_e_so_contada_e_a_grade_que_nao_se_le_e_erro() {
     estacao.entregar(2, &grade);
     estacao.atender(quadro);
     c.esperar_estado("ok", Duration::from_secs(2));
+}
+
+/// No simulador com a profundidade da cena, a grade que vira mundo é a que chega de fora (a página a tira da cena e a manda
+/// pelo socket), e a da estação é só contada: o modelo de profundidade não lê a imagem desenhada como lê a de uma câmera.
+#[test]
+fn no_simulador_a_grade_da_cena_vira_mundo_e_a_da_estacao_e_so_contada() {
+    let porta = porta_livre();
+    let c = subir_com_o_mundo_de(porta, cena::ajustes(), false);
+    c.dar_amostras(|_| 0.0);
+    let estacao = Estacao::subir_com(
+        porta,
+        QUADRO_A_10,
+        OBJETOS_E_DISTANCIA,
+        r#","atendido":true"#,
+    );
+    let parada = cena::amostra(0.0, 0.0, 0.0, [0.0; 3]);
+    let grade = cena::ver(&cena::olho_do_simulador(), &parada, &caixa_a_um_metro(), K);
+
+    // A grade que a estação entrega é contada, e não vira mundo: a percepção segue sem medida.
+    let mut n = 0;
+    let (quadro, _) = quadro_novo(&estacao, &mut n);
+    estacao.entregar(2, &grade);
+    estacao.atender(quadro);
+    std::thread::sleep(Duration::from_millis(400));
+    let e = c.p.estado.lock().unwrap().clone();
+    assert_eq!(
+        (e.deliveries.get("profundidade"), e.world_ms, e.errors),
+        (Some(&1), None, 0),
+        "a grade da estação tem de ser só contada"
+    );
+    assert_eq!(
+        c.ultima().unwrap()["perception"]["state"],
+        "stale",
+        "com a profundidade da cena, a grade da estação não vira mundo"
+    );
+
+    // A grade da cena, de fora: vira mundo, com a caixa a 0,84 m da frente do chassi, e é contada com o nome dela.
+    let receber = percepcao::grade_de_fora(&c.da_percepcao, c.p.estado.clone());
+    receber(&grade).unwrap();
+    let agora = c.esperar_estado("ok", Duration::from_secs(2));
+    assert_eq!(agora["perception"]["scale"], "measured", "{agora}");
+    let a_frente = agora["obstacle"]["ahead_m"]
+        .as_f64()
+        .expect("o obstáculo à frente");
+    assert!(
+        (a_frente - 0.84).abs() < 0.06,
+        "com a grade da cena, a folga à frente deu {a_frente:.2} m, com a caixa a 0,84 m da frente do chassi"
+    );
+    let e = c.p.estado.lock().unwrap().clone();
+    assert_eq!(
+        e.deliveries.get(percepcao::PROFUNDIDADE_DA_CENA),
+        Some(&1),
+        "{:?}",
+        e.deliveries
+    );
+    assert!(e.world_ms.is_some_and(|ms| ms > 0.0), "{:?}", e.world_ms);
+
+    // A que não se lê é recusada com o motivo, e conta erro.
+    let motivo = receber(&grade[..100]).unwrap_err();
+    assert!(motivo.contains("bytes"), "{motivo}");
+    assert_eq!(c.p.estado.lock().unwrap().errors, 1);
 }
 
 /// Uma pasta de teste que some ao sair, com o que tiver dentro.

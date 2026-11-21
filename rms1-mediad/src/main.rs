@@ -350,15 +350,22 @@ fn main() -> ExitCode {
                 return ExitCode::FAILURE;
             }
             let (s, g, q) = (servico.clone(), servico.clone(), servico.clone());
-            mundo = Some(percepcao::Mundo {
+            // No simulador, a profundidade pode ser a de verdade da cena, que a página entrega pelo socket.
+            let da_cena = midia.mundo.profundidade == rms1d_params::FonteProfundidade::Simulador;
+            let do_mundo = percepcao::Mundo {
                 mundo: partilhado,
                 relogio,
                 // Sem assinante, a linha não tem para quem ir.
                 publicar: Arc::new(move |linha: String| drop(s.mundo.send(linha.into()))),
                 publicar_grade: Arc::new(move |linha: String| drop(g.grade_do_mundo.send(linha.into()))),
                 quer: Arc::new(move || [q.mundo.receiver_count() > 0, q.grade_do_mundo.receiver_count() > 0]),
-            });
-            tracing::info!(robo = %midia.robo, lente = if olho.is_some() { "na tabela" } else { "por medir" }, "a camada de mundo está de pé");
+                da_estacao: !da_cena,
+            };
+            if da_cena {
+                let _ = servico.grade_de_fora.set(percepcao::grade_de_fora(&do_mundo, servico.percepcao.clone()));
+            }
+            mundo = Some(do_mundo);
+            tracing::info!(robo = %midia.robo, lente = if olho.is_some() { "na tabela" } else { "por medir" }, profundidade = if da_cena { "da cena do simulador" } else { "da estação" }, "a camada de mundo está de pé");
         }
         // O codificador de hardware do robô, se o arquivo o dá: a percepção e a imagem da tela usam o mesmo, um pedido por vez.
         if !midia.venc.is_empty() {

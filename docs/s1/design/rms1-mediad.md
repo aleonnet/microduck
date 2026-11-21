@@ -66,6 +66,7 @@ Um socket unix, `[midia] socket`, em JSON-RPC, uma linha por mensagem.
 | `media.frame` | O próximo quadro: uma linha com o cabeçalho do contrato do pato (`MediaFrameHeader`) e, em seguida, exatamente `bytes` bytes crus. A conexão fecha depois dele |
 | `robot.sound` | O do contrato do pato (`tag` e `hold`), como requisição ou notificação |
 | `s1.media.subscribe` | `{"heard": true, "detections": true}`. A conexão passa a receber `s1.audio.heard {"kind"}`, já com a trava aplicada, e `media.detections`. Com `"voice": true`, recebe também `s1.station.result` (a seção da voz, abaixo). Com `"requests": true`, recebe `s1.station.request` (a seção do pedido, abaixo). Com `"world": true` e com `"world_grid": true`, recebe `s1.world` e `s1.world.grid` (a seção da camada de mundo, abaixo). Cada pedido diz as assinaturas que quer: a que não vem é desligada |
+| `s1.media.depth {"bytes": N}` e N bytes crus | Uma grade de profundidade no formato da entrega `mapa` da estação, que vira mundo na hora em que chega. Só com `[midia.mundo] profundidade = "simulador"`: é por onde a página do simulador entrega a profundidade de verdade da cena, que o serviço local repassa. Com a profundidade da estação (o robô), o pedido é recusado; a grade que não se lê volta com o motivo. As grades assim recebidas são contadas em `perception.deliveries` como `profundidade_da_cena` |
 | `s1.media.status` | O que o serviço está fazendo: quadros copiados, se há som tocando (`playing`), se o microfone está surdo pela trava (`deaf`: o som e a janela depois dele), e a percepção (`perception`), que diz também em que formato o último quadro foi (`format`: `rgb`, `h264` ou `jpeg`), se foi cru com a estação pedindo outro, por quê (`encoder_problem`), quanto a última grade de profundidade levou para virar mundo (`world_ms`), a hora no relógio das amostras e das capturas, dita a cada publicação do mundo (`world_clock_s`: é o relógio da sessão gravada, por onde quem mede marca as janelas), e se a sessão está sendo gravada (`world_recording`) |
 | `s1.media.preview` | `{"width": 640, "format": "jpeg", "quality": 70}`. O quadro reduzido, para quem só quer olhar (a mídia do Pilotar, no simulador): o cabeçalho de `media.frame` e os bytes. Sem `format`, vem em RGB (`format: "RGB"`); com `"jpeg"`, em JPEG (`format: "JPEG"`, qualidade de 30 a 90), pelo codificador do `mediad`; com o codificador de hardware ligado e a largura de 640, o JPEG sai do chip (a qualidade vira o nível dele, de 3 a 9), e por software se o chip não responder do pato. A redução e o JPEG são feitos aqui. A conexão fica aberta e serve o pedido seguinte |
 
@@ -146,6 +147,14 @@ A estação entrega a grade de profundidade (a função Distância: a entrega `m
 - **`s1.world.grid`**, `ritmo_da_grade` vezes por segundo (5), para a tela: `{"frame": "odom", "pose": [x, y, rumo em graus], "cell_m", "cells": [[ix, iy, estado, idade em s], ...]}`, só as células vistas e ainda lembradas, com o canto de cada uma em `(ix * cell_m, iy * cell_m)` e o estado 1 (livre) ou 2 (ocupada).
 - **As duas saem haja ou não estação na rede,** e só são montadas se alguém as assina. Quem assina só as detecções não recebe nada de novo.
 - **Não medido** (é da prova com o simulador e da calibração no robô): quanto o processador do S1 leva para tratar uma grade (`world_ms`; a meta é 20 ms), o tamanho da linha `s1.world.grid` com a sala inteira vista, e o ritmo em que as amostras de fato chegam do `rms1d`.
+
+- **No simulador, a profundidade é a da cena** (`[midia.mundo] profundidade = "simulador"`, que o serviço local escreve no
+  arquivo do simulador). Medido em 2026-11-21 com a estação de verdade: na imagem desenhada o `scdepthv3` não dá um chão
+  coerente (o inverso da profundidade varia 1,4 vez na faixa do chão, onde a geometria pede 11), e o S1 recusava dar
+  metros. O sensor de profundidade do simulador passa a ser exato por construção, como a lente dele: a página tira a
+  profundidade de verdade de cada ponto que a câmera simulada vê, escreve-a no formato da grade do `scdepthv3` com uma
+  escala que o S1 não conhece, e a entrega por `s1.media.depth`. Daí em diante o caminho é o do robô: a escala pelo chão,
+  a ocupação, a memória, a folga e as duas publicações. A grade da estação, no simulador, é só contada. No robô nada muda.
 
 ## O codificador de hardware
 
